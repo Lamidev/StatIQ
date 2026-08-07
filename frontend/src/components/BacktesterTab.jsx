@@ -1,7 +1,8 @@
 import React, { useState } from "react";
-import { Play, Lock, CheckCircle2, XCircle, Trash2, RefreshCw, AlertCircle, X, History, Sliders, Search } from "lucide-react";
-import { decodeBookingCode, fetchFixturesByGameweek } from "../api/client";
+import { Play, Lock, CheckCircle2, XCircle, Trash2, RefreshCw, AlertCircle, X, History, Sliders, Search, ShieldCheck, ShieldAlert, Sparkles } from "lucide-react";
+import { decodeBookingCode, fetchFixturesByGameweek, fetchMatchStats } from "../api/client";
 import { generateSafePick, evaluatePickResult, buildSafeTicket, fixtureSeed } from "../utils/pickEngine";
+import { calculateFlexShield } from "../utils/flexCalculator";
 
 export default function BacktesterTab() {
   const [testMode, setTestMode] = useState("ODDS"); // "ODDS", "EXPIRED_CODE", or "GAMEWEEK"
@@ -11,6 +12,7 @@ export default function BacktesterTab() {
   const [targetOdds, setTargetOdds] = useState(5.0);
   const [expiredCodeInput, setExpiredCodeInput] = useState("");
   const [codeTargetOdds, setCodeTargetOdds] = useState("ALL"); // Sub-feature target odds filter for expired codes ("ALL", "2.0", "3.0", "5.0", "10.0", "20.0")
+  const [selectedFlexCut, setSelectedFlexCut] = useState("AUTO"); // Flex Cut Selector ("AUTO", "OFF", "1".."7")
 
   // Dynamic state for audit sessions
   const [auditing, setAuditing] = useState(false);
@@ -99,13 +101,53 @@ export default function BacktesterTab() {
 
       let selectionsToAudit = [];
 
+      // ─── Step 1: Generate all picks ───────────────────────────────────────
+      let rawPickList = [];
       if (codeTargetOdds === "ALL") {
-        // Audit ALL selections in the code with MatchIQ's 5-Gate Pick Engine
         const usedTypeCounts = {};
-        selectionsToAudit = rawFixturesFromCode.map((f) => {
+        rawPickList = rawFixturesFromCode.map((f) => {
           const matchIQPick = generateSafePick(f, usedTypeCounts, true);
           usedTypeCounts[matchIQPick.marketType] = (usedTypeCounts[matchIQPick.marketType] || 0) + 1;
-          const isWin = evaluatePickResult(matchIQPick.pick, f.home_score, f.away_score, f.home_team, f.away_team);
+          return { fixture: f, pick: matchIQPick };
+        });
+      } else {
+        const targetVal = parseFloat(codeTargetOdds);
+        const offsetMap = { 2.0: 0, 3.0: 2, 5.0: 4, 10.0: 7, 20.0: 11, 50.0: 15 };
+        const partOffset = offsetMap[targetVal] ?? Math.round(targetVal);
+        const maxLegsForTarget = targetVal >= 50 ? 20 : targetVal >= 20 ? 16 : targetVal >= 10 ? 12 : 10;
+        const { legs } = buildSafeTicket(rawFixturesFromCode, targetVal, {
+          maxLegs: maxLegsForTarget,
+          isBacktest: true,
+          partitionOffset: partOffset
+        });
+        rawPickList = legs.map((leg) => ({ fixture: null, leg, pick: { pick: leg.prediction, odds: leg.odds, prob: leg.prob } }));
+      }
+
+      // ─── Step 2: Batch-fetch real stats for stat-dependent picks ──────────
+      // Only fetches for corners, 1st half over, win either half — conserves API budget
+      const statQueryMatches = rawPickList.map((item, i) => {
+        const f = item.fixture;
+        const leg = item.leg;
+        return {
+          home_team: f ? f.home_team : (leg?.home || ""),
+          away_team: f ? f.away_team : (leg?.away || ""),
+          pick: item.pick.pick,
+          match_date: null, // SportyBet codes don't expose date; API-Football will search by team name
+        };
+      });
+      const statsResponse = await fetchMatchStats(statQueryMatches);
+      const realStatsMap = statsResponse?.stats || {};
+
+      // ─── Step 3: Evaluate picks with real stats injected ──────────────────
+      if (codeTargetOdds === "ALL") {
+        selectionsToAudit = rawPickList.map((item, idx) => {
+          const f = item.fixture;
+          const matchIQPick = item.pick;
+          const realStats = realStatsMap[String(idx)] || null;
+          const evalRes = evaluatePickResult(matchIQPick.pick, f.home_score, f.away_score, f.home_team, f.away_team, realStats);
+          const isUnverified = evalRes === "UNVERIFIED";
+          const isVoid = evalRes === "VOID";
+          const isWin = isUnverified ? false : isVoid ? true : evalRes;
           return {
             id: f.id,
             leagueName: f.competition_code,
@@ -113,51 +155,64 @@ export default function BacktesterTab() {
             away: f.away_team,
             prediction: matchIQPick.pick,
             originalPick: f.originalPick,
-            odds: matchIQPick.odds || f.odds,
+            odds: isVoid ? 1.00 : (matchIQPick.odds || f.odds),
+            origOdds: matchIQPick.odds || f.odds,
             prob: matchIQPick.prob || 78,
             actualHome: f.home_score,
             actualAway: f.away_score,
-            isWin: isWin,
-            reason: `MatchIQ Brain Audit: MatchIQ predicted [${matchIQPick.pick}]. Actual final score: ${f.home_team} ${f.home_score} - ${f.away_score} ${f.away_team} → ${isWin ? "MATCHIQ PICK WON" : "MATCHIQ PICK LOST"}. (Original Code Pick: ${f.originalPick}).`
+            isWin,
+            isVoid,
+            isUnverified,
+            realStats,
+            reason: isUnverified
+              ? `StatIQ Brain Audit: StatIQ predicted [${matchIQPick.pick}]. Score: ${f.home_team} ${f.home_score} - ${f.away_score} ${f.away_team}. ⚠️ UNVERIFIED — this pick requires real match statistics (corners/halftime) not available from score data alone.`
+              : isVoid
+              ? `StatIQ Brain Audit: StatIQ predicted [${matchIQPick.pick}]. Actual final score: ${f.home_team} ${f.home_score} - ${f.away_score} ${f.away_team} → 🔄 VOID / PUSH (Stake returned @ 1.00x odds).`
+              : `StatIQ Brain Audit: StatIQ predicted [${matchIQPick.pick}]. Actual final score: ${f.home_team} ${f.home_score} - ${f.away_score} ${f.away_team} → ${isWin ? "STATIQ PICK WON" : "STATIQ PICK LOST"}. (Original Code Pick: ${f.originalPick}).`
           };
         });
       } else {
-        // Target Odds Sub-Ticket: Use 5-Gate Pick Engine with distinct candidate offsets so 2x, 3x, 5x, 10x target odds evaluate independent fixture windows
-        const targetVal = parseFloat(codeTargetOdds);
-        // Map targetVal (2, 3, 5, 10, 20, 50) to a distinct offset integer
-        const offsetMap = { 2.0: 0, 3.0: 2, 5.0: 4, 10.0: 7, 20.0: 11, 50.0: 15 };
-        const partOffset = offsetMap[targetVal] ?? Math.round(targetVal);
-
-        const maxLegsForTarget = targetVal >= 50 ? 20 : targetVal >= 20 ? 16 : targetVal >= 10 ? 12 : 10;
-        const { legs } = buildSafeTicket(rawFixturesFromCode, targetVal, {
-          maxLegs: maxLegsForTarget,
-          isBacktest: true,
-          partitionOffset: partOffset
-        });
-        
-        selectionsToAudit = legs.map((leg) => {
+        selectionsToAudit = rawPickList.map((item, idx) => {
+          const leg = item.leg;
           const hScore = leg.actualHome;
           const aScore = leg.actualAway;
-          const isWin = evaluatePickResult(leg.prediction, hScore, aScore, leg.home, leg.away);
+          const realStats = realStatsMap[String(idx)] || null;
+          const evalRes = evaluatePickResult(leg.prediction, hScore, aScore, leg.home, leg.away, realStats);
+          const isUnverified = evalRes === "UNVERIFIED";
+          const isVoid = evalRes === "VOID";
+          const isWin = isUnverified ? false : isVoid ? true : evalRes;
           return {
             id: leg.id,
             leagueName: leg.leagueName,
             home: leg.home,
             away: leg.away,
             prediction: leg.prediction,
-            odds: leg.odds,
+            originalPick: leg.originalPick,
+            odds: isVoid ? 1.00 : leg.odds,
+            origOdds: leg.odds,
             prob: leg.prob,
             actualHome: hScore,
             actualAway: aScore,
-            isWin: isWin,
-            reason: `Expired Code Sub-Ticket Audit (~${targetVal}x Target): MatchIQ predicted [${leg.prediction}]. Actual: ${leg.home} ${hScore} - ${aScore} ${leg.away} → ${isWin ? "WIN" : "LOSS"}.`
+            isWin,
+            isVoid,
+            isUnverified,
+            realStats,
+            reason: isUnverified
+              ? `StatIQ Brain Audit: StatIQ predicted [${leg.prediction}]. Score: ${leg.home} ${hScore} - ${aScore} ${leg.away}. ⚠️ UNVERIFIED — requires corners/halftime stats.`
+              : isVoid
+              ? `StatIQ Brain Audit: StatIQ predicted [${leg.prediction}]. Actual final score: ${leg.home} ${hScore} - ${aScore} ${leg.away} → 🔄 VOID / PUSH (Stake returned @ 1.00x odds).`
+              : `StatIQ Brain Audit: StatIQ predicted [${leg.prediction}]. Actual final score: ${leg.home} ${hScore} - ${aScore} ${leg.away} → ${isWin ? "STATIQ PICK WON" : "STATIQ PICK LOST"}. (Original Code Pick: ${leg.originalPick || "N/A"}).`
           };
         });
       }
 
+      // Win rate = verified picks only (exclude UNVERIFIED from denominator)
+      const verifiedSelections = selectionsToAudit.filter(m => !m.isUnverified);
       const totalOdds = selectionsToAudit.reduce((acc, m) => acc * m.odds, 1.0);
-      const wonCount = selectionsToAudit.filter(m => m.isWin).length;
-      const allWon = wonCount === selectionsToAudit.length;
+      const wonCount = verifiedSelections.filter(m => m.isWin).length;
+      const verifiedTotal = verifiedSelections.length;
+      const unverifiedCount = selectionsToAudit.filter(m => m.isUnverified).length;
+      const allWon = wonCount === verifiedTotal && verifiedTotal > 0;
 
       setAuditRecord({
         mode: "EXPIRED_CODE",
@@ -166,9 +221,11 @@ export default function BacktesterTab() {
         matches: selectionsToAudit,
         combinedOdds: totalOdds,
         wonCount,
-        totalCount: selectionsToAudit.length,
+        totalCount: verifiedTotal,
+        unverifiedCount,
         allWon
       });
+
     } else if (testMode === "GAMEWEEK") {
       // Fetch REAL historical finished matches for selected Season & Gameweek across all leagues if requested
       let historicalMatches = [];
@@ -477,7 +534,7 @@ export default function BacktesterTab() {
 
         {/* MODE 1: TARGET ODDS GOAL FILTERS */}
         {testMode === "ODDS" && (
-          <div className="grid grid-cols-1 sm:grid-cols-5 gap-3 items-end">
+          <div className="grid grid-cols-1 sm:grid-cols-3 md:grid-cols-5 lg:grid-cols-6 gap-3 items-end">
             <div>
               <label className="text-xs font-semibold text-slate-700 block mb-1">
                 Historical Season
@@ -561,6 +618,27 @@ export default function BacktesterTab() {
               </select>
             </div>
 
+            <div>
+              <label className="text-xs font-semibold text-slate-700 block mb-1">
+                SportyBet Flex Cut
+              </label>
+              <select
+                value={selectedFlexCut}
+                onChange={(e) => setSelectedFlexCut(e.target.value)}
+                className="w-full bg-slate-50 border border-slate-200 text-xs font-bold text-slate-900 rounded-xl px-3 py-2"
+              >
+                <option value="AUTO">✨ Auto (Recommended Cut)</option>
+                <option value="OFF">🚫 Flex Off (Straight Acca)</option>
+                <option value="1">Flex Cut-1 (1 Loss Allowed)</option>
+                <option value="2">Flex Cut-2 (2 Losses Allowed)</option>
+                <option value="3">Flex Cut-3 (3 Losses Allowed)</option>
+                <option value="4">Flex Cut-4 (4 Losses Allowed)</option>
+                <option value="5">Flex Cut-5 (5 Losses Allowed)</option>
+                <option value="6">Flex Cut-6 (6 Losses Allowed)</option>
+                <option value="7">Flex Cut-7 (7 Losses Allowed)</option>
+              </select>
+            </div>
+
             <button
               onClick={handleRunAudit}
               disabled={auditing}
@@ -615,6 +693,30 @@ export default function BacktesterTab() {
               </select>
             </div>
 
+            <div className="w-full sm:w-52">
+              <label className="text-xs font-semibold text-slate-700 block mb-1">
+                SportyBet Flex Cut Strategy
+              </label>
+              <select
+                value={selectedFlexCut}
+                onChange={(e) => {
+                  setSelectedFlexCut(e.target.value);
+                  setUnblinded(false);
+                }}
+                className="w-full bg-slate-50 border border-slate-200 text-xs font-bold text-slate-900 rounded-xl px-3 py-2"
+              >
+                <option value="AUTO">🤖 Auto (StatIQ Model Cut)</option>
+                <option value="OFF">🚫 Flex Off (Straight Acca)</option>
+                <option value="1">Flex Cut-1 (1 Loss Allowed)</option>
+                <option value="2">Flex Cut-2 (2 Losses Allowed)</option>
+                <option value="3">Flex Cut-3 (3 Losses Allowed)</option>
+                <option value="4">Flex Cut-4 (4 Losses Allowed)</option>
+                <option value="5">Flex Cut-5 (5 Losses Allowed)</option>
+                <option value="6">Flex Cut-6 (6 Losses Allowed)</option>
+                <option value="7">Flex Cut-7 (7 Losses Allowed)</option>
+              </select>
+            </div>
+
             <button
               onClick={handleRunAudit}
               disabled={auditing}
@@ -628,7 +730,7 @@ export default function BacktesterTab() {
 
         {/* MODE 3: GAMEWEEK AUDIT FILTERS */}
         {testMode === "GAMEWEEK" && (
-          <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 items-end">
+          <div className="grid grid-cols-1 sm:grid-cols-5 gap-3 items-end">
             <div>
               <label className="text-xs font-semibold text-slate-700 block mb-1">
                 Historical Season
@@ -685,6 +787,27 @@ export default function BacktesterTab() {
                 {Array.from({ length: 38 }, (_, i) => i + 1).map((gw) => (
                   <option key={gw} value={gw}>Gameweek {gw}</option>
                 ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="text-xs font-semibold text-slate-700 block mb-1">
+                SportyBet Flex Cut
+              </label>
+              <select
+                value={selectedFlexCut}
+                onChange={(e) => setSelectedFlexCut(e.target.value)}
+                className="w-full bg-slate-50 border border-slate-200 text-xs font-bold text-slate-900 rounded-xl px-3 py-2"
+              >
+                <option value="AUTO">✨ Auto (Recommended Cut)</option>
+                <option value="OFF">🚫 Flex Off (Straight Acca)</option>
+                <option value="1">Flex Cut-1 (1 Loss Allowed)</option>
+                <option value="2">Flex Cut-2 (2 Losses Allowed)</option>
+                <option value="3">Flex Cut-3 (3 Losses Allowed)</option>
+                <option value="4">Flex Cut-4 (4 Losses Allowed)</option>
+                <option value="5">Flex Cut-5 (5 Losses Allowed)</option>
+                <option value="6">Flex Cut-6 (6 Losses Allowed)</option>
+                <option value="7">Flex Cut-7 (7 Losses Allowed)</option>
               </select>
             </div>
 
@@ -746,7 +869,12 @@ export default function BacktesterTab() {
                 }
               </span>
               <h3 className="text-base font-extrabold text-slate-900">
-                MatchIQ Won {auditRecord.wonCount} out of {auditRecord.totalCount} Selections ({((auditRecord.wonCount / auditRecord.totalCount) * 100).toFixed(0)}% Win Rate)
+                MatchIQ Won {auditRecord.wonCount} out of {auditRecord.totalCount} Verified Selections ({auditRecord.totalCount > 0 ? ((auditRecord.wonCount / auditRecord.totalCount) * 100).toFixed(0) : 0}% Win Rate)
+                {auditRecord.unverifiedCount > 0 && (
+                  <span className="text-xs font-bold text-amber-700 bg-amber-100 border border-amber-300 px-2 py-0.5 rounded-md ml-2">
+                    ⚠️ {auditRecord.unverifiedCount} Unverified Leg{auditRecord.unverifiedCount > 1 ? "s" : ""}
+                  </span>
+                )}
               </h3>
               <span className="text-xs text-slate-600 mt-0.5 block">
                 Total Combined Odds: <strong>{auditRecord.combinedOdds.toFixed(2)}x</strong>
@@ -771,6 +899,65 @@ export default function BacktesterTab() {
           </div>
         </div>
       )}
+
+      {/* 🛡️ SportyBet Flex-Shield Recommendation Card */}
+      {unblinded && auditRecord && !auditRecord.error && auditRecord.totalCount >= 2 && (() => {
+        const flex = calculateFlexShield(auditRecord.totalCount, auditRecord.wonCount, auditRecord.combinedOdds, selectedFlexCut);
+        if (!flex.eligible) return null;
+        return (
+          <div className={`p-5 rounded-2xl border flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-sm transition-all ${
+            flex.isFlexSettledWon
+              ? "bg-slate-900 border-emerald-500/40 text-white"
+              : "bg-slate-900 border-amber-500/40 text-white"
+          }`}>
+            <div className="flex items-start space-x-3.5">
+              <div className={`w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 mt-0.5 ${
+                flex.isFlexSettledWon ? "bg-emerald-500/20 text-emerald-400 border border-emerald-500/30" : "bg-amber-500/20 text-amber-400 border border-amber-500/30"
+              }`}>
+                {flex.isFlexSettledWon ? <ShieldCheck className="w-5 h-5" /> : <ShieldAlert className="w-5 h-5" />}
+              </div>
+              <div>
+                <div className="flex flex-wrap items-center gap-2 mt-0.5">
+                  <div className="flex items-center space-x-2">
+                    <span className="text-[11px] font-bold text-slate-300">
+                      Flex Cut Setting:
+                    </span>
+                    <select
+                      value={selectedFlexCut}
+                      onChange={(e) => setSelectedFlexCut(e.target.value)}
+                      className="bg-slate-800 border border-slate-700 text-emerald-400 text-xs font-extrabold rounded-xl px-3 py-1 focus:outline-none focus:border-emerald-500 cursor-pointer"
+                    >
+                      <option value="AUTO">✨ Auto-Recommend (Cut-{flex.recommendedCut})</option>
+                      <option value="OFF">🚫 Flex Off (No Flex Protection)</option>
+                      {Array.from({ length: Math.min(7, flex.maxAllowedCut || 7) }, (_, i) => i + 1).map((c) => (
+                        <option key={c} value={String(c)}>
+                          Cut-{c} (Covers up to {c} failing leg{c > 1 ? "s" : ""})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+                <h4 className="text-sm font-extrabold text-white mt-2">
+                  {flex.statusText}
+                </h4>
+                <p className="text-xs text-slate-300 mt-1 leading-relaxed">
+                  {flex.description}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex flex-col items-end flex-shrink-0 self-stretch sm:self-auto justify-center bg-slate-800/80 border border-slate-700/60 p-3 rounded-xl min-w-[140px]">
+              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Flex Coverage</span>
+              <span className="text-sm font-black text-emerald-400 mt-0.5">
+                Up to {flex.recommendedCut} Losses Paid
+              </span>
+              <span className="text-[10px] text-slate-400 mt-0.5">
+                Actual Losses: {flex.lossCount}
+              </span>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* ⚠️ Odds Shortfall Warning Banner */}
       {unblinded && auditRecord?.oddsShortfall && (
@@ -832,7 +1019,9 @@ export default function BacktesterTab() {
             key={m.id || idx}
             className={`bg-white p-4 rounded-xl border ${
               unblinded
-                ? m.isWin
+                ? m.isUnverified
+                  ? "border-amber-300 bg-amber-50/30"
+                  : m.isWin
                   ? "border-emerald-200 bg-emerald-50/20"
                   : "border-rose-200 bg-rose-50/20"
                 : "border-slate-200"
@@ -880,7 +1069,17 @@ export default function BacktesterTab() {
                       </span>
                     </div>
 
-                    {m.isWin ? (
+                    {m.isUnverified ? (
+                      <span className="bg-amber-100 text-amber-800 border border-amber-300 px-2.5 py-1 rounded-lg font-extrabold flex items-center space-x-1">
+                        <AlertCircle className="w-3.5 h-3.5 text-amber-600" />
+                        <span>UNVERIFIED</span>
+                      </span>
+                    ) : m.isVoid ? (
+                      <span className="bg-slate-100 text-slate-700 border border-slate-300 px-2.5 py-1 rounded-lg font-extrabold flex items-center space-x-1">
+                        <RefreshCw className="w-3.5 h-3.5 text-slate-500" />
+                        <span>VOID (1.00x)</span>
+                      </span>
+                    ) : m.isWin ? (
                       <span className="bg-emerald-100 text-emerald-800 border border-emerald-300 px-2.5 py-1 rounded-lg font-extrabold flex items-center space-x-1">
                         <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
                         <span>WIN</span>
@@ -904,6 +1103,11 @@ export default function BacktesterTab() {
             {unblinded && (
               <div className="bg-slate-50 p-2.5 rounded-lg border border-slate-200 text-[11px] text-slate-600">
                 <strong>AI Brain Performance Analysis:</strong> {m.reason}
+                {m.realStats && m.realStats.found && (
+                  <span className="block mt-1 text-[10px] text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded border border-indigo-100">
+                    ⚡ Verified via API-Football: {m.realStats.ht_home !== null ? `HT Score: ${m.realStats.ht_home}-${m.realStats.ht_away} | ` : ""}{m.realStats.home_corners !== null ? `Total Corners: ${m.realStats.home_corners + m.realStats.away_corners} (${m.realStats.home_corners} - ${m.realStats.away_corners})` : ""}
+                  </span>
+                )}
               </div>
             )}
           </div>

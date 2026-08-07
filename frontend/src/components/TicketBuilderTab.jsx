@@ -11,6 +11,9 @@ export default function TicketBuilderTab() {
   const [singleLeague, setSingleLeague] = useState("PL");
   const [gameweek, setGameweek] = useState(1);
   const [targetOdds, setTargetOdds] = useState(2.0);
+  const [targetMode, setTargetMode] = useState("ODDS"); // "ODDS" or "GAMES"
+  const [targetGames, setTargetGames] = useState(10);
+  const [selectedFlexCut, setSelectedFlexCut] = useState("AUTO");
   const [customOdds, setCustomOdds] = useState("500");
   const [useCustom, setUseCustom] = useState(false);
   const [useLiveOdds, setUseLiveOdds] = useState(false);
@@ -52,6 +55,7 @@ export default function TicketBuilderTab() {
         target_odds: lockTargetData.targetOdds || targetOdds,
         total_odds: lockTargetData.totalOdds || 2.0,
         stake: parseFloat(stakeInput) || 1000,
+        flex_cut: selectedFlexCut,
         selections: lockTargetData.selections || []
       };
       const res = await fetch("http://127.0.0.1:8000/api/v1/ticket-tracker/lock", {
@@ -123,6 +127,9 @@ export default function TicketBuilderTab() {
 
     const payload = {
       target_odds: finalOddsGoal,
+      target_mode: targetMode,
+      target_games: targetGames,
+      flex_cut: selectedFlexCut,
       mode: "ACCUMULATOR",
       league_scope: leagueScope,
       single_league: singleLeague,
@@ -600,62 +607,144 @@ export default function TicketBuilderTab() {
             </div>
           </div>
 
-          <div className="pt-2 border-t border-slate-100">
-            <label className="text-xs font-semibold text-slate-700 block mb-2">
-              3. Select Target Odds Goal (2.0x to 1,000.0x+)
-            </label>
+          <div className="pt-2 border-t border-slate-100 space-y-3">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <label className="text-xs font-semibold text-slate-700 block">
+                3. Select Target Criteria & Slip Size
+              </label>
 
-            <div className="flex flex-wrap items-center gap-2">
-              {oddsPresetButtons.map((val) => (
+              {/* Target Mode Switcher */}
+              <div className="flex items-center space-x-1 bg-slate-100 p-1 rounded-xl w-fit">
                 <button
-                  key={val}
-                  onClick={() => {
-                    setTargetOdds(val);
-                    setCustomOdds("");
-                    setUseCustom(false);
-                  }}
-                  className={`px-3.5 py-1.5 rounded-xl text-xs font-extrabold transition-all ${
-                    !useCustom && targetOdds === val
+                  onClick={() => setTargetMode("ODDS")}
+                  className={`px-3 py-1 rounded-lg text-xs font-bold transition-all ${
+                    targetMode === "ODDS"
                       ? "bg-slate-900 text-white shadow-sm"
-                      : "bg-slate-100 text-slate-700 hover:bg-slate-200"
+                      : "text-slate-600 hover:text-slate-900"
                   }`}
                 >
-                  ~{val.toFixed(0)} Odds
+                  Target Odds Goal
                 </button>
-              ))}
-
-              <div className="flex items-center gap-1.5 ml-2">
-                <input
-                  type="number"
-                  placeholder="Custom"
-                  value={customOdds}
-                  onChange={(e) => {
-                    const valStr = e.target.value;
-                    setCustomOdds(valStr);
-                    setUseCustom(true);
-                    const parsed = parseFloat(valStr);
-                    if (!isNaN(parsed) && parsed > 1.0) {
-                      setTargetOdds(parsed);
-                    }
-                  }}
-                  className="w-20 bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs font-bold text-slate-900 focus:outline-none focus:ring-1 focus:ring-slate-900"
-                />
-                <span className="text-xs text-slate-400 font-extrabold">Odds</span>
+                <button
+                  onClick={() => setTargetMode("GAMES")}
+                  className={`px-3 py-1 rounded-lg text-xs font-bold transition-all ${
+                    targetMode === "GAMES"
+                      ? "bg-slate-900 text-white shadow-sm"
+                      : "text-slate-600 hover:text-slate-900"
+                  }`}
+                >
+                  Target Number of Games (Up to 50 Max)
+                </button>
               </div>
+            </div>
+
+            {targetMode === "ODDS" ? (
+              <div className="flex flex-wrap items-center gap-2">
+                {oddsPresetButtons.map((val) => (
+                  <button
+                    key={val}
+                    onClick={() => {
+                      setTargetOdds(val);
+                      setCustomOdds("");
+                      setUseCustom(false);
+                    }}
+                    className={`px-3.5 py-1.5 rounded-xl text-xs font-extrabold transition-all ${
+                      !useCustom && targetOdds === val
+                        ? "bg-slate-900 text-white shadow-sm"
+                        : "bg-slate-100 text-slate-700 hover:bg-slate-200"
+                    }`}
+                  >
+                    ~{val.toFixed(0)} Odds
+                  </button>
+                ))}
+
+                <div className="flex items-center gap-1.5 ml-2">
+                  <input
+                    type="number"
+                    placeholder="Custom"
+                    value={customOdds}
+                    onChange={(e) => {
+                      const valStr = e.target.value;
+                      setCustomOdds(valStr);
+                      setUseCustom(true);
+                      const parsed = parseFloat(valStr);
+                      if (!isNaN(parsed) && parsed > 1.0) {
+                        setTargetOdds(parsed);
+                      }
+                    }}
+                    className="w-20 bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs font-bold text-slate-900 focus:outline-none focus:ring-1 focus:ring-slate-900"
+                  />
+                  <span className="text-xs text-slate-400 font-extrabold">Odds</span>
+                </div>
+              </div>
+            ) : (
+              <div className="flex flex-wrap items-center gap-2">
+                {[5, 10, 15, 20, 25, 30, 40, 50].map((num) => (
+                  <button
+                    key={num}
+                    onClick={() => setTargetGames(num)}
+                    className={`px-3.5 py-1.5 rounded-xl text-xs font-extrabold transition-all ${
+                      targetGames === num
+                        ? "bg-slate-900 text-white shadow-sm"
+                        : "bg-slate-100 text-slate-700 hover:bg-slate-200"
+                    }`}
+                  >
+                    {num} Games {num === 50 ? "(SportyBet Max)" : ""}
+                  </button>
+                ))}
+
+                <div className="flex items-center gap-1.5 ml-2">
+                  <input
+                    type="number"
+                    placeholder="Max 50"
+                    min={1}
+                    max={50}
+                    value={targetGames}
+                    onChange={(e) => setTargetGames(Math.min(50, Math.max(1, parseInt(e.target.value) || 1)))}
+                    className="w-20 bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs font-bold text-slate-900 focus:outline-none focus:ring-1 focus:ring-slate-900"
+                  />
+                  <span className="text-xs text-slate-400 font-extrabold">Games (1–50)</span>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Section 4: Flex Cut Strategy Control */}
+          <div className="pt-2 border-t border-slate-100 space-y-2">
+            <label className="text-xs font-semibold text-slate-700 block">
+              4. SportyBet Flex Cut Strategy
+            </label>
+
+            <div className="w-full sm:w-72">
+              <select
+                value={selectedFlexCut}
+                onChange={(e) => setSelectedFlexCut(e.target.value)}
+                className="w-full bg-slate-50 border border-slate-200 text-xs font-bold text-slate-900 rounded-xl px-3 py-2 cursor-pointer focus:outline-none focus:ring-1 focus:ring-slate-900"
+              >
+                <option value="AUTO">Auto-Recommend (StatIQ Optimal Cut)</option>
+                <option value="OFF">Flex Off (Straight Accumulator)</option>
+                <option value="1">Flex Cut-1 (Covers 1 Loss)</option>
+                <option value="2">Flex Cut-2 (Covers 2 Losses)</option>
+                <option value="3">Flex Cut-3 (Covers 3 Losses)</option>
+                <option value="4">Flex Cut-4 (Covers 4 Losses)</option>
+                <option value="5">Flex Cut-5 (Covers 5 Losses)</option>
+                <option value="6">Flex Cut-6 (Covers 6 Losses)</option>
+                <option value="7">Flex Cut-7 (Covers 7 Losses)</option>
+              </select>
             </div>
           </div>
 
-            <div className="flex items-center justify-between pt-2">
-              <label className="flex items-center space-x-2 cursor-pointer text-xs font-bold text-slate-700">
-                <input
-                  type="checkbox"
-                  checked={useLiveOdds}
-                  onChange={(e) => setUseLiveOdds(e.target.checked)}
-                  className="rounded text-slate-900 focus:ring-slate-900"
-                />
-                <span>Use Live SportyBet Odds (Enables Gate 3 Value Edge Calculation)</span>
-              </label>
-            </div>
+          <div className="flex items-center justify-between pt-2">
+            <label className="flex items-center space-x-2 cursor-pointer text-xs font-bold text-slate-700">
+              <input
+                type="checkbox"
+                checked={useLiveOdds}
+                onChange={(e) => setUseLiveOdds(e.target.checked)}
+                className="rounded text-slate-900 focus:ring-slate-900"
+              />
+              <span>Use Live SportyBet Odds (Enables Gate 3 Value Edge Calculation)</span>
+            </label>
+          </div>
 
           {errorMsg && (
             <div className="bg-rose-50 border border-rose-200 p-4 rounded-xl flex items-start space-x-3 text-xs text-rose-800">
@@ -915,6 +1004,45 @@ export default function TicketBuilderTab() {
                     )}
                   </div>
                 )}
+
+                {/* Flex Strategy Recommendation Card */}
+                {(() => {
+                  const nLegs = scn.selections.length;
+                  const flex = calculateFlexShield(nLegs, nLegs, scn.accumulated_odds, selectedFlexCut);
+                  if (!flex.eligible) return null;
+                  return (
+                    <div className="bg-slate-900 border border-emerald-500/40 p-4 rounded-2xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 text-white shadow-sm my-3">
+                      <div className="flex items-start space-x-3">
+                        <div className="w-9 h-9 rounded-xl bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 flex items-center justify-center flex-shrink-0 mt-0.5">
+                          <ShieldCheck className="w-5 h-5" />
+                        </div>
+                        <div>
+                          <div className="flex items-center space-x-2">
+                            <span className="text-[11px] font-extrabold uppercase tracking-wider text-emerald-400">
+                              Recommended SportyBet Flex Strategy
+                            </span>
+                            <span className="text-[10px] font-bold bg-slate-800 text-slate-300 border border-slate-700 px-2 py-0.5 rounded-full">
+                              Recommended: Cut-{flex.recommendedCut}
+                            </span>
+                          </div>
+                          <h4 className="text-xs font-extrabold text-white mt-1">
+                            Apply Flex Cut-{flex.recommendedCut} on SportyBet when placing this slip
+                          </h4>
+                          <p className="text-[11px] text-slate-300 mt-0.5 leading-relaxed">
+                            StatIQ's model win rate predicts your {nLegs}-leg ticket will hit high accuracy. Selecting <strong>Flex Cut-{flex.recommendedCut}</strong> guarantees payout even if up to <strong>{flex.recommendedCut} matches</strong> have unexpected outcomes.
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="flex flex-col items-end flex-shrink-0 self-stretch sm:self-auto justify-center bg-slate-800/80 border border-slate-700/60 p-2.5 rounded-xl min-w-[130px]">
+                        <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Flex Coverage</span>
+                        <span className="text-xs font-black text-emerald-400 mt-0.5">
+                          Up to {flex.recommendedCut} Losses Paid
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })()}
 
                 <div className="pt-2 flex flex-col sm:flex-row items-center gap-3">
                   <button

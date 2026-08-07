@@ -103,9 +103,12 @@ export const getTeamElo = (name) => {
 // ─────────────────────────────────────────────────────────────────────────────
 export const MARKET_TYPE = {
   DC:        "DC",        // Double Chance (X1, X2, 12)
+  AH:        "AH",        // Asian Handicap (+1.5)
   TEAM_OVER: "TEAM_OVER", // Team Over 0.5 Goals
   OVER_15:   "OVER_15",   // Over 1.5 Goals
   OVER_25:   "OVER_25",   // Over 2.5 Goals
+  UNDER_35:  "UNDER_35",  // Under 3.5 Goals
+  UNDER_45:  "UNDER_45",  // Under 4.5 Goals
   HT_OVER:   "HT_OVER",   // 1st Half Over 0.5 Goals
   CORNERS:   "CORNERS",   // Total Corners Over 7.5
   WEH:       "WEH",       // Win Either Half
@@ -115,11 +118,14 @@ export const MARKET_TYPE = {
 const getMarketType = (pickStr) => {
   const p = (pickStr || "").toLowerCase();
   if (p.includes("double chance") || p.includes("or draw"))  return MARKET_TYPE.DC;
+  if (p.includes("(+1.5)") || p.includes("handicap"))         return MARKET_TYPE.AH;
   if (p.includes("win either half"))                          return MARKET_TYPE.WEH;
   if (p.includes("over 0.5 team") || p.includes("team goals")) return MARKET_TYPE.TEAM_OVER;
   if (p.includes("1st half over") || p.includes("ht over"))  return MARKET_TYPE.HT_OVER;
   if (p.includes("both teams") || p.includes("btts"))        return MARKET_TYPE.BTTS;
   if (p.includes("corners"))                                  return MARKET_TYPE.CORNERS;
+  if (p.includes("under 3.5"))                                return MARKET_TYPE.UNDER_35;
+  if (p.includes("under 4.5"))                                return MARKET_TYPE.UNDER_45;
   if (p.includes("over 2.5"))                                 return MARKET_TYPE.OVER_25;
   if (p.includes("over 1.5"))                                 return MARKET_TYPE.OVER_15;
   return MARKET_TYPE.OVER_15;
@@ -178,6 +184,12 @@ const calculateDynamicMarketOdds = (type, eloGap, fixture, isHome = true) => {
       odds = Math.max(1.10, Math.min(1.45, Math.round((1.0 / (rawP - 0.03)) * 100) / 100));
       break;
     }
+    case MARKET_TYPE.AH: {
+      const rawP = Math.min(0.94, Math.max(0.65, teamProb + pD * 0.75 + 0.12));
+      prob = Math.round(rawP * 100);
+      odds = Math.max(1.15, Math.min(1.40, Math.round((1.0 / (rawP - 0.04)) * 100) / 100));
+      break;
+    }
     case MARKET_TYPE.TEAM_OVER: {
       const rawP = Math.min(0.95, Math.max(0.55, teamProb * 1.22 + pD * 0.30));
       prob = Math.round(rawP * 100);
@@ -216,6 +228,16 @@ const calculateDynamicMarketOdds = (type, eloGap, fixture, isHome = true) => {
       odds = 1.45;
       break;
     }
+    case MARKET_TYPE.UNDER_35: {
+      prob = 84;
+      odds = 1.25;
+      break;
+    }
+    case MARKET_TYPE.UNDER_45: {
+      prob = 91;
+      odds = 1.15;
+      break;
+    }
     default: {
       prob = 82;
       odds = 1.25;
@@ -228,78 +250,79 @@ const calculateDynamicMarketOdds = (type, eloGap, fixture, isHome = true) => {
 // Live pools include Win Either Half (WEH) for upcoming/live matches where WEH is a high-value market
 const LIVE_PICK_POOLS = {
   HOME_DOMINANT: [
+    { pick: (h) => `${h} (+1.5)`,                   type: MARKET_TYPE.AH,        isHome: true  },
     { pick: (h) => `${h} or Draw (Double Chance)`,  type: MARKET_TYPE.DC,        isHome: true  },
+    { pick: ()  => "Over 1.5 Goals",                 type: MARKET_TYPE.OVER_15,   isHome: true  },
+    { pick: ()  => "Total Corners Over 7.5",         type: MARKET_TYPE.CORNERS,   isHome: true  },
     { pick: (h) => `${h} Over 0.5 Team Goals`,      type: MARKET_TYPE.TEAM_OVER, isHome: true  },
     { pick: (h) => `${h} Win Either Half`,           type: MARKET_TYPE.WEH,       isHome: true  },
-    { pick: ()  => "Over 1.5 Goals",                 type: MARKET_TYPE.OVER_15,   isHome: true  },
-    { pick: ()  => "1st Half Over 0.5 Goals",        type: MARKET_TYPE.HT_OVER,   isHome: true  },
-    { pick: ()  => "Total Corners Over 7.5",         type: MARKET_TYPE.CORNERS,   isHome: true  },
   ],
   HOME_FAVOURED: [
-    { pick: (h) => `${h} Over 0.5 Team Goals`,      type: MARKET_TYPE.TEAM_OVER, isHome: true  },
+    { pick: (h) => `${h} (+1.5)`,                   type: MARKET_TYPE.AH,        isHome: true  },
     { pick: (h) => `${h} or Draw (Double Chance)`,  type: MARKET_TYPE.DC,        isHome: true  },
-    { pick: (h) => `${h} Win Either Half`,           type: MARKET_TYPE.WEH,       isHome: true  },
-    { pick: ()  => "Over 1.5 Goals",                 type: MARKET_TYPE.OVER_15,   isHome: true  },
-    { pick: ()  => "1st Half Over 0.5 Goals",        type: MARKET_TYPE.HT_OVER,   isHome: true  },
     { pick: ()  => "Total Corners Over 7.5",         type: MARKET_TYPE.CORNERS,   isHome: true  },
+    { pick: ()  => "Over 1.5 Goals",                 type: MARKET_TYPE.OVER_15,   isHome: true  },
+    { pick: (h) => `${h} Over 0.5 Team Goals`,      type: MARKET_TYPE.TEAM_OVER, isHome: true  },
   ],
   AWAY_DOMINANT: [
+    { pick: (h, a) => `${a} (+1.5)`,                type: MARKET_TYPE.AH,        isHome: false },
     { pick: (h, a) => `${a} or Draw (Double Chance)`, type: MARKET_TYPE.DC,        isHome: false },
-    { pick: (h, a) => `${a} Over 0.5 Team Goals`,    type: MARKET_TYPE.TEAM_OVER, isHome: false },
-    { pick: (h, a) => `${a} Win Either Half`,         type: MARKET_TYPE.WEH,       isHome: false },
-    { pick: ()     => "Over 1.5 Goals",               type: MARKET_TYPE.OVER_15,   isHome: false },
     { pick: ()     => "Total Corners Over 7.5",       type: MARKET_TYPE.CORNERS,   isHome: false },
+    { pick: ()     => "Over 1.5 Goals",               type: MARKET_TYPE.OVER_15,   isHome: false },
+    { pick: (h, a) => `${a} Over 0.5 Team Goals`,    type: MARKET_TYPE.TEAM_OVER, isHome: false },
   ],
   AWAY_FAVOURED: [
-    { pick: (h, a) => `${a} Over 0.5 Team Goals`,    type: MARKET_TYPE.TEAM_OVER, isHome: false },
-    { pick: (h, a) => `${a} Win Either Half`,         type: MARKET_TYPE.WEH,       isHome: false },
-    { pick: ()     => "Over 1.5 Goals",               type: MARKET_TYPE.OVER_15,   isHome: false },
+    { pick: (h, a) => `${a} (+1.5)`,                type: MARKET_TYPE.AH,        isHome: false },
+    { pick: (h, a) => `${a} or Draw (Double Chance)`, type: MARKET_TYPE.DC,        isHome: false },
     { pick: ()     => "Total Corners Over 7.5",       type: MARKET_TYPE.CORNERS,   isHome: false },
-    { pick: ()     => "Both Teams to Score",          type: MARKET_TYPE.BTTS,      isHome: false },
+    { pick: ()     => "Over 1.5 Goals",               type: MARKET_TYPE.OVER_15,   isHome: false },
+    { pick: (h, a) => `${a} Over 0.5 Team Goals`,    type: MARKET_TYPE.TEAM_OVER, isHome: false },
   ],
   COMPETITIVE: [
-    { pick: ()  => "Over 1.5 Goals",          type: MARKET_TYPE.OVER_15, isHome: true },
-    { pick: ()  => "Total Corners Over 7.5",  type: MARKET_TYPE.CORNERS, isHome: true },
-    { pick: ()  => "1st Half Over 0.5 Goals", type: MARKET_TYPE.HT_OVER, isHome: true },
-    { pick: ()  => "Both Teams to Score",     type: MARKET_TYPE.BTTS,    isHome: true },
+    { pick: ()  => "Total Corners Over 7.5",  type: MARKET_TYPE.CORNERS,  isHome: true },
+    { pick: ()  => "Under 4.5 Goals",         type: MARKET_TYPE.UNDER_45, isHome: true },
+    { pick: (h) => `${h} (+1.5)`,             type: MARKET_TYPE.AH,       isHome: true },
+    { pick: (h, a) => `${a} (+1.5)`,          type: MARKET_TYPE.AH,       isHome: false },
+    { pick: ()  => "1st Half Over 0.5 Goals", type: MARKET_TYPE.HT_OVER,  isHome: true },
   ],
 };
 
 // Backtest pools exclude WEH to ensure 100% Full-Time score verifiability without guessing HT breakdowns
 const BACKTEST_PICK_POOLS = {
   HOME_DOMINANT: [
+    { pick: (h) => `${h} (+1.5)`,                   type: MARKET_TYPE.AH,        isHome: true  },
     { pick: (h) => `${h} or Draw (Double Chance)`,  type: MARKET_TYPE.DC,        isHome: true  },
-    { pick: (h) => `${h} Over 0.5 Team Goals`,      type: MARKET_TYPE.TEAM_OVER, isHome: true  },
+    { pick: ()  => "Total Corners Over 7.5",         type: MARKET_TYPE.CORNERS,   isHome: true  },
     { pick: ()  => "Over 1.5 Goals",                 type: MARKET_TYPE.OVER_15,   isHome: true  },
     { pick: ()  => "1st Half Over 0.5 Goals",        type: MARKET_TYPE.HT_OVER,   isHome: true  },
-    { pick: ()  => "Total Corners Over 7.5",         type: MARKET_TYPE.CORNERS,   isHome: true  },
   ],
   HOME_FAVOURED: [
-    { pick: (h) => `${h} Over 0.5 Team Goals`,      type: MARKET_TYPE.TEAM_OVER, isHome: true  },
+    { pick: (h) => `${h} (+1.5)`,                   type: MARKET_TYPE.AH,        isHome: true  },
     { pick: (h) => `${h} or Draw (Double Chance)`,  type: MARKET_TYPE.DC,        isHome: true  },
+    { pick: ()  => "Total Corners Over 7.5",         type: MARKET_TYPE.CORNERS,   isHome: true  },
     { pick: ()  => "Over 1.5 Goals",                 type: MARKET_TYPE.OVER_15,   isHome: true  },
     { pick: ()  => "1st Half Over 0.5 Goals",        type: MARKET_TYPE.HT_OVER,   isHome: true  },
-    { pick: ()  => "Total Corners Over 7.5",         type: MARKET_TYPE.CORNERS,   isHome: true  },
   ],
   AWAY_DOMINANT: [
+    { pick: (h, a) => `${a} (+1.5)`,                type: MARKET_TYPE.AH,        isHome: false },
     { pick: (h, a) => `${a} or Draw (Double Chance)`, type: MARKET_TYPE.DC,        isHome: false },
-    { pick: (h, a) => `${a} Over 0.5 Team Goals`,    type: MARKET_TYPE.TEAM_OVER, isHome: false },
-    { pick: ()     => "Over 1.5 Goals",               type: MARKET_TYPE.OVER_15,   isHome: false },
     { pick: ()     => "Total Corners Over 7.5",       type: MARKET_TYPE.CORNERS,   isHome: false },
+    { pick: ()     => "Over 1.5 Goals",               type: MARKET_TYPE.OVER_15,   isHome: false },
     { pick: ()     => "1st Half Over 0.5 Goals",      type: MARKET_TYPE.HT_OVER,   isHome: false },
   ],
   AWAY_FAVOURED: [
-    { pick: (h, a) => `${a} Over 0.5 Team Goals`,    type: MARKET_TYPE.TEAM_OVER, isHome: false },
-    { pick: ()     => "Over 1.5 Goals",               type: MARKET_TYPE.OVER_15,   isHome: false },
+    { pick: (h, a) => `${a} (+1.5)`,                type: MARKET_TYPE.AH,        isHome: false },
+    { pick: (h, a) => `${a} or Draw (Double Chance)`, type: MARKET_TYPE.DC,        isHome: false },
     { pick: ()     => "Total Corners Over 7.5",       type: MARKET_TYPE.CORNERS,   isHome: false },
+    { pick: ()     => "Over 1.5 Goals",               type: MARKET_TYPE.OVER_15,   isHome: false },
     { pick: ()     => "1st Half Over 0.5 Goals",      type: MARKET_TYPE.HT_OVER,   isHome: false },
-    { pick: ()     => "Both Teams to Score",          type: MARKET_TYPE.BTTS,      isHome: false },
   ],
   COMPETITIVE: [
-    { pick: ()  => "Over 1.5 Goals",          type: MARKET_TYPE.OVER_15, isHome: true },
-    { pick: ()  => "Total Corners Over 7.5",  type: MARKET_TYPE.CORNERS, isHome: true },
-    { pick: ()  => "1st Half Over 0.5 Goals", type: MARKET_TYPE.HT_OVER, isHome: true },
-    { pick: ()  => "Both Teams to Score",     type: MARKET_TYPE.BTTS,    isHome: true },
+    { pick: ()  => "Total Corners Over 7.5",  type: MARKET_TYPE.CORNERS,  isHome: true },
+    { pick: ()  => "Under 4.5 Goals",         type: MARKET_TYPE.UNDER_45, isHome: true },
+    { pick: (h) => `${h} (+1.5)`,             type: MARKET_TYPE.AH,       isHome: true },
+    { pick: (h, a) => `${a} (+1.5)`,          type: MARKET_TYPE.AH,       isHome: false },
+    { pick: ()  => "1st Half Over 0.5 Goals", type: MARKET_TYPE.HT_OVER,  isHome: true },
   ],
 };
 
@@ -344,8 +367,18 @@ export const generateSafePick = (fixture, usedTypeCounts = {}, isBacktest = fals
     }
   }
 
-  // Absolute fallback (shouldn't happen with pools of 5-6 options)
-  if (!selected) selected = pool[0];
+  // Absolute fallback for long accumulators: Select the least-used market type in the pool
+  if (!selected) {
+    let minUsed = Infinity;
+    for (let i = 0; i < pool.length; i++) {
+      const entry = pool[(seed + i) % pool.length];
+      const used = usedTypeCounts[entry.type] || 0;
+      if (used < minUsed) {
+        minUsed = used;
+        selected = entry;
+      }
+    }
+  }
 
   // Dynamically compute probability and odds for the selected market based on fixture & Elo
   const { prob, odds } = calculateDynamicMarketOdds(selected.type, eloGap, fixture, selected.isHome);
@@ -522,12 +555,20 @@ export const buildSafeTicket = (
 };
 
 /**
- * evaluatePickResult(pick, homeScore, awayScore, homeTeam, awayTeam)
+ * evaluatePickResult(pick, homeScore, awayScore, homeTeam, awayTeam, realStats)
  *
  * Single shared evaluation function used by Backtester and Ticket Tracker.
- * Returns: boolean — true = WIN
+ * Returns: boolean — true = WIN, OR the string "UNVERIFIED" for picks that
+ * require real match statistics (corners, halftime) when those stats are unavailable.
+ *
+ * @param {string}  pick       - The StatIQ pick string
+ * @param {number}  homeScore  - Final home score
+ * @param {number}  awayScore  - Final away score
+ * @param {string}  homeTeam   - Home team name
+ * @param {string}  awayTeam   - Away team name
+ * @param {object}  realStats  - Optional: { found, ht_home, ht_away, home_corners, away_corners }
  */
-export const evaluatePickResult = (pick, homeScore, awayScore, homeTeam, awayTeam) => {
+export const evaluatePickResult = (pick, homeScore, awayScore, homeTeam, awayTeam, realStats = null) => {
   if (homeScore === null || homeScore === undefined || awayScore === null || awayScore === undefined) {
     return true; // Not yet settled
   }
@@ -562,7 +603,18 @@ export const evaluatePickResult = (pick, homeScore, awayScore, homeTeam, awayTea
     return totalGoals >= 2;
   }
 
-  // Home or Away (12)
+  // ─── SportyBet Compound OR Markets (Home/Away Team or Over 2.5) ─────────────
+  // SportyBet Rule: Pure OR logic as confirmed by Ticket ID 704627 Leg 13 (Besiktas 0-1 = WON).
+  // EITHER the target team wins (e.g. 1-0, 2-0, 3-1) OR total match goals > 2.5 → WIN.
+  if (p.includes("or over 2.5") || p.includes("& over 2.5")) {
+    const over25 = totalGoals > 2.5;
+    if (p.includes("away")) return (awayScore > homeScore) || over25;
+    if (p.includes("home")) return (homeScore > awayScore) || over25;
+    // Generic fallback: either team to win OR total goals > 2.5
+    return (homeScore !== awayScore) || over25;
+  }
+
+  // Home or Away (12) — a plain "did someone win" market (no goals condition)
   if (p.includes("home or away") || p === "12" || p.includes("1 or 2")) {
     return homeScore !== awayScore;
   }
@@ -574,15 +626,34 @@ export const evaluatePickResult = (pick, homeScore, awayScore, homeTeam, awayTea
     return true; // Draws always win DC
   }
 
-  // Win Either Half (WEH)
+  // ─── Win Either Half — requires REAL halftime score ────────────────────────
   if (p.includes("win either half") || p.includes("weh")) {
-    if (isHomePick) return homeScore > awayScore;
-    if (isAwayPick) return awayScore > homeScore;
+    if (realStats && realStats.found && realStats.ht_home !== null && realStats.ht_away !== null) {
+      // Real halftime data available — evaluate properly
+      const htHome = realStats.ht_home;
+      const htAway = realStats.ht_away;
+      const h2Home = homeScore - htHome;
+      const h2Away = awayScore - htAway;
+      if (isHomePick) return htHome > htAway || h2Home > h2Away;
+      if (isAwayPick) return htAway > htHome || h2Away > h2Home;
+    }
+    // No real data available → UNVERIFIED (don't count in win rate)
+    return "UNVERIFIED";
   }
 
-  // 1st Half Over / HT Over
+  // ─── 1st Half Over Goals — requires REAL halftime score ───────────────────
   if (p.includes("1st half over") || p.includes("ht over")) {
-    return totalGoals >= 1;
+    if (realStats && realStats.found && realStats.ht_home !== null && realStats.ht_away !== null) {
+      const htGoals = realStats.ht_home + realStats.ht_away;
+      if (p.includes("over 0.5") || p.includes("over 0.5")) return htGoals >= 1;
+      if (p.includes("over 1.5")) return htGoals >= 2;
+      if (p.includes("over 2.5")) return htGoals >= 3;
+      return htGoals >= 1; // default 1st half over 0.5
+    }
+    // No real halftime data — fall back to total goals as approximation
+    // (most goals in matches with goals are scored in the first half)
+    // But mark as UNVERIFIED if we explicitly don't have data
+    return "UNVERIFIED";
   }
 
   // Asian Handicap (+1.5, +2.0, +1.0, -1.5, etc.)
@@ -622,19 +693,40 @@ export const evaluatePickResult = (pick, homeScore, awayScore, homeTeam, awayTea
   }
 
   // Team Over 0.5 Goals — MUST come before generic Over Goals checks
-  // e.g. "Rayo Vallecano Over 0.5 Team Goals" should use homeScore, not totalGoals
   if (p.includes("team goals") || p.includes("over 0.5 team")) {
     if (isHomePick) return homeScore >= 1;
     if (isAwayPick) return awayScore >= 1;
-    return totalGoals >= 1; // fallback if no team resolved
+    return totalGoals >= 1;
   }
 
-  // Under Goals
+  // ─── Whole Integer Goal Lines (Over 2, Under 2, Over 3, Under 3) ────────────
+  // SportyBet Rule: On exact goal match (e.g. 1-1 score on Over 2), bet is VOID / Push (1.00x odds).
+  // Confirmed by Ticket ID 704627 Leg 11 (HJK 1-1 Motherwell | Over 2 = Void / Push).
+  if (p.includes("over 2") && !p.includes("2.5")) {
+    if (totalGoals === 2) return "VOID";
+    return totalGoals > 2;
+  }
+  if (p.includes("under 2") && !p.includes("2.5")) {
+    if (totalGoals === 2) return "VOID";
+    return totalGoals < 2;
+  }
+  if (p.includes("over 3") && !p.includes("3.5")) {
+    if (totalGoals === 3) return "VOID";
+    return totalGoals > 3;
+  }
+  if (p.includes("under 3") && !p.includes("3.5")) {
+    if (totalGoals === 3) return "VOID";
+    return totalGoals < 3;
+  }
+
+  // Under Goals (Fractional)
   if (p.includes("under 0.5")) return totalGoals < 0.5;
   if (p.includes("under 1.5")) return totalGoals < 1.5;
   if (p.includes("under 2.5")) return totalGoals < 2.5;
+  if (p.includes("under 3.5")) return totalGoals < 3.5;
+  if (p.includes("under 4.5")) return totalGoals < 4.5;
 
-  // Over Goals (generic — total goals)
+  // Over Goals (Fractional)
   if (p.includes("over 0.5")) return totalGoals >= 1;
   if (p.includes("over 1.5")) return totalGoals >= 2;
   if (p.includes("over 2.5")) return totalGoals >= 3;
@@ -643,8 +735,21 @@ export const evaluatePickResult = (pick, homeScore, awayScore, homeTeam, awayTea
   // Both Teams to Score (BTTS)
   if (p.includes("both teams") || p.includes("btts")) return homeScore >= 1 && awayScore >= 1;
 
-  // Corners — always WIN in backtester (no real corner data in historical API)
-  if (p.includes("corners")) return true;
+  // ─── Corners — requires REAL corner data from API-Football ─────────────────
+  if (p.includes("corners")) {
+    if (realStats && realStats.found && realStats.home_corners !== null && realStats.away_corners !== null) {
+      const totalCorners = realStats.home_corners + realStats.away_corners;
+      if (p.includes("over 7.5")) return totalCorners > 7.5;
+      if (p.includes("over 6.5")) return totalCorners > 6.5;
+      if (p.includes("over 8.5")) return totalCorners > 8.5;
+      if (p.includes("over 9.5")) return totalCorners > 9.5;
+      if (p.includes("under 7.5")) return totalCorners < 7.5;
+      if (p.includes("under 9.5")) return totalCorners < 9.5;
+      return totalCorners > 7.5; // default
+    }
+    // No real corner data → UNVERIFIED
+    return "UNVERIFIED";
+  }
 
   // 1X2 direct win
   if (isAwayPick) return awayScore > homeScore;

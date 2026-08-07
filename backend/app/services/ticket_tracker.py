@@ -115,6 +115,15 @@ def evaluate_pick(pick_name: str, home_score: int, away_score: int,
         # Generic 2nd half DC any — just passes if not a draw
         return home_score != away_score
 
+    # ── SportyBet Compound OR Markets (Home/Away Team or Over 2.5) ──
+    if "or over 2.5" in p or "& over 2.5" in p:
+        over25 = total > 2.5
+        if "away" in p or (at and at in p):
+            return away_score > home_score or over25
+        if "home" in p or (ht and ht in p):
+            return home_score > away_score or over25
+        return (home_score != away_score) or over25
+
     # ── Double Chance ──
     if "or draw" in p and "home" in p:   return home_score >= away_score   # 1X
     if "or draw" in p and "away" in p:   return away_score >= home_score   # X2
@@ -215,6 +224,7 @@ def evaluate_pick(pick_name: str, home_score: int, away_score: int,
     if "under 1.5" in p: return "WON" if total < 2 else "LOST"
     if "under 2.5" in p: return "WON" if total < 3 else "LOST"
     if "under 3.5" in p: return "WON" if total < 4 else "LOST"
+    if "under 4.5" in p: return "WON" if total < 5 else "LOST"
     if "under 2"   in p and "2.5" not in p:
         return "VOID" if total == 2 else ("WON" if total < 2 else "LOST")
     if "under 3"   in p and "3.5" not in p:
@@ -509,13 +519,45 @@ def evaluate_tracked_tickets() -> List[Dict[str, Any]]:
             # Still genuinely pending
             all_concluded = False
 
-        # Settle ticket if all concluded
-        if any_lost:
+        # Settle ticket considering Flex Bet strategy
+        flex_cut = t.get("flex_cut", "AUTO")
+        n_legs = len(t.get("selections", []))
+
+        # Calculate max allowed cut if set to AUTO
+        if str(flex_cut).upper() == "AUTO":
+            if n_legs <= 8:
+                allowed_losses = 1 if n_legs >= 5 else 0
+            elif n_legs <= 15:
+                allowed_losses = 2
+            elif n_legs <= 25:
+                allowed_losses = 3
+            else:
+                allowed_losses = 5
+        elif str(flex_cut).upper() == "OFF" or flex_cut is None:
+            allowed_losses = 0
+        else:
+            try:
+                allowed_losses = int(str(flex_cut).replace("Cut-", "").replace("cut-", "").strip())
+            except Exception:
+                allowed_losses = 0
+
+        loss_count = sum(1 for sel in t.get("selections", []) if sel.get("leg_status") == "LOST")
+
+        t["flex_cut"] = flex_cut
+        t["allowed_losses"] = allowed_losses
+        t["loss_count"] = loss_count
+
+        if loss_count > allowed_losses:
             t["status"] = "LOST"
+            t["flex_status_text"] = f"Exceeded Flex Cut-{allowed_losses} ({loss_count} losses)" if allowed_losses > 0 else "Straight Acca Lost"
             t["settled_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
             updated = True
-        elif all_concluded and all_won and scores_available:
+        elif all_concluded and loss_count <= allowed_losses and scores_available:
             t["status"] = "WON"
+            if loss_count > 0:
+                t["flex_status_text"] = f"WON (Covered by Flex Cut-{allowed_losses} — {loss_count} loss paid out)"
+            else:
+                t["flex_status_text"] = "WON (Clean Sweep - 0 Losses)"
             t["settled_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
             updated = True
         else:

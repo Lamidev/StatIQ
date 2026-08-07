@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { decodeBookingCode, runTicketReEdit, generateNewBookingCode } from "../api/client";
-import { Search, Copy, CheckCircle, CheckCircle2, ShieldCheck, AlertTriangle, ArrowRight, RefreshCw, Trash2, Sliders, ExternalLink, X, Receipt } from "lucide-react";
+import { Search, Copy, CheckCircle, CheckCircle2, ShieldCheck, ShieldAlert, AlertTriangle, ArrowRight, RefreshCw, Trash2, Sliders, ExternalLink, X, Receipt, Sparkles } from "lucide-react";
+import { calculateFlexShield } from "../utils/flexCalculator";
 
 export default function BetSlipAuditorTab({ onNavigateHistory }) {
   const [inputCode, setInputCode] = useState("");
@@ -54,6 +55,7 @@ export default function BetSlipAuditorTab({ onNavigateHistory }) {
         target_odds: targetOdds,
         total_odds: reEditResult.new_total_odds,
         stake: parseFloat(stakeInput) || 500,
+        flex_cut: selectedFlexCut,
         selections: reEditResult.final_selections || []
       };
       const res = await fetch("http://127.0.0.1:8000/api/v1/ticket-tracker/lock", {
@@ -177,7 +179,13 @@ export default function BetSlipAuditorTab({ onNavigateHistory }) {
     setGeneratedCode(null);
 
     const finalOdds = useCustomOdds && customOddsInput ? parseFloat(customOddsInput) : targetOdds;
-    const result = await runTicketReEdit(ticketData.selections, finalOdds, mode);
+    const result = await runTicketReEdit(
+      ticketData.selections,
+      finalOdds,
+      mode,
+      targetMode,
+      targetGames
+    );
     setReEditing(false);
 
     // Handle error/timeout responses
@@ -631,49 +639,153 @@ export default function BetSlipAuditorTab({ onNavigateHistory }) {
               </div>
             </div>
 
-            {/* Target Odds Selector */}
-            <div className="space-y-2 pt-2 border-t border-slate-100">
-              <label className="text-xs font-bold text-slate-700 uppercase tracking-wider block">
-                2. Target Total Odds Goal
-              </label>
+            {/* Target Selection Mode (Odds vs Games) */}
+            <div className="space-y-3 pt-2 border-t border-slate-100">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <label className="text-xs font-bold text-slate-700 uppercase tracking-wider block">
+                  2. Select Target Criteria & Slip Size
+                </label>
 
-              <div className="flex flex-wrap items-center gap-2">
-                {[1.5, 2.0, 3.0, 5.0, 10.0, 20.0, 50.0].map((val) => (
+                {/* Target Mode Switcher */}
+                <div className="flex items-center space-x-1 bg-slate-100 p-1 rounded-xl w-fit">
                   <button
-                    key={val}
+                    onClick={() => setTargetMode("ODDS")}
+                    className={`px-3 py-1 rounded-lg text-xs font-bold transition-all ${
+                      targetMode === "ODDS"
+                        ? "bg-slate-900 text-white shadow-sm"
+                        : "text-slate-600 hover:text-slate-900"
+                    }`}
+                  >
+                    Target Odds Goal
+                  </button>
+                  <button
+                    onClick={() => setTargetMode("GAMES")}
+                    className={`px-3 py-1 rounded-lg text-xs font-bold transition-all ${
+                      targetMode === "GAMES"
+                        ? "bg-slate-900 text-white shadow-sm"
+                        : "text-slate-600 hover:text-slate-900"
+                    }`}
+                  >
+                    Target Number of Games (Up to 50 Max)
+                  </button>
+                </div>
+              </div>
+
+              {targetMode === "ODDS" ? (
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
                     onClick={() => {
-                      setTargetOdds(val);
+                      setTargetOdds(0);
                       setUseCustomOdds(false);
                       setReEditResult(null);
                     }}
-                    className={`px-3.5 py-1.5 rounded-lg text-xs font-extrabold transition-all ${
-                      !useCustomOdds && targetOdds === val
-                        ? "bg-slate-900 text-white shadow-sm"
-                        : "bg-slate-100 text-slate-700 hover:bg-slate-200"
+                    className={`px-3.5 py-1.5 rounded-lg text-xs font-extrabold transition-all border ${
+                      !useCustomOdds && targetOdds === 0
+                        ? "bg-emerald-600 border-emerald-600 text-white shadow-sm"
+                        : "bg-emerald-50 border-emerald-200 text-emerald-800 hover:bg-emerald-100"
                     }`}
                   >
-                    ~{val.toFixed(1)}x Odds
+                    Entire Ticket (Keep All {ticketData?.selections?.length || 39} Games)
                   </button>
-                ))}
 
-                <div className="flex items-center gap-1.5 ml-2">
-                  <input
-                    type="number"
-                    placeholder="Custom"
-                    value={customOddsInput}
-                    onChange={(e) => {
-                      const valStr = e.target.value;
-                      setCustomOddsInput(valStr);
-                      setUseCustomOdds(true);
-                      const parsed = parseFloat(valStr);
-                      if (!isNaN(parsed) && parsed > 1.0) {
-                        setTargetOdds(parsed);
-                      }
-                    }}
-                    className="w-20 bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1 text-xs font-bold text-slate-900 focus:outline-none focus:ring-1 focus:ring-slate-900"
-                  />
-                  <span className="text-xs text-slate-400">Odds</span>
+                  {[1.5, 2.0, 3.0, 5.0, 10.0, 20.0, 50.0].map((val) => (
+                    <button
+                      key={val}
+                      onClick={() => {
+                        setTargetOdds(val);
+                        setUseCustomOdds(false);
+                        setReEditResult(null);
+                      }}
+                      className={`px-3.5 py-1.5 rounded-lg text-xs font-extrabold transition-all ${
+                        !useCustomOdds && targetOdds === val
+                          ? "bg-slate-900 text-white shadow-sm"
+                          : "bg-slate-100 text-slate-700 hover:bg-slate-200"
+                      }`}
+                    >
+                      ~{val.toFixed(1)}x Odds
+                    </button>
+                  ))}
+
+                  <div className="flex items-center gap-1.5 ml-2">
+                    <input
+                      type="number"
+                      placeholder="Custom"
+                      value={customOddsInput}
+                      onChange={(e) => {
+                        const valStr = e.target.value;
+                        setCustomOddsInput(valStr);
+                        setUseCustomOdds(true);
+                        const parsed = parseFloat(valStr);
+                        if (!isNaN(parsed) && parsed > 1.0) {
+                          setTargetOdds(parsed);
+                        }
+                      }}
+                      className="w-20 bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1 text-xs font-bold text-slate-900 focus:outline-none focus:ring-1 focus:ring-slate-900"
+                    />
+                    <span className="text-xs text-slate-400">Odds</span>
+                  </div>
                 </div>
+              ) : (
+                <div className="flex flex-wrap items-center gap-2">
+                  {[5, 10, 15, 20, 25, 30, 40, 50].map((num) => (
+                    <button
+                      key={num}
+                      onClick={() => {
+                        setTargetGames(num);
+                        setReEditResult(null);
+                      }}
+                      className={`px-3.5 py-1.5 rounded-lg text-xs font-extrabold transition-all ${
+                        targetGames === num
+                          ? "bg-slate-900 text-white shadow-sm"
+                          : "bg-slate-100 text-slate-700 hover:bg-slate-200"
+                      }`}
+                    >
+                      {num} Games {num === 50 ? "(SportyBet Max)" : ""}
+                    </button>
+                  ))}
+
+                  <div className="flex items-center gap-1.5 ml-2">
+                    <input
+                      type="number"
+                      placeholder="Max 50"
+                      min={1}
+                      max={50}
+                      value={targetGames}
+                      onChange={(e) => {
+                        const val = Math.min(50, Math.max(1, parseInt(e.target.value) || 1));
+                        setTargetGames(val);
+                        setReEditResult(null);
+                      }}
+                      className="w-20 bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1 text-xs font-bold text-slate-900 focus:outline-none focus:ring-1 focus:ring-slate-900"
+                    />
+                    <span className="text-xs text-slate-400">Games (1–50)</span>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Section 3: Flex Cut Strategy Control */}
+            <div className="space-y-2 pt-2 border-t border-slate-100">
+              <label className="text-xs font-bold text-slate-700 uppercase tracking-wider block">
+                3. SportyBet Flex Cut Strategy
+              </label>
+
+              <div className="w-full sm:w-72">
+                <select
+                  value={selectedFlexCut}
+                  onChange={(e) => setSelectedFlexCut(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 text-xs font-bold text-slate-900 rounded-xl px-3 py-2 cursor-pointer focus:outline-none focus:ring-1 focus:ring-slate-900"
+                >
+                  <option value="AUTO">Auto-Recommend (StatIQ Optimal Cut)</option>
+                  <option value="OFF">Flex Off (Straight Accumulator)</option>
+                  <option value="1">Flex Cut-1 (Covers 1 Loss)</option>
+                  <option value="2">Flex Cut-2 (Covers 2 Losses)</option>
+                  <option value="3">Flex Cut-3 (Covers 3 Losses)</option>
+                  <option value="4">Flex Cut-4 (Covers 4 Losses)</option>
+                  <option value="5">Flex Cut-5 (Covers 5 Losses)</option>
+                  <option value="6">Flex Cut-6 (Covers 6 Losses)</option>
+                  <option value="7">Flex Cut-7 (Covers 7 Losses)</option>
+                </select>
               </div>
             </div>
 
@@ -785,6 +897,48 @@ export default function BetSlipAuditorTab({ onNavigateHistory }) {
                   </button>
                 </div>
               </div>
+
+              {/* 🛡️ SportyBet Flex-Shield Recommendation Banner */}
+              {reEditResult.final_selections?.length >= 2 && (() => {
+                const totalLegs = reEditResult.final_selections.length;
+                const flex = calculateFlexShield(totalLegs, totalLegs, reEditResult.new_total_odds);
+                if (!flex.eligible) return null;
+                return (
+                  <div className="bg-slate-900 border border-emerald-500/40 p-5 rounded-2xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 text-white shadow-sm">
+                    <div className="flex items-start space-x-3.5">
+                      <div className="w-10 h-10 rounded-xl bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 flex items-center justify-center flex-shrink-0 mt-0.5">
+                        <ShieldCheck className="w-5 h-5" />
+                      </div>
+                      <div>
+                        <div className="flex items-center space-x-2">
+                          <span className="text-[11px] font-extrabold uppercase tracking-wider text-emerald-400 flex items-center gap-1">
+                            Recommended SportyBet Flex Strategy
+                          </span>
+                          <span className="text-[10px] font-bold bg-slate-800 text-slate-300 border border-slate-700 px-2 py-0.5 rounded-full">
+                            Select Flex Cut-{flex.recommendedCut}
+                          </span>
+                        </div>
+                        <h4 className="text-sm font-extrabold text-white mt-1">
+                          🛡️ Apply Flex Cut-{flex.recommendedCut} on SportyBet when placing this slip
+                        </h4>
+                        <p className="text-xs text-slate-300 mt-1 leading-relaxed">
+                          StatIQ's 85.3% model win rate predicts your {totalLegs}-leg ticket will hit high accuracy. Selecting <strong>Flex Cut-{flex.recommendedCut}</strong> guarantees payout even if up to <strong>{flex.recommendedCut} matches</strong> have unexpected outcomes!
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="flex flex-col items-end flex-shrink-0 self-stretch sm:self-auto justify-center bg-slate-800/80 border border-slate-700/60 p-3 rounded-xl min-w-[140px]">
+                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Safety Shield</span>
+                      <span className="text-sm font-black text-emerald-400 mt-0.5">
+                        Cut-{flex.recommendedCut} Flex Protection
+                      </span>
+                      <span className="text-[10px] text-slate-400 mt-0.5">
+                        Covers up to {flex.recommendedCut} Losses
+                      </span>
+                    </div>
+                  </div>
+                );
+              })()}
 
               {/* Final Re-Edited Selections List */}
               <div className="space-y-3">

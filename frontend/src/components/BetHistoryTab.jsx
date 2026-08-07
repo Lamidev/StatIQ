@@ -405,6 +405,11 @@ function TicketCard({ ticket, onClick, onDelete }) {
           <span className="text-[11px] font-extrabold bg-slate-100 text-slate-700 px-2.5 py-0.5 rounded-full border border-slate-200 uppercase tracking-wider">
             {ticket.mode || "AUDITOR"} Mode
           </span>
+          {ticket.flex_cut && (
+            <span className="text-[11px] font-extrabold bg-slate-800 text-emerald-400 px-2.5 py-0.5 rounded-full border border-slate-700 uppercase tracking-wider">
+              Flex: {ticket.flex_cut}
+            </span>
+          )}
           {ticket.code && (
             <span className="text-[11px] font-bold text-slate-400 font-mono">
               Code: {ticket.code}
@@ -414,13 +419,27 @@ function TicketCard({ ticket, onClick, onDelete }) {
 
         <div className="flex items-center gap-2">
           {isWon ? (
-            <span className="bg-emerald-100 text-emerald-800 border border-emerald-300 px-3 py-1 rounded-full text-xs font-extrabold flex items-center gap-1">
-              <CheckCircle2 className="w-3.5 h-3.5" /> Won
-            </span>
+            <div className="flex flex-col items-end">
+              <span className="bg-emerald-100 text-emerald-800 border border-emerald-300 px-3 py-1 rounded-full text-xs font-extrabold flex items-center gap-1">
+                <CheckCircle2 className="w-3.5 h-3.5" /> Won
+              </span>
+              {ticket.flex_status_text && (
+                <span className="text-[10px] font-extrabold text-emerald-700 mt-0.5">
+                  {ticket.flex_status_text}
+                </span>
+              )}
+            </div>
           ) : isLost ? (
-            <span className="bg-rose-100 text-rose-800 border border-rose-300 px-3 py-1 rounded-full text-xs font-extrabold flex items-center gap-1">
-              <XCircle className="w-3.5 h-3.5" /> Lost
-            </span>
+            <div className="flex flex-col items-end">
+              <span className="bg-rose-100 text-rose-800 border border-rose-300 px-3 py-1 rounded-full text-xs font-extrabold flex items-center gap-1">
+                <XCircle className="w-3.5 h-3.5" /> Lost
+              </span>
+              {ticket.flex_status_text && (
+                <span className="text-[10px] font-extrabold text-rose-600 mt-0.5">
+                  {ticket.flex_status_text}
+                </span>
+              )}
+            </div>
           ) : (
             <span className="bg-amber-100 text-amber-800 border border-amber-300 px-3 py-1 rounded-full text-xs font-extrabold flex items-center gap-1">
               <Clock className="w-3.5 h-3.5" /> Running

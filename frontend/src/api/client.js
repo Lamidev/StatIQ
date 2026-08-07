@@ -468,17 +468,44 @@ export async function decodeBookingCode(code, provider = "SPORTYBET", countryCod
 }
 
 /**
+ * Fetch real match statistics (corners, halftime scores) from API-Football via backend.
+ * Only called for picks that cannot be verified from score data alone.
+ * @param {Array} matches - [{home_team, away_team, pick, match_date}]
+ * @returns {Object} - { status, stats: { "0": {found, ht_home, ht_away, home_corners, away_corners}, ... } }
+ */
+export async function fetchMatchStats(matches) {
+  try {
+    const res = await fetch(`${API_BASE_URL}/ticket-edit/match-stats`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ matches }),
+    });
+    if (res.ok) return await res.json();
+    return { status: "HTTP_ERROR", stats: {} };
+  } catch (err) {
+    console.warn("fetchMatchStats error:", err);
+    return { status: "ERROR", stats: {} };
+  }
+}
+
+/**
  * Run MatchIQ Statistical Ticket Re-Editor (AUDITOR, SWAP, or REMOVE mode).
  * Timeout: 15 seconds. Returns error object on server crash or timeout.
  */
-export async function runTicketReEdit(selections, targetOdds, mode = "SWAP") {
+export async function runTicketReEdit(selections, targetOdds, mode = "SWAP", targetMode = "ODDS", targetGames = 10) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 15000);
   try {
     const res = await fetch(`${API_BASE_URL}/ticket-edit/re-edit`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ selections, target_odds: targetOdds, mode }),
+      body: JSON.stringify({
+        selections,
+        target_odds: targetOdds,
+        mode,
+        target_mode: targetMode,
+        target_games: targetGames
+      }),
       signal: controller.signal
     });
     clearTimeout(timer);

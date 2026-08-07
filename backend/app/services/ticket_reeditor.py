@@ -262,11 +262,12 @@ def _best_auditor_pick_for_game(
 
     # ── Phase 2: Dynamic Favored-Team Rotation Pool ───────────────────────────
     MARKET_POOL = [
-        ("Over/Under",             "Over 1.5",                    max(0.87, min(0.93, h2h_over15))),
+        ("Asian Handicap (+1.5)",  favored_hcp,                   0.94),
         ("Double Chance",          favored_dc,                    max(0.90, fav_prob)),
+        ("Over/Under",             "Over 1.5",                    max(0.87, min(0.93, h2h_over15))),
+        ("Corners",                "Total Corners Over 7.5",      0.85),
         ("Team Goals",             favored_team_over,             0.88),
         ("1st Half Over/Under",    "1st Half Over 0.5 Goals",     0.82),
-        ("Asian Handicap (+1.5)",  favored_hcp,                   0.94),
         ("Goal Bounds",            "2-5+",                        0.85),
         ("Draw No Bet",            favored_dnb,                   0.85),
         ("Win Either Half",        favored_weh,                   0.83),
@@ -545,8 +546,10 @@ async def score_selection(sel: Dict[str, Any]) -> Dict[str, Any]:
 
 async def re_edit_ticket(
     selections: List[Dict[str, Any]],
-    target_odds: float,
-    mode: str,  # "SWAP", "REMOVE", "AUDITOR"
+    target_odds: float = 5.0,
+    mode: str = "SWAP",  # "SWAP", "REMOVE", "AUDITOR"
+    target_mode: str = "ODDS",  # "ODDS" or "GAMES"
+    target_games: int = 10,
 ) -> Dict[str, Any]:
     """
     Three distinct modes:
@@ -572,12 +575,18 @@ async def re_edit_ticket(
         scored_sel = await score_selection(sel)
         scored.append(scored_sel)
 
-    # Determine ideal target leg count if target_odds is specified (for SWAP and REMOVE modes)
-    leg_config = calculate_dynamic_leg_config(target_odds)
-    ideal_legs = leg_config.get("ideal_legs", n_games)
+    # Determine ideal target leg count
+    if target_mode == "GAMES":
+        ideal_legs = min(50, max(1, target_games))
+    elif target_odds <= 1.0 or target_odds >= 99999:
+        ideal_legs = n_games
+    else:
+        leg_config = calculate_dynamic_leg_config(target_odds)
+        ideal_legs = leg_config.get("ideal_legs", n_games)
 
     # AUDITOR mode always keeps 100% of the ticket's selections.
-    # SWAP and REMOVE modes slice selections if target_odds calls for fewer legs.
+    # SWAP and REMOVE modes slice selections ONLY if target_odds > 1.10 and ideal_legs < n_games.
+    # Setting target_odds <= 1.0 or "ALL" keeps 100% of the ticket's games across ALL modes.
     if mode != "AUDITOR" and target_odds > 1.10 and ideal_legs < n_games:
         # Rank scored selections by estimated probability descending
         scored_sorted = sorted(scored, key=lambda x: x.get("estimated_prob", 0), reverse=True)
