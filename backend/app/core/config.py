@@ -1,0 +1,19 @@
+from pydantic_settings import BaseSettings, SettingsConfigDict
+from pathlib import Path
+
+BASE_DIR = Path(__file__).resolve().parent.parent.parent
+
+class Settings(BaseSettings):
+    FOOTBALL_DATA_API_KEY: str = "490d737d899046f5a464110569805d2b"
+    FOOTBALL_DATA_BASE_URL: str = "https://api.football-data.org/v4"
+    DATABASE_URL: str = "sqlite+aiosqlite:///./matchiq.db"
+    ENVIRONMENT: str = "development"
+    LOG_LEVEL: str = "INFO"
+
+    model_config = SettingsConfigDict(
+        env_file=str(BASE_DIR / ".env"),
+        env_file_encoding="utf-8",
+        extra="ignore"
+    )
+
+settings = Settings()

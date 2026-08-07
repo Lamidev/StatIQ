@@ -1,0 +1,8 @@
+{
+  "name": "matchiq-backend",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "..\\.venv\\Scripts\\python -m uvicorn app.main:app --reload --port 8000"
+  }
+}

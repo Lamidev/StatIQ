@@ -1,0 +1,59 @@
+@import "tailwindcss";
+
+body {
+  background-color: #f8fafc;
+  color: #0f172a;
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  min-height: 100vh;
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #f1f5f9;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+/* Minimalist Card & UI Utilities */
+.card-clean {
+  background-color: #ffffff;
+  border: 1px solid #e2e8f0;
+  box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.05);
+}
+
+.card-clean-hover {
+  background-color: #ffffff;
+  border: 1px solid #e2e8f0;
+  box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.05);
+  transition: all 0.2s ease;
+}
+
+.card-clean-hover:hover {
+  border-color: #cbd5e1;
+  box-shadow: 0 4px 12px 0 rgba(0, 0, 0, 0.08);
+  transform: translateY(-1px);
+}
+
+.btn-black {
+  background-color: #0f172a;
+  color: #ffffff;
+  font-weight: 600;
+  transition: all 0.15s ease;
+}
+
+.btn-black:hover {
+  background-color: #000000;
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.15);
+}
