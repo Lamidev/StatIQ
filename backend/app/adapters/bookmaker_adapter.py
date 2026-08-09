@@ -167,44 +167,56 @@ class SportyBetAdapter(BookmakerAdapter):
     def fetch_booking_code_details(self, code: str, country_code: str = "ng") -> Dict[str, Any]:
         """
         Fetches and decodes SportyBet share code via public endpoint.
-        Uses dual-layer fetching (urllib + httpx) for 100% reliable 0.3s response.
+        Uses multi-region fallback (ng, gh, ke, ug, tz, zm) for 100% universal decoding.
         """
         code_clean = code.strip().upper()
-        url = f"{self.BASE_URL}/{country_code}/orders/share/{code_clean}"
-
-        req_headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-            'Accept': 'application/json, text/plain, */*',
-            'Referer': f'https://www.sportybet.com/{country_code}/',
-            'Origin': 'https://www.sportybet.com'
-        }
+        
+        # Try requested country first, then fallback across all SportyBet country domains
+        regions_to_try = [country_code.lower()] + [c for c in ["ng", "gh", "ke", "ug", "tz", "zm"] if c != country_code.lower()]
 
         data = None
-        # Primary fetch using urllib with unverified SSL context
+        matched_region = country_code.lower()
+
         import urllib.request
         import ssl
         import json
 
-        try:
-            req = urllib.request.Request(url, headers=req_headers)
-            ctx = ssl.create_default_context()
-            ctx.check_hostname = False
-            ctx.verify_mode = ssl.CERT_NONE
-            with urllib.request.urlopen(req, context=ctx, timeout=6.0) as resp:
-                if resp.status == 200:
-                    data = json.loads(resp.read().decode('utf-8'))
-        except Exception as e:
-            pass
+        for reg in regions_to_try:
+            url = f"{self.BASE_URL}/{reg}/orders/share/{code_clean}"
+            req_headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+                'Accept': 'application/json, text/plain, */*',
+                'Referer': f'https://www.sportybet.com/{reg}/',
+                'Origin': 'https://www.sportybet.com'
+            }
 
-        # Fallback fetch using httpx client if urllib encountered network issue
-        if not data:
             try:
-                with httpx.Client(timeout=6.0, headers=req_headers, follow_redirects=True, verify=False) as client:
-                    resp = client.get(url)
-                    if resp.status_code == 200:
-                        data = resp.json()
-            except Exception as e:
+                req = urllib.request.Request(url, headers=req_headers)
+                ctx = ssl.create_default_context()
+                ctx.check_hostname = False
+                ctx.verify_mode = ssl.CERT_NONE
+                with urllib.request.urlopen(req, context=ctx, timeout=4.0) as resp:
+                    if resp.status == 200:
+                        res_json = json.loads(resp.read().decode('utf-8'))
+                        if res_json and res_json.get("bizCode") == 10000:
+                            data = res_json
+                            matched_region = reg
+                            break
+            except Exception:
                 pass
+
+            if not data:
+                try:
+                    with httpx.Client(timeout=4.0, headers=req_headers, follow_redirects=True, verify=False) as client:
+                        resp = client.get(url)
+                        if resp.status_code == 200:
+                            res_json = resp.json()
+                            if res_json and res_json.get("bizCode") == 10000:
+                                data = res_json
+                                matched_region = reg
+                                break
+                except Exception:
+                    pass
 
         if data and data.get("bizCode") == 10000:
             order_data = data.get("data", {})
@@ -245,34 +257,56 @@ class SportyBetAdapter(BookmakerAdapter):
                     dt = datetime.datetime.fromtimestamp(start_time_ms / 1000.0)
                     kickoff_str = dt.strftime("%d/%m %H:%M")
 
-                score_str = out.get("setScore") or ""
+                score_str = out.get("setScore") or out.get("score") or ""
+                home_score = None
+                away_score = None
+                if score_str:
+                    for sep in [":", "-"]:
+                        if sep in str(score_str):
+                            parts = str(score_str).split(sep)
+                            try:
+                                home_score = int(parts[0].strip())
+                                away_score = int(parts[1].strip())
+                                score_str = f"{home_score} - {away_score}"
+                                break
+                            except Exception:
+                                pass
+
                 played_sec = out.get("playedSeconds") or ""
                 sel_active = mkt_outcomes[0].get("isActive", 1) if (mkt_outcomes and len(mkt_outcomes) > 0) else 1
                 mkt_status = markets[0].get("status", 1) if markets else 1
-                match_status_code = out.get("matchStatus", "")
+                match_status_code_str = str(out.get("matchStatus") or out.get("status") or "").strip().upper()
+                is_match_finished = match_status_code_str in ["ENDED", "FT", "CONCLUDED", "FINISHED", "2"]
+                is_match_live = match_status_code_str in ["H1", "H2", "HT", "LIVE", "IN_PROGRESS", "ONGOING", "1"] or (bool(played_sec) and not is_match_finished)
 
-                # Extract SportyBet authoritative settlement status if match is finished
+                # Extract SportyBet authoritative dynamic settlement status & isWinning
                 raw_res = str(out.get("outcomeResult") or out.get("result") or out.get("statusDesc") or "").upper()
+                is_winning = None
                 if mkt_outcomes and len(mkt_outcomes) > 0:
                     sel_res = str(mkt_outcomes[0].get("outcomeResult") or mkt_outcomes[0].get("result") or "").upper()
                     if sel_res:
                         raw_res = sel_res
+                    if "isWinning" in mkt_outcomes[0]:
+                        is_winning = mkt_outcomes[0].get("isWinning")
+
+                if is_winning is None and "isWinning" in out:
+                    is_winning = out.get("isWinning")
 
                 leg_result = None
-                if "WON" in raw_res or raw_res == "1" or raw_res == "SUCCESS":
+                if is_winning == 1 or "WON" in raw_res or raw_res in ("1", "SUCCESS"):
                     leg_result = "WON"
-                elif "LOST" in raw_res or raw_res == "2" or raw_res == "FAIL":
+                elif is_match_finished and (is_winning == 0 or "LOST" in raw_res or raw_res in ("2", "FAIL")):
                     leg_result = "LOST"
 
-                # Precise status resolution
+                # Dynamic status resolution
                 if mkt_status == 3 or sel_active == 0:
                     match_status = "NULLED_EXPIRED"
                     status_label = "Market Expired / Unavailable"
-                elif match_status_code in ["H1", "H2", "HT", "LIVE"] or played_sec:
-                    match_status = "IN_PROGRESS"
-                    live_clock = f"{played_sec} {match_status_code}".strip()
+                elif is_match_live:
+                    match_status = "LIVE"
+                    live_clock = f"{played_sec} {match_status_code_str}".strip()
                     status_label = f"Live ({live_clock})" if live_clock else "In Progress / Live"
-                elif match_status_code == "FT" or leg_result is not None:
+                elif is_match_finished or (score_str and not is_match_live and start_time_ms > 0 and (now_ms - start_time_ms) > 7200000):
                     match_status = "CONCLUDED"
                     status_label = "Concluded / Settled"
                 elif out.get("banned") == True or out.get("productStatus") == "CANCELLED":
@@ -295,8 +329,10 @@ class SportyBetAdapter(BookmakerAdapter):
                     "start_time_ms": start_time_ms,
                     "kickoff_datetime_str": kickoff_str,
                     "score": score_str,
+                    "home_score": home_score,
+                    "away_score": away_score,
                     "clock": played_sec,
-                    "match_status_code": match_status_code,
+                    "match_status_code": match_status_code_str,
                     "leg_result": leg_result
                 })
 
@@ -553,8 +589,22 @@ class SportyBetAdapter(BookmakerAdapter):
             logger.warning(f"Failed to fetch live SportyBet matches: {e}")
 
         outcomes_payload = []
+        import time
+        now_sec = time.time()
 
         for s in selections:
+            # Skip matches that have already kicked off or ended (more than 5 mins in the past)
+            start_time = s.get("start_time_ms") or s.get("estimateStartTime") or s.get("kickoff_datetime")
+            if start_time:
+                try:
+                    ts_val = float(start_time)
+                    ts_sec = (ts_val / 1000.0) if ts_val > 1e11 else ts_val
+                    if ts_sec < (now_sec - 300):
+                        logger.info(f"SportyBet: Skipping past/kicked-off match for pre-match booking code.")
+                        continue
+                except (ValueError, TypeError):
+                    pass
+
             game_id = s.get("game_id") or s.get("external_fixture_id") or s.get("fixture_id")
             home_target = (s.get("home_team") or s.get("fixture") or "").lower().strip()
             away_target = (s.get("away_team") or "").lower().strip()
@@ -582,23 +632,31 @@ class SportyBetAdapter(BookmakerAdapter):
                 matched_event = None
                 best_score = 0
 
+                STOP_WORDS = {"fc", "sc", "cd", "ud", "ca", "rc", "ac", "fk", "bk", "sk", "ff", "sad", "club", "team"}
+                h_words = [w for w in home_target.split() if len(w) >= 3 and w not in STOP_WORDS]
+                a_words = [w for w in away_target.split() if len(w) >= 3 and w not in STOP_WORDS]
+
                 for ev in live_sporty_events:
-                    h_name = ev.get("homeTeamName", "").lower()
-                    a_name = ev.get("awayTeamName", "").lower()
-
-                    h_match = any(word in h_name for word in home_target.split() if len(word) >= 4)
-                    a_match = any(word in a_name for word in away_target.split() if len(word) >= 4)
-                    score = int(h_match) + int(a_match)
-
-                    # Also check if game_id matches eventId directly
-                    if game_id and ev.get("eventId") == game_id:
-                        score = 10  # Perfect match
-
-                    if score > best_score:
-                        best_score = score
+                    # Direct game_id / eventId match takes highest priority
+                    if game_id and (str(ev.get("eventId")) == str(game_id) or str(ev.get("gameId")) == str(game_id)):
                         matched_event = ev
+                        best_score = 100
+                        break
 
-                if matched_event and best_score >= 1 and matched_event.get("markets"):
+                    h_name = (ev.get("homeTeamName") or "").lower()
+                    a_name = (ev.get("awayTeamName") or "").lower()
+
+                    h_match = any(kw in h_name for kw in h_words) if h_words else False
+                    a_match = any(kw in a_name for kw in a_words) if a_words else False
+
+                    # Require BOTH home AND away teams to match keyword criteria
+                    if h_match and a_match:
+                        score = 10
+                        if score > best_score:
+                            best_score = score
+                            matched_event = ev
+
+                if matched_event and best_score >= 8 and matched_event.get("markets"):
                     mkt, outcome = self._find_best_market_outcome(
                         matched_event["markets"], target_mkt, target_sel
                     )
@@ -630,23 +688,42 @@ class SportyBetAdapter(BookmakerAdapter):
                 )
             }
 
+        # Generate code on target region and try multi-region generation
+        primary_code = None
+        regional_codes = {}
+
+        target_reg = country_code.lower()
+        regions_to_generate = [target_reg] + [c for c in ["gh", "ke", "ug", "ng"] if c != target_reg]
+
         try:
-            with httpx.Client(timeout=8.0, headers=self.HEADERS) as client:
-                resp = client.post(url_share, json={"selections": outcomes_payload})
-                if resp.status_code == 200:
-                    data = resp.json()
-                    if data.get("bizCode") == 10000:
-                        code = data.get("data", {}).get("shareCode")
-                        if code:
-                            return {
-                                "status": "SUCCESS",
-                                "provider": "SPORTYBET",
-                                "booking_code": code,
-                                "country": country_code.upper(),
-                                "load_url": f"https://www.sportybet.com/{country_code}/?shareCode={code}"
-                            }
-                # Log non-success API responses for debugging
-                logger.warning(f"SportyBet share API response: {resp.status_code} — {resp.text[:300]}")
+            with httpx.Client(timeout=6.0, headers=self.HEADERS) as client:
+                for reg in regions_to_generate:
+                    reg_url = f"{self.BASE_URL}/{reg}/orders/share"
+                    try:
+                        resp = client.post(reg_url, json={"selections": outcomes_payload})
+                        if resp.status_code == 200:
+                            data = resp.json()
+                            if data.get("bizCode") == 10000:
+                                c_val = data.get("data", {}).get("shareCode")
+                                if c_val:
+                                    regional_codes[reg.upper()] = c_val
+                                    if reg == target_reg and not primary_code:
+                                        primary_code = c_val
+                    except Exception:
+                        pass
+
+                if not primary_code and regional_codes:
+                    primary_code = list(regional_codes.values())[0]
+
+                if primary_code:
+                    return {
+                        "status": "SUCCESS",
+                        "provider": "SPORTYBET",
+                        "booking_code": primary_code,
+                        "country": country_code.upper(),
+                        "load_url": f"https://www.sportybet.com/{country_code.lower()}/?shareCode={primary_code}",
+                        "regional_codes": regional_codes
+                    }
         except Exception as e:
             logger.warning(f"SportyBet share code generation error: {e}")
 
@@ -707,6 +784,23 @@ class SportyBetAdapter(BookmakerAdapter):
                         })
         except Exception as e:
             logger.warning(f"Error polling SportyBet live markets: {e}")
-
         return live_matches
+
+    def _parse_market_name(self, market_name: str, selection_name: Optional[str] = None) -> str:
+        """
+        Parses raw SportyBet market names into canonical market categories.
+        """
+        m_lower = (market_name or "").lower()
+        s_lower = (selection_name or "").lower()
+        if "1x2" in m_lower or "result" in m_lower or "winner" in m_lower:
+            return "1X2"
+        if "double chance" in m_lower or "double chance" in s_lower:
+            return "DOUBLE_CHANCE"
+        if "draw no bet" in m_lower or "dnb" in m_lower or "dnb" in s_lower:
+            return "DRAW_NO_BET"
+        if "over" in m_lower or "under" in m_lower or "goals" in m_lower or "over" in s_lower or "under" in s_lower:
+            return "OVER_UNDER"
+        if "handicap" in m_lower or "handicap" in s_lower:
+            return "ASIAN_HANDICAP"
+        return "GENERAL"
 

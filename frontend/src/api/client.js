@@ -440,11 +440,12 @@ export async function fetchCrossLeagueGameweek(matchday = 1, limit = 25) {
 
 /**
  * Decode a SportyBet or external booking code.
- * Timeout: 12 seconds. Returns error object if server hangs or fails.
+ * Timeout: 20 seconds (SportyBet API can take 3-8s). Retries once on timeout.
+ * Returns error object if server hangs or fails.
  */
-export async function decodeBookingCode(code, provider = "SPORTYBET", countryCode = "ng") {
+export async function decodeBookingCode(code, provider = "SPORTYBET", countryCode = "ng", _retry = true) {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 12000);
+  const timer = setTimeout(() => controller.abort(), 20000);
   try {
     const res = await fetch(`${API_BASE_URL}/ticket-edit/decode`, {
       method: "POST",
@@ -454,12 +455,12 @@ export async function decodeBookingCode(code, provider = "SPORTYBET", countryCod
     });
     clearTimeout(timer);
     if (res.ok) return await res.json();
-    // Non-OK HTTP status — return structured error
     return { status: "HTTP_ERROR", code, http_status: res.status, total_selections: 0, selections: [] };
   } catch (err) {
     clearTimeout(timer);
     if (err.name === "AbortError") {
-      console.warn("Decode booking code timed out after 12s");
+      console.warn("Decode timed out after 20s — retrying once...");
+      if (_retry) return decodeBookingCode(code, provider, countryCode, false);
       return { status: "TIMEOUT", code, total_selections: 0, selections: [] };
     }
     console.error("Decode booking code error:", err);
@@ -492,9 +493,9 @@ export async function fetchMatchStats(matches) {
  * Run MatchIQ Statistical Ticket Re-Editor (AUDITOR, SWAP, or REMOVE mode).
  * Timeout: 15 seconds. Returns error object on server crash or timeout.
  */
-export async function runTicketReEdit(selections, targetOdds, mode = "SWAP", targetMode = "ODDS", targetGames = 10) {
+export async function runTicketReEdit(selections, targetOdds, mode = "SWAP", targetMode = "ODDS", targetGames = 10, reshuffleSeed = null, strictMode = false) {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 15000);
+  const timer = setTimeout(() => controller.abort(), 25000);
   try {
     const res = await fetch(`${API_BASE_URL}/ticket-edit/re-edit`, {
       method: "POST",
@@ -504,7 +505,9 @@ export async function runTicketReEdit(selections, targetOdds, mode = "SWAP", tar
         target_odds: targetOdds,
         mode,
         target_mode: targetMode,
-        target_games: targetGames
+        target_games: targetGames,
+        reshuffle_seed: reshuffleSeed || Date.now(),
+        strict_mode: strictMode
       }),
       signal: controller.signal
     });
@@ -514,7 +517,7 @@ export async function runTicketReEdit(selections, targetOdds, mode = "SWAP", tar
   } catch (err) {
     clearTimeout(timer);
     if (err.name === "AbortError") {
-      console.warn(`Re-edit timed out after 15s (mode=${mode})`);
+      console.warn(`Re-edit timed out after 25s (mode=${mode})`);
       return { status: "TIMEOUT", mode, final_selections: [] };
     }
     console.error("Ticket re-edit error:", err);
@@ -552,6 +555,18 @@ export async function fetchTrackedTickets() {
   return { tickets: [], total_tickets: 0 };
 }
 
+export async function syncLiveTrackedTickets() {
+  try {
+    const res = await fetch(`${API_BASE_URL}/ticket-tracker/sync-live-api`, {
+      method: "POST"
+    });
+    if (res.ok) return await res.json();
+  } catch (err) {
+    console.error("Sync live tickets API error:", err);
+  }
+  return null;
+}
+
 export async function lockTrackedTicket(payload) {
   try {
     const res = await fetch(`${API_BASE_URL}/ticket-tracker/lock`, {
@@ -585,10 +600,11 @@ export async function buildAiTicket(payload) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 25000);
   try {
+    const fullPayload = { reshuffle_seed: Date.now(), ...payload };
     const res = await fetch(`${API_BASE_URL}/ai-ticket/build`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
+      body: JSON.stringify(fullPayload),
       signal: controller.signal
     });
     clearTimeout(timer);

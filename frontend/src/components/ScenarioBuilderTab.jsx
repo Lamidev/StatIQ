@@ -77,6 +77,43 @@ export default function ScenarioBuilderTab() {
     alert("Copied Selections List to clipboard:\n\n" + text);
   };
 
+  const handleRemoveSelection = (scenarioId, selIdx) => {
+    if (!result || !result.scenarios) return;
+
+    const updatedScenarios = result.scenarios.map((scn) => {
+      if (scn.scenario_id !== scenarioId) return scn;
+
+      const newSelections = scn.selections.filter((_, idx) => idx !== selIdx);
+      if (newSelections.length === 0) return null;
+
+      const newAccOdds = newSelections.reduce((acc, p) => acc * (p.odds || 1.25), 1.0);
+      const newWinProb = newSelections.reduce((acc, p) => acc * (p.model_probability || 0.75), 1.0);
+
+      return {
+        ...scn,
+        accumulated_odds: Math.round(newAccOdds * 100) / 100,
+        independence_assumption_probability: Math.round(newWinProb * 100) / 100,
+        selections: newSelections
+      };
+    }).filter(Boolean);
+
+    if (updatedScenarios.length === 0) {
+      setResult(null);
+    } else {
+      setResult({ ...result, scenarios: updatedScenarios });
+    }
+  };
+
+  const handleRemoveTicket = (scenarioId) => {
+    if (!result || !result.scenarios) return;
+    const updated = result.scenarios.filter(s => s.scenario_id !== scenarioId);
+    if (updated.length === 0) {
+      setResult(null);
+    } else {
+      setResult({ ...result, scenarios: updated });
+    }
+  };
+
   return (
     <div className="space-y-6 relative">
       {/* Sleek Booking Code Confirmation Modal Popup */}
@@ -135,87 +172,15 @@ export default function ScenarioBuilderTab() {
                 rel="noopener noreferrer"
                 className="py-2.5 px-4 rounded-xl btn-black text-xs font-extrabold flex items-center justify-center space-x-1.5 transition-all"
               >
-  const handleRemoveSelection = (scenarioId, selIdx) => {
-    if (!result || !result.scenarios) return;
-
-    const updatedScenarios = result.scenarios.map((scn) => {
-      if (scn.scenario_id !== scenarioId) return scn;
-
-      const newSelections = scn.selections.filter((_, idx) => idx !== selIdx);
-      if (newSelections.length === 0) return null;
-
-      const newAccOdds = newSelections.reduce((acc, p) => acc * (p.odds || 1.25), 1.0);
-      const newWinProb = newSelections.reduce((acc, p) => acc * (p.model_probability || 0.75), 1.0);
-
-      return {
-        ...scn,
-        accumulated_odds: Math.round(newAccOdds * 100) / 100,
-        independence_assumption_probability: Math.round(newWinProb * 100) / 100,
-        selections: newSelections
-      };
-    }).filter(Boolean);
-
-    if (updatedScenarios.length === 0) {
-      setResult(null);
-    } else {
-      setResult({ ...result, scenarios: updatedScenarios });
-    }
-  };
-
-  const handleRemoveTicket = (scenarioId) => {
-    if (!result || !result.scenarios) return;
-    const updated = result.scenarios.filter(s => s.scenario_id !== scenarioId);
-    if (updated.length === 0) {
-      setResult(null);
-    } else {
-      setResult({ ...result, scenarios: updated });
-    }
-  };
-
-  return (
-    <div className="space-y-6 relative">
-      {/* Sleek Booking Code Modal Popup */}
-      {showCodeModal && codeModalData && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-200">
-          <div className="bg-white rounded-3xl p-6 max-w-lg w-full border border-slate-200 shadow-2xl space-y-5 relative">
-            <button
-              onClick={() => setShowCodeModal(false)}
-              className="absolute right-4 top-4 text-slate-400 hover:text-slate-600 p-1.5 rounded-full hover:bg-slate-100 transition-all"
-            >
-              <X className="w-4 h-4" />
-            </button>
-
-            {/* Header Badge */}
-            <div className="flex items-center space-x-3">
-              <div className="w-12 h-12 rounded-2xl bg-emerald-50 border border-emerald-200 flex items-center justify-center text-emerald-600 flex-shrink-0">
-                <CheckCircle2 className="w-6 h-6" />
-              </div>
-              <div>
-                <span className="text-[10px] font-extrabold text-emerald-700 bg-emerald-50 px-2.5 py-0.5 rounded-full border border-emerald-200 uppercase">
-                  SportyBet Code Ready
-                </span>
-                <h3 className="text-base font-extrabold text-slate-900 mt-0.5">
-                  Booking Code Generated!
-                </h3>
-              </div>
-            </div>
-
-            {/* Code Display Box */}
-            <div className="bg-slate-900 text-white p-5 rounded-2xl flex items-center justify-between shadow-sm">
-              <div>
-                <span className="text-[10px] text-slate-400 uppercase font-bold tracking-wider block">
-                  SportyBet Booking Code
-                </span>
-                <span className="text-2xl font-extrabold text-emerald-400 tracking-wider">
-                  {codeModalData.code}
-                </span>
-              </div>
+                <ExternalLink className="w-4 h-4" />
+                <span>Open SportyBet</span>
+              </a>
               <button
-                onClick={() => copyCode(codeModalData.code)}
-                className="bg-emerald-500 hover:bg-emerald-600 text-slate-950 px-4 py-2 rounded-xl text-xs font-extrabold flex items-center space-x-1 transition-all"
+                onClick={() => copySelectionsAsText(codeModalData.selections)}
+                className="py-2.5 px-4 rounded-xl bg-slate-100 border border-slate-200 text-slate-700 hover:bg-slate-200 text-xs font-extrabold flex items-center justify-center space-x-1.5 transition-all"
               >
-                <Copy className="w-3.5 h-3.5" />
-                <span>Copy</span>
+                <Copy className="w-4 h-4" />
+                <span>Copy Selections</span>
               </button>
             </div>
           </div>

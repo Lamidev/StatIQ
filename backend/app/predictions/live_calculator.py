@@ -121,8 +121,31 @@ TEAM_RATINGS: Dict[str, int] = {
     "Angers SCO": 1630, "Angers": 1630,
 
     # Netherlands & Portugal
-    "PSV": 1820, "Feyenoord": 1790, "Ajax": 1770, "AZ": 1710, "Twente": 1700,
-    "Benfica": 1830, "Sporting CP": 1850, "Porto": 1820, "Braga": 1730,
+    "PSV": 1850, "PSV Eindhoven": 1850, "Feyenoord": 1820, "Feyenoord Rotterdam": 1820,
+    "Ajax": 1810, "AFC Ajax": 1810, "AZ": 1730, "AZ Alkmaar": 1730, "Twente": 1700, "FC Twente": 1700,
+    "PEC Zwolle": 1520, "Sparta Rotterdam": 1540,
+    "Benfica": 1860, "SL Benfica": 1860, "Sporting CP": 1870, "Sporting": 1870,
+    "Porto": 1850, "FC Porto": 1850, "Braga": 1740, "SC Braga": 1740,
+    "Alverca Futebol": 1480, "FC Alverca SAD": 1480, "Academico de Viseu FC": 1450,
+
+    # Scotland (Scottish Premiership)
+    "Celtic": 1860, "Celtic FC": 1860,
+    "Rangers": 1820, "Rangers FC": 1820,
+    "Aberdeen": 1550, "Aberdeen FC": 1550,
+    "Hearts": 1540, "Heart of Midlothian FC": 1540,
+    "Hibernian": 1520, "Hibernian FC": 1520,
+    "Kilmarnock": 1510, "Kilmarnock FC": 1510,
+    "Motherwell": 1500, "Motherwell FC": 1500,
+    "Dundee United": 1490, "Dundee United FC": 1490,
+    "St. Mirren": 1490, "St Mirren FC": 1490,
+
+    # Turkey & Other European Competitions
+    "Galatasaray": 1840, "Galatasaray SK": 1840,
+    "Fenerbahce": 1830, "Fenerbahçe SK": 1830,
+    "Besiktas": 1750, "Beşiktaş JK": 1750,
+    "Trabzonspor": 1710, "Malmo": 1680, "Malmö FF": 1680,
+    "Rosenborg": 1640, "Rosenborg BK": 1640, "Lillestroem SK": 1580,
+    "Greuther Furth": 1560, "St. Pauli": 1660, "FC St. Pauli": 1660,
 
     # South America & International
     "Flamengo": 1810, "Palmeiras": 1820, "Botafogo": 1770, "River Plate": 1800, "Boca Juniors": 1780,
@@ -130,30 +153,37 @@ TEAM_RATINGS: Dict[str, int] = {
 }
 
 def get_team_rating(team_name: str) -> int:
-    """Helper to lookup Elo rating for any team name with fallback."""
+    """Helper to lookup Elo rating for any team name with robust normalization fallback."""
     if not team_name:
         return 1600
 
-    name_clean = team_name.lower().strip()
+    name_raw = str(team_name).strip()
+    name_clean = name_raw.lower()
+
+    # Strip common team suffixes for robust matching
+    for suffix in [" fc", " sad", " sk", " jk", " cf", " afc", " fk", " bk", " ff", " ca", " cd", " ud", " rc"]:
+        if name_clean.endswith(suffix):
+            name_clean = name_clean[:-len(suffix)].strip()
 
     # Direct exact overrides for ambiguous short team names
-    if name_clean in ["paris", "paris fc", "paris fc fc"]:
+    if name_clean in ["paris", "paris fc"]:
         return 1640  # Paris FC
-    if name_clean in ["psg", "paris sg", "paris saint-germain", "paris saint germain", "paris saint-germain fc"]:
+    if name_clean in ["psg", "paris sg", "paris saint-germain", "paris saint germain"]:
         return 1980  # PSG
 
     if team_name in TEAM_RATINGS:
         return TEAM_RATINGS[team_name]
 
-    # Exact case-insensitive match
+    # Case-insensitive & normalized lookup
     for registered_name, rating in TEAM_RATINGS.items():
-        if registered_name.lower() == name_clean:
+        reg_l = registered_name.lower()
+        if reg_l == name_clean or reg_l == name_raw.lower():
             return rating
 
-    # Substring match with minimum length constraint to avoid short name collisions
+    # Substring match with minimum length constraint
     for registered_name, rating in TEAM_RATINGS.items():
         reg_clean = registered_name.lower()
-        if len(reg_clean) >= 5 and (reg_clean in name_clean or (len(name_clean) >= 5 and name_clean in reg_clean)):
+        if len(reg_clean) >= 4 and (reg_clean in name_clean or (len(name_clean) >= 4 and name_clean in reg_clean)):
             return rating
 
     return 1600

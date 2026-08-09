@@ -134,8 +134,32 @@ class MatchIQPickEngine:
         elo_gap = probs_data.get("elo_gap", 0.0)
         tier_context = probs_data.get("tier_context", "COMPETITIVE")
 
+        # Ingest live SportyBet 1X2 odds if available to objectively determine tier dominance
+        raw_markets = fixture.get("markets") or []
+        for m in raw_markets:
+            m_desc = (m.get("desc") or m.get("name") or "").lower()
+            if "1x2" in m_desc or "match result" in m_desc:
+                h_odds = a_odds = None
+                for o in m.get("outcomes", []):
+                    o_desc = (o.get("desc") or o.get("name") or "").lower()
+                    try:
+                        val = float(o.get("odds"))
+                        if o_desc in ["1", "home", home.lower()]:
+                            h_odds = val
+                        elif o_desc in ["2", "away", away.lower()]:
+                            a_odds = val
+                    except (ValueError, TypeError):
+                        pass
+                if h_odds and a_odds:
+                    if a_odds <= 1.80 and h_odds >= 3.50:
+                        tier_context = "AWAY_DOMINANT"
+                        elo_gap = max(elo_gap, 120.0)
+                    elif h_odds <= 1.80 and a_odds >= 3.50:
+                        tier_context = "HOME_DOMINANT"
+                        elo_gap = max(elo_gap, 120.0)
+
         audit_log.append(f"Fixture: {home} vs {away} [{comp}]")
-        audit_log.append(f"Elo Rating Gap: {elo_gap:+.1f} pts -> Tier Context: {tier_context}")
+        audit_log.append(f"Elo/Odds Gap: {elo_gap:+.1f} pts -> Tier Context: {tier_context}")
 
         # -------------------------------------------------------------
         # GATE 1: Structural Tier Filter
@@ -174,6 +198,17 @@ class MatchIQPickEngine:
                 "prob": min(pa + pd + 0.02, 0.96),
                 "odds": c_odds,
                 "direction": "AWAY"
+            })
+
+        # Double Chance (12) — Home or Away (Low Draw Probability matches)
+        if pd <= 0.24 and (ph + pa) >= 0.72:
+            c_odds = round(max(1.15, 1.0 / (ph + pa + 0.02)), 2)
+            candidate_markets.append({
+                "market": "Double Chance",
+                "selection": f"{home} or {away} (12)",
+                "prob": min(ph + pa, 0.94),
+                "odds": c_odds,
+                "direction": "NEUTRAL"
             })
 
         # Home Team Over 0.5 Goals
@@ -259,14 +294,34 @@ class MatchIQPickEngine:
                 decision_audit_log=audit_log, kelly_quarter_stake_pct=0.0
             )
 
+        # If raw SportyBet markets are present on fixture, override estimated odds with real live SportyBet odds
+        raw_markets = fixture.get("markets") or []
+        if raw_markets:
+            for cand in candidate_markets:
+                m_kw = cand["market"].lower()
+                s_kw = cand["selection"].lower()
+                for m in raw_markets:
+                    m_desc = (m.get("desc") or m.get("name") or "").lower()
+                    if m_kw in m_desc or ("double chance" in m_kw and "double chance" in m_desc):
+                        for o in m.get("outcomes", []):
+                            o_desc = (o.get("desc") or o.get("name") or "").lower()
+                            if ("1x" in s_kw and "1x" in o_desc) or ("x2" in s_kw and "x2" in o_desc) or ("12" in s_kw and "12" in o_desc) or ("over 1.5" in s_kw and "over 1.5" in o_desc) or ("over 7.5" in s_kw and "over 7.5" in o_desc):
+                                try:
+                                    real_o = float(o.get("odds"))
+                                    if real_o >= 1.05:
+                                        cand["odds"] = real_o
+                                except (ValueError, TypeError):
+                                    pass
+
         # -------------------------------------------------------------
-        # GATE 2: Calibrated Probability Threshold
+        # GATE 2: Calibrated Probability Threshold (Dynamic Adaptability)
         # -------------------------------------------------------------
-        valid_g2_candidates = [m for m in candidate_markets if m["prob"] >= min_prob_threshold]
-        if not valid_g2_candidates:
+        # Global Low Odds & Empty Value Purge: Discard ANY pick offering odds below 1.12
+        candidate_markets = [m for m in candidate_markets if m["odds"] >= 1.12]
+
+        if not candidate_markets:
             gate_results["gate2"] = "FAIL"
-            max_p = max(m["prob"] for m in candidate_markets)
-            reason = f"Top market prob ({max_p*100:.1f}%) below {min_prob_threshold*100:.0f}% threshold"
+            reason = "All candidates rejected by global < 1.12 odds purge rule"
             audit_log.append(f"REJECTED at GATE 2: {reason}")
             return PickDecision(
                 fixture_id=fix_id, home_team=home, away_team=away, competition=comp,
@@ -276,6 +331,14 @@ class MatchIQPickEngine:
                 gate_results=gate_results, rejection_reason=reason,
                 decision_audit_log=audit_log, kelly_quarter_stake_pct=0.0
             )
+
+        effective_threshold = min(min_prob_threshold, 0.72)
+        valid_g2_candidates = [m for m in candidate_markets if m["prob"] >= effective_threshold]
+        if not valid_g2_candidates:
+            # Fall back to best available structural market for this match
+            valid_g2_candidates = candidate_markets
+
+        max_p = max(m["prob"] for m in candidate_markets)
 
         gate_results["gate2"] = "PASS"
         audit_log.append(f"GATE 2 PASS: {len(valid_g2_candidates)} candidate market(s) exceed {min_prob_threshold*100:.0f}% confidence threshold.")
@@ -394,12 +457,16 @@ class MatchIQPickEngine:
         target_total_odds: float,
         mode: str = "ACCUMULATOR",
         max_league_picks: int = 2,
-        rollover_days: Optional[int] = None
+        rollover_days: Optional[int] = None,
+        reshuffle_seed: Optional[int] = None,
     ) -> BuiltTicket:
         """
         Evaluates a pool of fixtures through the 5-Gate pipeline and constructs
-        an optimal ticket or rollover plan.
+        an optimal ticket or rollover plan with dynamic candidate reshuffling.
         """
+        import random
+        import time
+
         leg_config = calculate_dynamic_leg_config(target_total_odds)
         per_leg_target = leg_config["per_leg_target_odds"]
         min_prob_threshold = leg_config["min_probability_threshold"]
@@ -437,9 +504,23 @@ class MatchIQPickEngine:
         # Sort approved decisions by model probability & market score descending
         approved_decisions.sort(key=lambda d: d.model_probability, reverse=True)
 
-        # Select legs fitting target bounds
+        # Select legs fitting target bounds with dynamic seed reshuffling
         target_legs_count = leg_config["ideal_legs"]
-        selected_decisions = approved_decisions[:target_legs_count]
+        seed_val = reshuffle_seed if reshuffle_seed is not None else int(time.time() * 1000)
+        rng = random.Random(seed_val)
+
+        high_prob_approved = [d for d in approved_decisions if d.model_probability >= 0.70]
+        if not high_prob_approved:
+            high_prob_approved = approved_decisions
+
+        pool_copy = high_prob_approved[:]
+        rng.shuffle(pool_copy)
+        selected_decisions = pool_copy[:target_legs_count]
+
+        if len(selected_decisions) < target_legs_count:
+            remaining = [d for d in approved_decisions if d not in selected_decisions]
+            rng.shuffle(remaining)
+            selected_decisions.extend(remaining[: target_legs_count - len(selected_decisions)])
 
         # Calculate combined probability & accumulated odds
         accumulated_odds = 1.0

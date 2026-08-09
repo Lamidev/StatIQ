@@ -1,7 +1,8 @@
 import React, { useState } from "react";
-import { fetchFixturesByGameweek, generateSportyBetCode, buildAiTicket } from "../api/client";
-import { Copy, Info, Calendar, Send, ShieldCheck, RefreshCw, CheckCircle2, ExternalLink, X, ChevronDown, ChevronUp, AlertCircle, Award, Trash2, Lock } from "lucide-react";
+import { fetchFixturesByGameweek, generateSportyBetCode, buildAiTicket, lockTrackedTicket } from "../api/client";
+import { Copy, Info, Calendar, Send, ShieldCheck, RefreshCw, CheckCircle2, ExternalLink, X, ChevronDown, ChevronUp, AlertCircle, Award, Trash2, Lock, ShieldAlert, Sliders } from "lucide-react";
 import { generateSafePick, buildSafeTicket, scoreFixtures } from "../utils/pickEngine";
+import { calculateFlexShield } from "../utils/flexCalculator";
 
 export default function TicketBuilderTab() {
   const [builderMode, setBuilderMode] = useState("ACCUMULATOR"); // "ACCUMULATOR" or "ROLLOVER"
@@ -13,12 +14,22 @@ export default function TicketBuilderTab() {
   const [targetOdds, setTargetOdds] = useState(2.0);
   const [targetMode, setTargetMode] = useState("ODDS"); // "ODDS" or "GAMES"
   const [targetGames, setTargetGames] = useState(10);
-  const [selectedFlexCut, setSelectedFlexCut] = useState("AUTO");
+  const [selectedFlexCut, setSelectedFlexCut] = useState("OFF");
   const [customOdds, setCustomOdds] = useState("500");
   const [useCustom, setUseCustom] = useState(false);
   const [useLiveOdds, setUseLiveOdds] = useState(false);
+  const [strictMode, setStrictMode] = useState(false);
+  const [showAdvancedSettings, setShowAdvancedSettings] = useState(false);
+  const [builderStep, setBuilderStep] = useState(1); // Wizard step: 1, 2, 3
+
+  // Today's Games Mode State
+  const [todayBuildCriteria, setTodayBuildCriteria] = useState("ODDS"); // "ODDS" or "GAMES"
+  const [showTodayFixturesDrawer, setShowTodayFixturesDrawer] = useState(false);
+  const [fetchingTodayFixtures, setFetchingTodayFixtures] = useState(false);
+  const [todayFixturesList, setTodayFixturesList] = useState([]);
 
   // Rollover State
+  const [kickoffScope, setKickoffScope] = useState("TODAY"); // "TODAY", "NEXT_24H", "ALL"
   const [rolloverRange, setRolloverRange] = useState("FRI_SUN"); // "FRI_SUN" (3 Days) or "FRI_WED" (5 Days)
   const [dailyTargetOdds, setDailyTargetOdds] = useState(1.50);
   const [startingStake, setStartingStake] = useState(5000);
@@ -58,17 +69,17 @@ export default function TicketBuilderTab() {
         flex_cut: selectedFlexCut,
         selections: lockTargetData.selections || []
       };
-      const res = await fetch("http://127.0.0.1:8000/api/v1/ticket-tracker/lock", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload)
-      });
-      if (res.ok) {
+      const res = await lockTrackedTicket(payload);
+      if (res && (res.id || res.status === "SUCCESS" || res.code)) {
         setShowLockModal(false);
-        setLockedNotice("Ticket successfully locked into StatIQ Ticket Tracker! Track live settlements in the BetSlip Auditor tab.");
+        setLockedNotice(`Ticket ${res.code || res.id || ""} successfully locked into StatIQ Ticket Tracker! Track live settlements in the BetSlip Auditor tab.`);
         setTimeout(() => setLockedNotice(null), 6000);
+      } else {
+        alert("Failed to lock ticket into Tracker. Ensure backend is running.");
       }
-    } catch (e) {}
+    } catch (e) {
+      alert("Error locking ticket: " + e.message);
+    }
     setLockingTicket(false);
   };
 
@@ -134,7 +145,9 @@ export default function TicketBuilderTab() {
       league_scope: leagueScope,
       single_league: singleLeague,
       gameweek: gameweek,
-      use_live_odds: useLiveOdds
+      use_live_odds: useLiveOdds,
+      kickoff_scope: kickoffScope,
+      strict_mode: strictMode
     };
 
     const res = await buildAiTicket(payload);
@@ -192,7 +205,9 @@ export default function TicketBuilderTab() {
       league_scope: "MULTI",
       single_league: "PL",
       gameweek: gameweek,
-      use_live_odds: useLiveOdds
+      use_live_odds: useLiveOdds,
+      kickoff_scope: kickoffScope,
+      strict_mode: strictMode
     };
 
     const res = await buildAiTicket(payload);
@@ -266,11 +281,14 @@ export default function TicketBuilderTab() {
     }
 
     const code = res.booking_code;
+    const regionalCodes = res.regional_codes || { NG: code };
     setGeneratedCodes(prev => ({ ...prev, [id]: code }));
 
     // Trigger Popup Modal
     setCodeModalData({
       code,
+      regionalCodes,
+      selectedRegion: "NG",
       label: scenarioLabel || `Gameweek ${gameweek} AI Ticket`,
       selections,
       loadUrl: res.load_url || `https://www.sportybet.com/ng/?shareCode=${code}`
@@ -358,26 +376,51 @@ export default function TicketBuilderTab() {
               <X className="w-4 h-4" />
             </button>
 
-            {/* Header Badge */}
-            <div className="flex items-center space-x-3">
-              <div className="w-12 h-12 rounded-2xl bg-emerald-50 border border-emerald-200 flex items-center justify-center text-emerald-600 flex-shrink-0">
-                <CheckCircle2 className="w-6 h-6" />
+            {/* Header Badge & Country Selector */}
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-3">
+                <div className="w-12 h-12 rounded-2xl bg-emerald-50 border border-emerald-200 flex items-center justify-center text-emerald-600 flex-shrink-0">
+                  <CheckCircle2 className="w-6 h-6" />
+                </div>
+                <div>
+                  <span className="text-[10px] font-extrabold text-emerald-700 bg-emerald-50 px-2.5 py-0.5 rounded-full border border-emerald-200 uppercase">
+                    SportyBet Code Ready
+                  </span>
+                  <h3 className="text-base font-extrabold text-slate-900 mt-0.5">
+                    Booking Code Generated!
+                  </h3>
+                </div>
               </div>
-              <div>
-                <span className="text-[10px] font-extrabold text-emerald-700 bg-emerald-50 px-2.5 py-0.5 rounded-full border border-emerald-200 uppercase">
-                  SportyBet Code Ready
-                </span>
-                <h3 className="text-base font-extrabold text-slate-900 mt-0.5">
-                  Booking Code Generated!
-                </h3>
-              </div>
+
+              {/* SportyBet Region Selector */}
+              {codeModalData.regionalCodes && (
+                <select
+                  value={codeModalData.selectedRegion || "NG"}
+                  onChange={(e) => {
+                    const reg = e.target.value;
+                    const rCode = codeModalData.regionalCodes[reg] || codeModalData.code;
+                    setCodeModalData({
+                      ...codeModalData,
+                      selectedRegion: reg,
+                      code: rCode,
+                      loadUrl: `https://www.sportybet.com/${reg.toLowerCase()}/?shareCode=${rCode}`
+                    });
+                  }}
+                  className="bg-slate-100 border border-slate-200 text-xs font-extrabold text-slate-900 rounded-xl px-2.5 py-1.5"
+                >
+                  <option value="NG">🇳🇬 Nigeria</option>
+                  <option value="GH">🇬🇭 Ghana</option>
+                  <option value="KE">🇰🇪 Kenya</option>
+                  <option value="UG">🇺🇬 Uganda</option>
+                </select>
+              )}
             </div>
 
             {/* Code Display Box */}
             <div className="bg-slate-900 text-white p-5 rounded-2xl flex items-center justify-between shadow-sm">
               <div>
                 <span className="text-[10px] text-slate-400 uppercase font-bold tracking-wider block">
-                  SportyBet Booking Code
+                  SportyBet {codeModalData.selectedRegion || "NG"} Booking Code
                 </span>
                 <span className="text-2xl font-extrabold text-emerald-400 tracking-wider">
                   {codeModalData.code}
@@ -388,7 +431,7 @@ export default function TicketBuilderTab() {
                   navigator.clipboard.writeText(codeModalData.code);
                   alert(`Copied SportyBet Booking Code: ${codeModalData.code}`);
                 }}
-                className="px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-extrabold text-xs flex items-center space-x-1.5 transition-all shadow-sm"
+                className="px-4 py-2 rounded-xl btn-black text-white font-extrabold text-xs flex items-center space-x-1.5 transition-all shadow-sm"
               >
                 <Copy className="w-4 h-4" />
                 <span>Copy Code</span>
@@ -404,7 +447,7 @@ export default function TicketBuilderTab() {
                 className="py-2.5 px-4 rounded-xl btn-black text-xs font-extrabold flex items-center justify-center space-x-1.5 transition-all"
               >
                 <ExternalLink className="w-4 h-4" />
-                <span>Open on SportyBet</span>
+                <span>Open on SportyBet ({codeModalData.selectedRegion || "NG"})</span>
               </a>
 
               <button
@@ -431,9 +474,25 @@ export default function TicketBuilderTab() {
                       Pick: {s.selection || s.pick}
                     </span>
                   </div>
-                  <span className="font-extrabold text-emerald-700 text-xs">
-                    {Math.round((s.model_probability || s.prob || 0.75) * 100)}% Win Chance
-                  </span>
+                  <div className="flex items-center gap-2">
+                    <span className="font-extrabold text-emerald-700 text-xs">
+                      {Math.round((s.model_probability || s.prob || 0.75) * 100)}% Win Chance
+                    </span>
+                    <button
+                      onClick={() => {
+                        const newSels = codeModalData.selections.filter((_, i) => i !== idx);
+                        if (newSels.length === 0) {
+                          setShowCodeModal(false);
+                        } else {
+                          setCodeModalData({ ...codeModalData, selections: newSels });
+                        }
+                      }}
+                      className="p-1 rounded-lg bg-white hover:bg-rose-100 text-slate-400 hover:text-rose-600 border border-slate-200 transition-all"
+                      title="Cancel / Remove game"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>
@@ -532,240 +591,388 @@ export default function TicketBuilderTab() {
         </p>
       </div>
 
-      {/* Mode Selector Tabs */}
-      <div className="bg-white p-2 rounded-2xl border border-slate-200 flex space-x-2">
+      {/* Mode Selector Tabs — 3 Standalone Concepts */}
+      <div className="bg-white p-2 rounded-2xl border border-slate-200 grid grid-cols-1 sm:grid-cols-3 gap-2">
         <button
           onClick={() => setBuilderMode("ACCUMULATOR")}
-          className={`flex-1 py-2.5 rounded-xl text-xs font-extrabold transition-all ${
+          className={`py-3 px-3 rounded-xl text-xs font-extrabold transition-all flex items-center justify-center space-x-1.5 ${
             builderMode === "ACCUMULATOR"
               ? "bg-slate-900 text-white shadow-sm"
               : "text-slate-600 hover:bg-slate-100"
           }`}
         >
-          Target Odds Accumulator Builder (2x to 1000x)
+          <span>🎯</span>
+          <span>Target Odds Builder</span>
         </button>
 
         <button
           onClick={() => setBuilderMode("ROLLOVER")}
-          className={`flex-1 py-2.5 rounded-xl text-xs font-extrabold transition-all ${
+          className={`py-3 px-3 rounded-xl text-xs font-extrabold transition-all flex items-center justify-center space-x-1.5 ${
             builderMode === "ROLLOVER"
               ? "bg-slate-900 text-white shadow-sm"
               : "text-slate-600 hover:bg-slate-100"
           }`}
         >
-          Safest Multi-Day Rollover Engine (Fri-Sun / Fri-Wed)
+          <span>🔄</span>
+          <span>Daily Rollover Engine</span>
+        </button>
+
+        <button
+          onClick={() => {
+            setBuilderMode("TODAY_GAMES");
+            setKickoffScope("TODAY");
+          }}
+          className={`py-3 px-3 rounded-xl text-xs font-extrabold transition-all flex items-center justify-center space-x-1.5 ${
+            builderMode === "TODAY_GAMES"
+              ? "bg-slate-900 text-white shadow-sm"
+              : "text-slate-600 hover:bg-slate-100"
+          }`}
+        >
+          <span>📅</span>
+          <span>Today's SportyBet Games</span>
         </button>
       </div>
 
+
       {/* MODE 1: STANDARD ACCUMULATOR BUILDER */}
       {builderMode === "ACCUMULATOR" ? (
-        <div className="bg-white p-6 rounded-2xl border border-slate-200 space-y-4">
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            <div>
-              <label className="text-xs font-semibold text-slate-700 block mb-1">1. League Scope</label>
-              <select
-                value={leagueScope}
-                onChange={(e) => setLeagueScope(e.target.value)}
-                className="w-full bg-slate-50 border border-slate-200 text-xs font-bold text-slate-900 rounded-xl px-3 py-2"
-              >
-                <option value="MULTI">Multi-League (All Top Leagues Combined)</option>
-                <option value="SINGLE">Single League Only</option>
-              </select>
-            </div>
+        <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
 
-            {leagueScope === "SINGLE" && (
-              <div>
-                <label className="text-xs font-semibold text-slate-700 block mb-1">Select Target League</label>
-                <select
-                  value={singleLeague}
-                  onChange={(e) => setSingleLeague(e.target.value)}
-                  className="w-full bg-slate-50 border border-slate-200 text-xs font-bold text-slate-900 rounded-xl px-3 py-2"
-                >
-                  <option value="PL">Premier League (England)</option>
-                  <option value="ELC">Championship (England)</option>
-                  <option value="PD">La Liga (Spain)</option>
-                  <option value="SA">Serie A (Italy)</option>
-                  <option value="BL1">Bundesliga (Germany)</option>
-                  <option value="FL1">Ligue 1 (France)</option>
-                  <option value="DED">Eredivisie (Netherlands)</option>
-                  <option value="PPL">Primeira Liga (Portugal)</option>
-                </select>
+          {/* Wizard Step Progress Bar */}
+          {(() => {
+            const steps = [
+              { id: 1, label: "League & Scope" },
+              { id: 2, label: "Target Goal" },
+              { id: 3, label: "Safety & Options" },
+            ];
+            return (
+              <div className="flex border-b border-slate-100">
+                {steps.map((s, i) => {
+                  const isActive = builderStep === s.id;
+                  const isDone = builderStep > s.id;
+                  return (
+                    <button
+                      key={s.id}
+                      onClick={() => setBuilderStep(s.id)}
+                      className={`flex-1 py-3.5 flex flex-col items-center gap-0.5 transition-all border-b-2 ${
+                        isActive
+                          ? "border-slate-900 bg-slate-50"
+                          : isDone
+                          ? "border-emerald-500 bg-white"
+                          : "border-transparent bg-white"
+                      }`}
+                    >
+                      <div className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-black mb-0.5 ${
+                        isActive ? "bg-slate-900 text-white" : isDone ? "bg-emerald-500 text-white" : "bg-slate-100 text-slate-400"
+                      }`}>
+                        {isDone ? "✓" : s.id}
+                      </div>
+                      <span className={`text-[10px] font-bold ${isActive ? "text-slate-900" : isDone ? "text-emerald-600" : "text-slate-400"}`}>
+                        {s.label}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            );
+          })()}
+
+          {/* Step Content */}
+          <div className="p-6 space-y-5 min-h-[220px]">
+
+            {/* STEP 1: League & Scope */}
+            {builderStep === 1 && (
+              <div className="space-y-4">
+                <div>
+                  <h3 className="text-sm font-extrabold text-slate-900">Select League & Match Window</h3>
+                  <p className="text-xs text-slate-400 mt-0.5">Choose where the engine pulls fixtures from.</p>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider block mb-1.5">League Scope</label>
+                    <select
+                      value={leagueScope}
+                      onChange={(e) => setLeagueScope(e.target.value)}
+                      className="w-full bg-slate-50 border border-slate-200 text-xs font-bold text-slate-900 rounded-xl px-3 py-2.5"
+                    >
+                      <option value="MULTI">Multi-League (All Top Leagues)</option>
+                      <option value="SINGLE">Single League Only</option>
+                    </select>
+                  </div>
+
+                  {leagueScope === "SINGLE" && (
+                    <div>
+                      <label className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider block mb-1.5">Target League</label>
+                      <select
+                        value={singleLeague}
+                        onChange={(e) => setSingleLeague(e.target.value)}
+                        className="w-full bg-slate-50 border border-slate-200 text-xs font-bold text-slate-900 rounded-xl px-3 py-2.5"
+                      >
+                        <option value="PL">Premier League (England)</option>
+                        <option value="ELC">Championship (England)</option>
+                        <option value="PD">La Liga (Spain)</option>
+                        <option value="SA">Serie A (Italy)</option>
+                        <option value="BL1">Bundesliga (Germany)</option>
+                        <option value="FL1">Ligue 1 (France)</option>
+                        <option value="DED">Eredivisie (Netherlands)</option>
+                        <option value="PPL">Primeira Liga (Portugal)</option>
+                      </select>
+                    </div>
+                  )}
+
+                  <div>
+                    <label className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider block mb-1.5">Kickoff Window</label>
+                    <div className="grid grid-cols-3 gap-1.5 bg-slate-100 p-1.5 rounded-xl">
+                      {[
+                        { val: "TODAY", label: "📅 Today" },
+                        { val: "NEXT_24H", label: "⏰ 24hrs" },
+                        { val: "ALL", label: "🌐 All" },
+                      ].map(opt => (
+                        <button
+                          key={opt.val}
+                          onClick={() => setKickoffScope(opt.val)}
+                          className={`py-1.5 rounded-lg text-xs font-extrabold transition-all ${
+                            kickoffScope === opt.val ? "bg-white shadow-sm text-slate-900" : "text-slate-500 hover:text-slate-800"
+                          }`}
+                        >
+                          {opt.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider block mb-1.5">Target Gameweek</label>
+                    <select
+                      value={gameweek}
+                      onChange={(e) => setGameweek(parseInt(e.target.value))}
+                      className="w-full bg-slate-50 border border-slate-200 text-xs font-bold text-slate-900 rounded-xl px-3 py-2.5"
+                    >
+                      {Array.from({ length: 38 }, (_, i) => i + 1).map((gw) => (
+                        <option key={gw} value={gw}>Gameweek {gw}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
               </div>
             )}
 
-            <div>
-              <label className="text-xs font-semibold text-slate-700 block mb-1">2. Target Gameweek</label>
-              <select
-                value={gameweek}
-                onChange={(e) => setGameweek(parseInt(e.target.value))}
-                className="w-full bg-slate-50 border border-slate-200 text-xs font-bold text-slate-900 rounded-xl px-3 py-2"
-              >
-                {Array.from({ length: 38 }, (_, i) => i + 1).map((gw) => (
-                  <option key={gw} value={gw}>Gameweek {gw}</option>
-                ))}
-              </select>
-            </div>
-          </div>
+            {/* STEP 2: Target Goal */}
+            {builderStep === 2 && (
+              <div className="space-y-4">
+                <div>
+                  <h3 className="text-sm font-extrabold text-slate-900">Set Your Target</h3>
+                  <p className="text-xs text-slate-400 mt-0.5">Choose whether to target a specific odds multiplier or number of games.</p>
+                </div>
 
-          <div className="pt-2 border-t border-slate-100 space-y-3">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-              <label className="text-xs font-semibold text-slate-700 block">
-                3. Select Target Criteria & Slip Size
-              </label>
-
-              {/* Target Mode Switcher */}
-              <div className="flex items-center space-x-1 bg-slate-100 p-1 rounded-xl w-fit">
-                <button
-                  onClick={() => setTargetMode("ODDS")}
-                  className={`px-3 py-1 rounded-lg text-xs font-bold transition-all ${
-                    targetMode === "ODDS"
-                      ? "bg-slate-900 text-white shadow-sm"
-                      : "text-slate-600 hover:text-slate-900"
-                  }`}
-                >
-                  Target Odds Goal
-                </button>
-                <button
-                  onClick={() => setTargetMode("GAMES")}
-                  className={`px-3 py-1 rounded-lg text-xs font-bold transition-all ${
-                    targetMode === "GAMES"
-                      ? "bg-slate-900 text-white shadow-sm"
-                      : "text-slate-600 hover:text-slate-900"
-                  }`}
-                >
-                  Target Number of Games (Up to 50 Max)
-                </button>
-              </div>
-            </div>
-
-            {targetMode === "ODDS" ? (
-              <div className="flex flex-wrap items-center gap-2">
-                {oddsPresetButtons.map((val) => (
+                {/* Mode Toggle */}
+                <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl w-fit">
                   <button
-                    key={val}
-                    onClick={() => {
-                      setTargetOdds(val);
-                      setCustomOdds("");
-                      setUseCustom(false);
-                    }}
-                    className={`px-3.5 py-1.5 rounded-xl text-xs font-extrabold transition-all ${
-                      !useCustom && targetOdds === val
-                        ? "bg-slate-900 text-white shadow-sm"
-                        : "bg-slate-100 text-slate-700 hover:bg-slate-200"
+                    onClick={() => setTargetMode("ODDS")}
+                    className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                      targetMode === "ODDS" ? "bg-white shadow-sm text-slate-900" : "text-slate-500 hover:text-slate-800"
                     }`}
                   >
-                    ~{val.toFixed(0)} Odds
+                    🎯 Target Odds
                   </button>
-                ))}
+                  <button
+                    onClick={() => setTargetMode("GAMES")}
+                    className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                      targetMode === "GAMES" ? "bg-white shadow-sm text-slate-900" : "text-slate-500 hover:text-slate-800"
+                    }`}
+                  >
+                    🎮 Target Games
+                  </button>
+                </div>
 
-                <div className="flex items-center gap-1.5 ml-2">
-                  <input
-                    type="number"
-                    placeholder="Custom"
-                    value={customOdds}
-                    onChange={(e) => {
-                      const valStr = e.target.value;
-                      setCustomOdds(valStr);
-                      setUseCustom(true);
-                      const parsed = parseFloat(valStr);
-                      if (!isNaN(parsed) && parsed > 1.0) {
-                        setTargetOdds(parsed);
-                      }
-                    }}
-                    className="w-20 bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs font-bold text-slate-900 focus:outline-none focus:ring-1 focus:ring-slate-900"
-                  />
-                  <span className="text-xs text-slate-400 font-extrabold">Odds</span>
+                {targetMode === "ODDS" ? (
+                  <div className="space-y-3">
+                    <p className="text-xs text-slate-500">Select a preset odds goal or enter a custom value:</p>
+                    <div className="flex flex-wrap gap-2">
+                      {oddsPresetButtons.map((val) => (
+                        <button
+                          key={val}
+                          onClick={() => { setTargetOdds(val); setCustomOdds(""); setUseCustom(false); }}
+                          className={`px-4 py-2 rounded-xl text-xs font-extrabold transition-all ${
+                            !useCustom && targetOdds === val
+                              ? "bg-slate-900 text-white shadow-sm"
+                              : "bg-slate-100 text-slate-700 hover:bg-slate-200"
+                          }`}
+                        >
+                          ~{val.toFixed(0)}x
+                        </button>
+                      ))}
+                    </div>
+                    <div className="flex items-center gap-2 pt-1">
+                      <input
+                        type="number"
+                        placeholder="Custom odds..."
+                        value={customOdds}
+                        onChange={(e) => {
+                          const valStr = e.target.value;
+                          setCustomOdds(valStr);
+                          setUseCustom(true);
+                          const parsed = parseFloat(valStr);
+                          if (!isNaN(parsed) && parsed > 1.0) setTargetOdds(parsed);
+                        }}
+                        className="w-36 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-900"
+                      />
+                      <span className="text-xs text-slate-400">odds multiplier</span>
+                    </div>
+                    <div className="bg-slate-50 rounded-xl px-4 py-2.5 text-xs text-slate-600 font-medium">
+                      Current target: <strong className="text-slate-900">{useCustom ? (parseFloat(customOdds) > 1 ? `~${parseFloat(customOdds).toFixed(1)}x` : "Invalid") : `~${targetOdds.toFixed(0)}x odds`}</strong>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    <p className="text-xs text-slate-500">How many games do you want in the ticket? (SportyBet max: 50)</p>
+                    <div className="flex flex-wrap gap-2">
+                      {[5, 10, 15, 20, 25, 30, 40, 50].map((num) => (
+                        <button
+                          key={num}
+                          onClick={() => setTargetGames(num)}
+                          className={`px-4 py-2 rounded-xl text-xs font-extrabold transition-all ${
+                            targetGames === num
+                              ? "bg-slate-900 text-white shadow-sm"
+                              : "bg-slate-100 text-slate-700 hover:bg-slate-200"
+                          }`}
+                        >
+                          {num} {num === 50 ? "⭐" : ""}
+                        </button>
+                      ))}
+                    </div>
+                    <div className="flex items-center gap-2 pt-1">
+                      <input
+                        type="number"
+                        placeholder="Custom (1–50)"
+                        min={1}
+                        max={50}
+                        value={targetGames}
+                        onChange={(e) => setTargetGames(Math.min(50, Math.max(1, parseInt(e.target.value) || 1)))}
+                        className="w-36 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-900"
+                      />
+                      <span className="text-xs text-slate-400">games in ticket</span>
+                    </div>
+                    <div className="bg-slate-50 rounded-xl px-4 py-2.5 text-xs text-slate-600 font-medium">
+                      Current target: <strong className="text-slate-900">{targetGames} games</strong>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* STEP 3: Safety & Options */}
+            {builderStep === 3 && (
+              <div className="space-y-4">
+                <div>
+                  <h3 className="text-sm font-extrabold text-slate-900">Safety & Strategy Options</h3>
+                  <p className="text-xs text-slate-400 mt-0.5">Fine-tune how the engine filters and presents picks.</p>
+                </div>
+
+                {/* Banker Mode */}
+                <div
+                  className={`p-4 rounded-2xl border flex items-center justify-between cursor-pointer transition-all ${
+                    strictMode ? "bg-amber-50 border-amber-300" : "bg-slate-50 border-slate-200 hover:border-slate-300"
+                  }`}
+                  onClick={() => setStrictMode(!strictMode)}
+                >
+                  <div className="flex items-center gap-3">
+                    <div className={`w-9 h-9 rounded-xl flex items-center justify-center ${strictMode ? "bg-amber-100 text-amber-700" : "bg-slate-200 text-slate-400"}`}>
+                      <ShieldAlert className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <p className={`text-xs font-extrabold ${strictMode ? "text-amber-900" : "text-slate-800"}`}>Banker Mode</p>
+                      <p className="text-[11px] text-slate-500 mt-0.5">Only include games with massive statistical dominance. Best for 2–5x rollovers.</p>
+                    </div>
+                  </div>
+                  <div className={`w-11 h-6 rounded-full relative flex-shrink-0 transition-colors ${strictMode ? "bg-amber-500" : "bg-slate-200"}`}>
+                    <div className="w-4 h-4 bg-white rounded-full absolute top-1 shadow-sm transition-all" style={{ left: strictMode ? "calc(100% - 20px)" : "4px" }} />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {/* Flex Cut */}
+                  <div>
+                    <label className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider block mb-1.5">Flex Cut Strategy</label>
+                    <select
+                      value={selectedFlexCut}
+                      onChange={(e) => setSelectedFlexCut(e.target.value)}
+                      className="w-full bg-slate-50 border border-slate-200 text-xs font-bold text-slate-900 rounded-xl px-3 py-2.5"
+                    >
+                      <option value="OFF">Flex Off (Straight Accumulator)</option>
+                      <option value="1">Flex Cut-1 (Covers 1 Loss)</option>
+                      <option value="2">Flex Cut-2 (Covers 2 Losses)</option>
+                      <option value="3">Flex Cut-3 (Covers 3 Losses)</option>
+                      <option value="4">Flex Cut-4 (Covers 4 Losses)</option>
+                      <option value="5">Flex Cut-5 (Covers 5 Losses)</option>
+                      <option value="6">Flex Cut-6 (Covers 6 Losses)</option>
+                      <option value="7">Flex Cut-7 (Covers 7 Losses)</option>
+                    </select>
+                  </div>
+
+                  {/* Live Odds */}
+                  <div
+                    className={`p-3.5 rounded-xl border flex items-center justify-between cursor-pointer transition-all ${
+                      useLiveOdds ? "bg-indigo-50 border-indigo-200" : "bg-slate-50 border-slate-200 hover:border-slate-300"
+                    }`}
+                    onClick={() => setUseLiveOdds(!useLiveOdds)}
+                  >
+                    <div>
+                      <p className={`text-xs font-extrabold ${useLiveOdds ? "text-indigo-900" : "text-slate-700"}`}>Live SportyBet Odds</p>
+                      <p className="text-[11px] text-slate-400 mt-0.5">Enables Gate 3 Value Edge calc</p>
+                    </div>
+                    <div className={`w-11 h-6 rounded-full relative flex-shrink-0 transition-colors ${useLiveOdds ? "bg-indigo-500" : "bg-slate-200"}`}>
+                      <div className="w-4 h-4 bg-white rounded-full absolute top-1 shadow-sm transition-all" style={{ left: useLiveOdds ? "calc(100% - 20px)" : "4px" }} />
+                    </div>
+                  </div>
                 </div>
               </div>
+            )}
+          </div>
+
+          {/* Wizard Footer — Navigation + Build Button */}
+          <div className="px-6 py-4 border-t border-slate-100 bg-slate-50/50 flex items-center justify-between gap-3">
+            <button
+              onClick={() => setBuilderStep(s => Math.max(1, s - 1))}
+              disabled={builderStep === 1}
+              className="px-4 py-2 rounded-xl text-xs font-bold text-slate-600 bg-white border border-slate-200 hover:bg-slate-100 disabled:opacity-30 transition-all"
+            >
+              ← Back
+            </button>
+
+            <div className="flex items-center gap-2 text-[10px] text-slate-400 font-medium">
+              Step {builderStep} of 3
+            </div>
+
+            {builderStep < 3 ? (
+              <button
+                onClick={() => setBuilderStep(s => Math.min(3, s + 1))}
+                className="px-5 py-2 rounded-xl text-xs font-extrabold bg-slate-900 text-white hover:bg-slate-700 transition-all"
+              >
+                Next →
+              </button>
             ) : (
-              <div className="flex flex-wrap items-center gap-2">
-                {[5, 10, 15, 20, 25, 30, 40, 50].map((num) => (
-                  <button
-                    key={num}
-                    onClick={() => setTargetGames(num)}
-                    className={`px-3.5 py-1.5 rounded-xl text-xs font-extrabold transition-all ${
-                      targetGames === num
-                        ? "bg-slate-900 text-white shadow-sm"
-                        : "bg-slate-100 text-slate-700 hover:bg-slate-200"
-                    }`}
-                  >
-                    {num} Games {num === 50 ? "(SportyBet Max)" : ""}
-                  </button>
-                ))}
-
-                <div className="flex items-center gap-1.5 ml-2">
-                  <input
-                    type="number"
-                    placeholder="Max 50"
-                    min={1}
-                    max={50}
-                    value={targetGames}
-                    onChange={(e) => setTargetGames(Math.min(50, Math.max(1, parseInt(e.target.value) || 1)))}
-                    className="w-20 bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs font-bold text-slate-900 focus:outline-none focus:ring-1 focus:ring-slate-900"
-                  />
-                  <span className="text-xs text-slate-400 font-extrabold">Games (1–50)</span>
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* Section 4: Flex Cut Strategy Control */}
-          <div className="pt-2 border-t border-slate-100 space-y-2">
-            <label className="text-xs font-semibold text-slate-700 block">
-              4. SportyBet Flex Cut Strategy
-            </label>
-
-            <div className="w-full sm:w-72">
-              <select
-                value={selectedFlexCut}
-                onChange={(e) => setSelectedFlexCut(e.target.value)}
-                className="w-full bg-slate-50 border border-slate-200 text-xs font-bold text-slate-900 rounded-xl px-3 py-2 cursor-pointer focus:outline-none focus:ring-1 focus:ring-slate-900"
+              <button
+                onClick={handleBuildSafestTicket}
+                disabled={loading}
+                className="px-5 py-2 rounded-xl btn-black text-xs font-extrabold flex items-center gap-2 transition-all shadow-sm"
               >
-                <option value="AUTO">Auto-Recommend (StatIQ Optimal Cut)</option>
-                <option value="OFF">Flex Off (Straight Accumulator)</option>
-                <option value="1">Flex Cut-1 (Covers 1 Loss)</option>
-                <option value="2">Flex Cut-2 (Covers 2 Losses)</option>
-                <option value="3">Flex Cut-3 (Covers 3 Losses)</option>
-                <option value="4">Flex Cut-4 (Covers 4 Losses)</option>
-                <option value="5">Flex Cut-5 (Covers 5 Losses)</option>
-                <option value="6">Flex Cut-6 (Covers 6 Losses)</option>
-                <option value="7">Flex Cut-7 (Covers 7 Losses)</option>
-              </select>
-            </div>
-          </div>
-
-          <div className="flex items-center justify-between pt-2">
-            <label className="flex items-center space-x-2 cursor-pointer text-xs font-bold text-slate-700">
-              <input
-                type="checkbox"
-                checked={useLiveOdds}
-                onChange={(e) => setUseLiveOdds(e.target.checked)}
-                className="rounded text-slate-900 focus:ring-slate-900"
-              />
-              <span>Use Live SportyBet Odds (Enables Gate 3 Value Edge Calculation)</span>
-            </label>
+                {loading ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : null}
+                {loading ? "Building..." : "🚀 Build Ticket"}
+              </button>
+            )}
           </div>
 
           {errorMsg && (
-            <div className="bg-rose-50 border border-rose-200 p-4 rounded-xl flex items-start space-x-3 text-xs text-rose-800">
+            <div className="mx-6 mb-4 bg-rose-50 border border-rose-200 p-4 rounded-xl flex items-start gap-3 text-xs text-rose-800">
               <AlertCircle className="w-4 h-4 text-rose-600 flex-shrink-0 mt-0.5" />
               <div>
-                <span className="font-extrabold block">Builder Execution Notice</span>
+                <span className="font-extrabold block">Builder Notice</span>
                 <p className="mt-0.5">{errorMsg}</p>
               </div>
             </div>
           )}
-
-          <div className="pt-2">
-            <button
-              onClick={handleBuildSafestTicket}
-              disabled={loading}
-              className="w-full py-3 rounded-xl btn-black text-xs font-extrabold uppercase tracking-wider flex items-center justify-center space-x-2"
-            >
-              {loading ? <RefreshCw className="w-4 h-4 animate-spin" /> : null}
-              <span>{loading ? `Running StatIQ 5-Gate Engine (GW${gameweek})...` : `Build Safest 5-Gate AI Ticket (GW${gameweek})`}</span>
-            </button>
-          </div>
         </div>
       ) : (
         /* MODE 2: MULTI-DAY ROLLOVER ENGINE */
@@ -843,8 +1050,175 @@ export default function TicketBuilderTab() {
       )}
 
 
-      {/* MODE 1 RESULTS */}
-      {builderMode === "ACCUMULATOR" && result && (
+      {/* MODE 3: TODAY'S SPORTYBET LIVE GAMES BUILDER */}
+      {builderMode === "TODAY_GAMES" && (
+        <div className="bg-white p-6 rounded-2xl border border-slate-200 space-y-5 shadow-sm">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-4">
+            <div className="flex items-center space-x-3">
+              <div className="w-10 h-10 rounded-2xl bg-emerald-50 border border-emerald-200 flex items-center justify-center text-emerald-700 font-extrabold text-lg flex-shrink-0">
+                📅
+              </div>
+              <div>
+                <span className="text-[10px] font-extrabold text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200 uppercase tracking-wider">
+                  Live SportyBet Today Feed
+                </span>
+                <h3 className="text-base font-extrabold text-slate-900 mt-0.5">
+                  Today's Active SportyBet Matches Builder
+                </h3>
+              </div>
+            </div>
+
+            <button
+              onClick={() => {
+                setShowTodayFixturesDrawer(!showTodayFixturesDrawer);
+                if (!showTodayFixturesDrawer && todayFixturesList.length === 0) {
+                  handleBuildSafestTicket();
+                }
+              }}
+              className="py-2 px-3.5 rounded-xl bg-slate-100 border border-slate-200 hover:bg-slate-200 text-slate-800 text-xs font-extrabold flex items-center space-x-1.5 transition-all self-start sm:self-auto"
+            >
+              <span>🔍</span>
+              <span>{showTodayFixturesDrawer ? "Hide Today's Polled Games" : "Browse All Today's SportyBet Games"}</span>
+            </button>
+          </div>
+
+          <p className="text-xs text-slate-500">
+            Polls <strong>100% of active fixtures kicking off today on SportyBet</strong>, evaluates them through the 3-Pillar Matrix (Odds, H2H, Form), purges sub-1.12 odds, and builds an optimal ticket.
+          </p>
+
+          {/* Build Criteria Selector (By Target Odds OR By Number of Games) */}
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <label className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider block">Selection Criteria</label>
+              <div className="flex bg-slate-100 p-1 rounded-xl space-x-1">
+                <button
+                  onClick={() => setTodayBuildCriteria("ODDS")}
+                  className={`px-3 py-1 rounded-lg text-xs font-extrabold transition-all ${
+                    todayBuildCriteria === "ODDS" ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-800"
+                  }`}
+                >
+                  🎯 By Target Odds
+                </button>
+                <button
+                  onClick={() => setTodayBuildCriteria("GAMES")}
+                  className={`px-3 py-1 rounded-lg text-xs font-extrabold transition-all ${
+                    todayBuildCriteria === "GAMES" ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-800"
+                  }`}
+                >
+                  🎮 By Number of Games
+                </button>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              {todayBuildCriteria === "ODDS" ? (
+                <div>
+                  <label className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider block mb-1.5">Target Total Odds</label>
+                  <div className="grid grid-cols-3 gap-1.5">
+                    {[1.5, 2.0, 3.0, 5.0, 10.0, 20.0].map((val) => (
+                      <button
+                        key={val}
+                        onClick={() => {
+                          setTargetOdds(val);
+                          setTargetMode("ODDS");
+                        }}
+                        className={`py-2 rounded-xl text-xs font-bold transition-all border ${
+                          targetOdds === val
+                            ? "bg-slate-900 text-white border-slate-900 shadow-sm"
+                            : "bg-slate-50 text-slate-700 border-slate-200 hover:border-slate-300"
+                        }`}
+                      >
+                        ~{val}x
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <div>
+                  <label className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider block mb-1.5">Target Number of Games</label>
+                  <div className="grid grid-cols-3 gap-1.5">
+                    {[3, 5, 8, 10, 12, 15].map((count) => (
+                      <button
+                        key={count}
+                        onClick={() => {
+                          setTargetGames(count);
+                          setTargetMode("GAMES");
+                        }}
+                        className={`py-2 rounded-xl text-xs font-bold transition-all border ${
+                          targetGames === count
+                            ? "bg-slate-900 text-white border-slate-900 shadow-sm"
+                            : "bg-slate-50 text-slate-700 border-slate-200 hover:border-slate-300"
+                        }`}
+                      >
+                        {count} Games
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div>
+                <label className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider block mb-1.5">Flex Cut Insurance Strategy</label>
+                <select
+                  value={selectedFlexCut}
+                  onChange={(e) => setSelectedFlexCut(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 text-xs font-bold text-slate-900 rounded-xl px-3 py-2.5"
+                >
+                  <option value="OFF">Flex Off (Straight Accumulator)</option>
+                  <option value="1">Flex Cut-1 (Covers 1 Loss)</option>
+                  <option value="2">Flex Cut-2 (Covers 2 Losses)</option>
+                  <option value="3">Flex Cut-3 (Covers 3 Losses)</option>
+                  <option value="4">Flex Cut-4 (Covers 4 Losses)</option>
+                  <option value="5">Flex Cut-5 (Covers 5 Losses)</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <button
+            onClick={handleBuildSafestTicket}
+            disabled={loading}
+            className="w-full py-3.5 rounded-xl btn-black text-xs font-extrabold uppercase tracking-wider flex items-center justify-center space-x-2 shadow-sm transition-all"
+          >
+            {loading ? <RefreshCw className="w-4 h-4 animate-spin text-white" /> : (
+              <span>⚡ Generate Ticket for Today's Active Games ({todayBuildCriteria === "ODDS" ? `~${targetOdds}x Odds` : `${targetGames} Games`})</span>
+            )}
+          </button>
+
+          {/* Drawer: Collapsible View of All Today's Active SportyBet Games */}
+          {showTodayFixturesDrawer && result && result.ticket && result.ticket.approved_legs && (
+            <div className="bg-slate-50 border border-slate-200 p-4 rounded-2xl space-y-3 animate-in fade-in duration-200">
+              <div className="flex items-center justify-between border-b border-slate-200 pb-2">
+                <span className="text-xs font-extrabold text-slate-900">
+                  Polled Live SportyBet Games Active Today ({result.ticket.approved_legs.length} Matches)
+                </span>
+                <span className="text-[10px] font-bold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full">
+                  100% Live Feed Verified
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-60 overflow-y-auto pr-1">
+                {result.ticket.approved_legs.map((leg, idx) => (
+                  <div key={idx} className="bg-white p-3 rounded-xl border border-slate-200 text-xs flex justify-between items-center">
+                    <div>
+                      <p className="font-extrabold text-slate-900">{leg.home_team} vs {leg.away_team}</p>
+                      <p className="text-[11px] text-slate-500 font-medium mt-0.5">Market: {leg.market_name} ({leg.selection_name})</p>
+                    </div>
+                    <div className="text-right">
+                      <span className="font-extrabold text-emerald-700 text-xs block">{leg.estimated_odds}x</span>
+                      <span className="text-[10px] font-extrabold text-purple-700 bg-purple-50 px-1.5 py-0.5 rounded uppercase">{leg.confidence_tier || "ELITE"}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+
+      {/* MODE 1 & MODE 3 RESULTS */}
+      {(builderMode === "ACCUMULATOR" || builderMode === "TODAY_GAMES") && result && (
         <div className="space-y-6">
           {result.scenarios?.map((scn) => {
             const code = generatedCodes[scn.scenario_id];
@@ -953,10 +1327,10 @@ export default function TicketBuilderTab() {
 
                             <button
                               onClick={() => handleRemoveAccumulatorSelection(scn.scenario_id, idx)}
-                              className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-100 rounded transition-all"
-                              title="Remove selection from ticket"
+                              className="p-1.5 rounded-lg bg-white hover:bg-rose-100 text-slate-400 hover:text-rose-600 border border-slate-200 hover:border-rose-300 transition-all shadow-xs"
+                              title="Cancel / Remove game from drafted ticket"
                             >
-                              <Trash2 className="w-3.5 h-3.5" />
+                              <X className="w-4 h-4" />
                             </button>
                           </div>
                         </div>
@@ -1009,7 +1383,7 @@ export default function TicketBuilderTab() {
                 {(() => {
                   const nLegs = scn.selections.length;
                   const flex = calculateFlexShield(nLegs, nLegs, scn.accumulated_odds, selectedFlexCut);
-                  if (!flex.eligible) return null;
+                  if (!flex.eligible || selectedFlexCut === "OFF") return null;
                   return (
                     <div className="bg-slate-900 border border-emerald-500/40 p-4 rounded-2xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 text-white shadow-sm my-3">
                       <div className="flex items-start space-x-3">

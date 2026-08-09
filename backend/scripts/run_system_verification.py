@@ -809,9 +809,9 @@ class SystemVerificationSuite:
 
         print("\nProduction Status")
         if is_production_ready:
-            print(colorize("🟢 PRODUCTION READY", Colors.BOLD + Colors.GREEN))
+            print(colorize("[READY] PRODUCTION READY", Colors.BOLD + Colors.GREEN))
         else:
-            print(colorize("🔴 NOT SAFE", Colors.BOLD + Colors.RED))
+            print(colorize("[NOT SAFE] SYSTEM NOT READY", Colors.BOLD + Colors.RED))
 
         print("\n" + "=" * 56)
         print(f"Execution Time\n{total_time:.2f} seconds")
@@ -837,7 +837,7 @@ class SystemVerificationSuite:
         with open(report_path, "w", encoding="utf-8") as f:
             json.dump(report_data, f, indent=2)
 
-        print(colorize(f"📄 Machine-readable JSON report saved to: {report_path.resolve()}", Colors.CYAN))
+        print(colorize(f"[REPORT] Machine-readable JSON report saved to: {report_path.resolve()}", Colors.CYAN))
 
 
 if __name__ == "__main__":

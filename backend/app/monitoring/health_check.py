@@ -80,3 +80,13 @@ class PipelineHealthCheckEngine:
             "active_provider_market_mappings": active_mappings,
             "issues": issues
         }
+
+def check_system_health(session=None) -> Dict[str, Any]:
+    if session is None:
+        from app.db.session import SessionLocal
+        with SessionLocal() as db:
+            engine = PipelineHealthCheckEngine(db)
+            return engine.run_health_check()
+    else:
+        engine = PipelineHealthCheckEngine(session)
+        return engine.run_health_check()

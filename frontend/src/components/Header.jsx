@@ -1,7 +1,8 @@
 import React from "react";
 import { Activity, Calendar, Target, Search, FlaskConical, CheckCircle2, Receipt } from "lucide-react";
+import NotificationDropdown from "./NotificationDropdown";
 
-export default function Header({ activeTab, setActiveTab }) {
+export default function Header({ activeTab, setActiveTab, activeTicketCount = 0, activeGameCount = 0, onSelectTicket }) {
   const tabs = [
     { id: "fixtures", label: "1. Match Fixtures", icon: Calendar },
     { id: "builder", label: "2. AI Ticket Builder", icon: Target },
@@ -29,10 +30,15 @@ export default function Header({ activeTab, setActiveTab }) {
             </div>
           </div>
 
-          {/* System Status Pill */}
-          <div className="flex items-center space-x-2 bg-emerald-50 text-emerald-700 border border-emerald-200 px-3 py-1 rounded-full text-xs font-semibold">
-            <CheckCircle2 className="w-3.5 h-3.5" />
-            <span>AI Brain Ready</span>
+          {/* Right Header Actions: Status Pill & Notifications */}
+          <div className="flex items-center space-x-3">
+            <div className="hidden sm:flex items-center space-x-2 bg-emerald-50 text-emerald-700 border border-emerald-200 px-3 py-1 rounded-full text-xs font-semibold">
+              <CheckCircle2 className="w-3.5 h-3.5" />
+              <span>AI Brain Ready</span>
+            </div>
+
+            {/* Notification Bell Dropdown */}
+            <NotificationDropdown onSelectTicket={onSelectTicket} />
           </div>
         </div>
 
@@ -45,7 +51,7 @@ export default function Header({ activeTab, setActiveTab }) {
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id)}
-                className={`flex items-center space-x-2 px-4 py-2 rounded-lg text-xs font-extrabold whitespace-nowrap transition-all ${
+                className={`flex items-center space-x-2 px-4 py-2 rounded-lg text-xs font-extrabold whitespace-nowrap transition-all relative ${
                   isActive
                     ? "bg-slate-900 text-white shadow-sm"
                     : "text-slate-600 hover:text-slate-900 hover:bg-slate-100"
@@ -53,6 +59,12 @@ export default function Header({ activeTab, setActiveTab }) {
               >
                 <Icon className={`w-4 h-4 ${isActive ? "text-white" : "text-slate-500"}`} />
                 <span>{tab.label}</span>
+
+                {tab.id === "history" && activeTicketCount > 0 && (
+                  <span className="absolute -top-1.5 -right-1.5 min-w-[20px] h-5 px-1.5 rounded-full bg-emerald-600 text-white text-[11px] font-black flex items-center justify-center shadow-md border-2 border-white">
+                    {activeTicketCount}
+                  </span>
+                )}
               </button>
             );
           })}

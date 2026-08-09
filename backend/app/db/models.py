@@ -354,5 +354,33 @@ class ProviderFixtureMapping(Base):
     mapping_confidence: Mapped[float] = mapped_column(Float, default=1.0)
     status: Mapped[str] = mapped_column(String(20), default="ACTIVE")
 
+class TrackedTicket(Base):
+    """
+    Tracked Staked Ticket Entity.
+    Stores tickets locked for tracking and evaluation in SQLite database.
+    """
+    __tablename__ = "tracked_tickets"
+
+    id: Mapped[str] = mapped_column(String(50), primary_key=True)
+    code: Mapped[str] = mapped_column(String(50), index=True, default="CUSTOM")
+    mode: Mapped[str] = mapped_column(String(30), default="SWAP")
+    target_odds: Mapped[float] = mapped_column(Float, default=1.5)
+    total_odds: Mapped[float] = mapped_column(Float, default=1.5)
+    stake: Mapped[float] = mapped_column(Float, default=100.0)
+    flex_cut: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
+    potential_win: Mapped[float] = mapped_column(Float, default=150.0)
+    status: Mapped[str] = mapped_column(String(20), default="RUNNING", index=True)
+    created_at: Mapped[str] = mapped_column(String(30))
+    locked_at_unix: Mapped[int] = mapped_column(Integer, index=True)
+    selections: Mapped[list] = mapped_column(JSON, default=list)
+    settled_at: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
+    flex_status_text: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    allowed_losses: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    loss_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    is_live: Mapped[Optional[bool]] = mapped_column(Boolean, default=False)
+    stale: Mapped[Optional[bool]] = mapped_column(Boolean, default=False)
+    stale_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+
 
 

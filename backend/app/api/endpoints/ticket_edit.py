@@ -33,6 +33,8 @@ class ReEditRequest(BaseModel):
     target_mode: Optional[str] = "ODDS"  # "ODDS" or "GAMES"
     target_games: Optional[int] = 10     # Up to 50 max games on SportyBet
     mode: str = "SWAP"  # "SWAP", "REMOVE", "AUDITOR"
+    reshuffle_seed: Optional[int] = None
+    strict_mode: bool = False
 
 class GenerateCodeRequest(BaseModel):
     selections: List[Dict[str, Any]]
@@ -73,6 +75,8 @@ async def run_re_edit(req: ReEditRequest):
         mode=req.mode,
         target_mode=req.target_mode,
         target_games=req.target_games or 10,
+        reshuffle_seed=req.reshuffle_seed,
+        strict_mode=req.strict_mode,
     )
     return res
 

@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from app.api.endpoints.predictions import router as predictions_router
 from app.api.endpoints.markets import router as markets_router
@@ -10,6 +10,7 @@ from app.api.endpoints.ai import router as ai_router
 from app.api.endpoints.fixtures import router as fixtures_router
 from app.api.endpoints.ticket_edit import router as ticket_edit_router
 from app.api.endpoints.ticket_builder import router as ticket_builder_router
+from app.api.endpoints.notifications import router as notifications_router
 from app.db.session import engine
 from app.db.models import Base
 
@@ -42,7 +43,10 @@ app.include_router(ai_router, prefix="/api/v1/ai", tags=["Google AI Studio Gemin
 app.include_router(fixtures_router, prefix="/api/v1/fixtures", tags=["Match Fixtures"])
 app.include_router(ticket_edit_router, prefix="/api/v1/ticket-edit", tags=["Ticket Re-Editor"])
 app.include_router(ticket_builder_router, prefix="/api/v1/ai-ticket", tags=["AI Ticket Builder Engine"])
+app.include_router(notifications_router, prefix="/api/v1/notifications", tags=["Win Notifications"])
 
+from app.db.session import get_db
+from sqlalchemy.orm import Session
 from app.services.ticket_tracker import (
     lock_ticket,
     get_tracked_tickets,
@@ -50,48 +54,96 @@ from app.services.ticket_tracker import (
     evaluate_tracked_tickets,
     settle_ticket_with_scores,
     settle_all_with_scores,
+    sync_tracked_tickets_with_live_apis,
 )
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Automatic background daemon polling worker
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.on_event("startup")
+def start_background_ticket_sync_worker():
+    import threading
+    import time
+
+    def _auto_sync_loop():
+        print("[TicketTrackerWorker] Dynamic live score polling daemon active (10s rapid auto-sync).")
+        # Run immediate sync on backend startup
+        try:
+            sync_tracked_tickets_with_live_apis(db=None)
+        except Exception as e:
+            print("[TicketTrackerWorker] Startup sync exception:", e)
+
+        while True:
+            try:
+                time.sleep(10)
+                sync_tracked_tickets_with_live_apis(db=None)
+            except Exception as e:
+                print("[TicketTrackerWorker] Auto-sync loop exception:", e)
+
+    worker = threading.Thread(target=_auto_sync_loop, daemon=True)
+    worker.start()
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Ticket Tracker endpoints
 # ─────────────────────────────────────────────────────────────────────────────
 
 @app.post("/api/v1/ticket-tracker/lock")
-def lock_staked_ticket(payload: dict):
+def lock_staked_ticket(payload: dict, db: Session = Depends(get_db)):
     """Lock a re-edited ticket for tracking. Optionally pass final_scores to settle on lock."""
-    return lock_ticket(payload)
+    return lock_ticket(payload, db=db)
 
 @app.get("/api/v1/ticket-tracker/list")
-def list_staked_tickets():
-    """Return all tracked tickets, auto-evaluating any that have stored scores."""
-    return evaluate_tracked_tickets()
+def list_staked_tickets(db: Session = Depends(get_db)):
+    """Return all tracked tickets immediately (< 2ms), auto-evaluating in-memory scores."""
+    return evaluate_tracked_tickets(db=db)
+
+@app.post("/api/v1/ticket-tracker/sync-live-api")
+def sync_live_tickets_endpoint(db: Session = Depends(get_db)):
+    """
+    Queues a live score sync in a background daemon thread.
+    Returns immediately so it never blocks other endpoints like /decode.
+    The sync will update tracked tickets DB table in the background.
+    """
+    import threading
+    def _run_sync():
+        try:
+            sync_tracked_tickets_with_live_apis(db=None)
+        except Exception as e:
+            print("[SyncEndpoint] Background sync error:", e)
+
+    t = threading.Thread(target=_run_sync, daemon=True)
+    t.start()
+    # Return current cached data immediately (< 2ms)
+    return evaluate_tracked_tickets(db=db)
 
 @app.delete("/api/v1/ticket-tracker/{ticket_id}")
-def remove_staked_ticket(ticket_id: str):
-    success = delete_tracked_ticket(ticket_id)
+def remove_staked_ticket(ticket_id: str, db: Session = Depends(get_db)):
+    success = delete_tracked_ticket(ticket_id, db=db)
     return {"status": "SUCCESS" if success else "NOT_FOUND"}
 
 @app.post("/api/v1/ticket-tracker/{ticket_id}/settle")
-def settle_single_ticket(ticket_id: str, payload: dict):
+def settle_single_ticket(ticket_id: str, payload: dict, db: Session = Depends(get_db)):
     """
     Force-settle a specific ticket with known final scores.
     Body: { "fixture_scores": [{"fixture_id": "123", "home_score": 2, "away_score": 1}, ...] }
     """
     fixture_scores = payload.get("fixture_scores", [])
-    result = settle_ticket_with_scores(ticket_id, fixture_scores)
+    result = settle_ticket_with_scores(ticket_id, fixture_scores, db=db)
     if result:
         return {"status": "SETTLED", "ticket": result}
     return {"status": "NOT_FOUND"}
 
 @app.post("/api/v1/ticket-tracker/settle-all")
-def settle_all_tickets(payload: dict):
+def settle_all_tickets(payload: dict, db: Session = Depends(get_db)):
     """
     Apply a batch of known final scores to ALL RUNNING tickets.
     Body: { "fixture_scores": [{"fixture_id": "123", "home_score": 2, "away_score": 1}, ...] }
     This is used by the Auditor UI to settle historical/expired-code tickets in bulk.
     """
     fixture_scores = payload.get("fixture_scores", [])
-    tickets = settle_all_with_scores(fixture_scores)
+    tickets = settle_all_with_scores(fixture_scores, db=db)
     settled = [t for t in tickets if t.get("status") in ("WON", "LOST")]
     running = [t for t in tickets if t.get("status") == "RUNNING"]
     return {
@@ -101,6 +153,7 @@ def settle_all_tickets(payload: dict):
         "still_running": len(running),
         "tickets": tickets,
     }
+
 
 @app.get("/")
 def root():

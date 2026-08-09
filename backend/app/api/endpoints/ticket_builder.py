@@ -29,6 +29,8 @@ class BuildTicketRequest(BaseModel):
     season: Optional[int] = None
     use_live_odds: bool = False
     custom_fixtures: Optional[List[Dict[str, Any]]] = None
+    reshuffle_seed: Optional[int] = None
+    kickoff_scope: Optional[str] = "TODAY"  # "TODAY", "NEXT_24H", "ALL"
 
 async def _fetch_fixtures_for_league(comp: str, matchday: int, season: Optional[int] = None) -> List[Dict[str, Any]]:
     """
@@ -85,66 +87,80 @@ async def build_ai_ticket(req: BuildTicketRequest):
         raise HTTPException(status_code=400, detail="Target odds must be at least 1.10")
 
     fixture_pool = []
+    effective_multi = (req.league_scope.upper() == "MULTI") or (req.target_odds >= 35.0)
 
     if req.custom_fixtures and len(req.custom_fixtures) > 0:
         fixture_pool = [_normalize_fixture_item(f, req.single_league) for f in req.custom_fixtures]
     else:
-        # For high odds targets (>= 35.0), force MULTI league scope to gather enough legs
-        effective_multi = (req.league_scope.upper() == "MULTI") or (req.target_odds >= 35.0)
-        leagues = ["PL", "PD", "SA", "BL1", "FL1"] if effective_multi else [req.single_league]
-        
-        # Fetch all leagues concurrently in parallel
-        results = await asyncio.gather(*[_fetch_fixtures_for_league(lg, req.gameweek, req.season) for lg in leagues], return_exceptions=True)
-        for lg, raw_matches in zip(leagues, results):
-            if isinstance(raw_matches, list):
-                for m in raw_matches:
-                    fixture_pool.append(_normalize_fixture_item(m, lg))
+        # 1. PRIMARY SOURCE: Fetch live upcoming fixtures directly from SportyBet API
+        # Guarantees 24/7/365 availability of real games currently active on SportyBet today.
+        import datetime
+        now = datetime.datetime.now(datetime.timezone.utc)
+        today_str = now.strftime("%Y-%m-%d")
 
-        # If pool size is still insufficient (< 15 fixtures) for multi-leg accumulators, fetch next gameweek in parallel
-        if len(fixture_pool) < 15 and req.target_odds >= 5.0:
-            next_results = await asyncio.gather(*[_fetch_fixtures_for_league(lg, req.gameweek + 1, req.season) for lg in leagues], return_exceptions=True)
-            for lg, raw_matches in zip(leagues, next_results):
+        from app.services.ticket_reeditor import _fetch_live_replacements_safe
+        live_sporty_events = await asyncio.to_thread(_fetch_live_replacements_safe)
+        if live_sporty_events and len(live_sporty_events) > 0:
+            sporty_pool = []
+            for ev in live_sporty_events:
+                h = ev.get("homeTeamName") or "Home"
+                a = ev.get("awayTeamName") or "Away"
+                start_ms = ev.get("estimateStartTime")
+
+                # Filter by kickoff_scope (TODAY, NEXT_24H, ALL)
+                if start_ms:
+                    try:
+                        ts_sec = (start_ms / 1000.0) if start_ms > 1e11 else float(start_ms)
+                        dt = datetime.datetime.fromtimestamp(ts_sec, tz=datetime.timezone.utc)
+                        dt_date = dt.strftime("%Y-%m-%d")
+                        diff_sec = (dt - now).total_seconds()
+
+                        # Skip matches that ended in the past (more than 2 hours ago)
+                        if diff_sec < -7200:
+                            continue
+
+                        if req.kickoff_scope == "TODAY":
+                            # Strictly enforce that kickoff date matches today's date
+                            if dt_date != today_str and diff_sec > 86400:
+                                continue
+                        elif req.kickoff_scope == "NEXT_24H":
+                            if diff_sec > 86400:
+                                continue
+                    except Exception:
+                        pass
+
+                comp_name = ev.get("tournamentName") or ev.get("categoryName") or f"League_{len(sporty_pool)+1}"
+                sporty_pool.append({
+                    "fixture_id": str(ev.get("eventId") or f"{h}_{a}"),
+                    "home_team": h,
+                    "away_team": a,
+                    "competition_code": comp_name,
+                    "kickoff_datetime": ev.get("estimateStartTime"),
+                    "markets": ev.get("markets", []),
+                })
+            if sporty_pool and len(sporty_pool) >= 4:
+                fixture_pool = sporty_pool
+
+        # 2. SECONDARY FALLBACK: Fetch from football-data.org if SportyBet feed returned empty
+        if not fixture_pool or len(fixture_pool) < 4:
+            leagues = ["PL", "PD", "SA", "BL1", "FL1"] if effective_multi else [req.single_league]
+            results = await asyncio.gather(*[_fetch_fixtures_for_league(lg, req.gameweek, req.season) for lg in leagues], return_exceptions=True)
+            for lg, raw_matches in zip(leagues, results):
                 if isinstance(raw_matches, list):
                     for m in raw_matches:
                         fixture_pool.append(_normalize_fixture_item(m, lg))
 
-    if not fixture_pool or len(fixture_pool) < 10:
-        # Comprehensive pre-populated pool of 22 top European fixtures for high-odds accumulators
-        target_comp = req.single_league if not effective_multi else None
-        fixture_pool = [
-            {"fixture_id": "IQ_101", "home_team": "Manchester City", "away_team": "Burnley", "competition_code": target_comp or "PL"},
-            {"fixture_id": "IQ_102", "home_team": "Real Madrid", "away_team": "Getafe", "competition_code": target_comp or "PD"},
-            {"fixture_id": "IQ_103", "home_team": "Bayern Munich", "away_team": "Augsburg", "competition_code": target_comp or "BL1"},
-            {"fixture_id": "IQ_104", "home_team": "Inter Milan", "away_team": "Empoli", "competition_code": target_comp or "SA"},
-            {"fixture_id": "IQ_105", "home_team": "Paris SG", "away_team": "Lorient", "competition_code": target_comp or "FL1"},
-            {"fixture_id": "IQ_106", "home_team": "Arsenal", "away_team": "Wolves", "competition_code": target_comp or "PL"},
-            {"fixture_id": "IQ_107", "home_team": "Barcelona", "away_team": "Mallorca", "competition_code": target_comp or "PD"},
-            {"fixture_id": "IQ_108", "home_team": "Bayer Leverkusen", "away_team": "Mainz", "competition_code": target_comp or "BL1"},
-            {"fixture_id": "IQ_109", "home_team": "Liverpool", "away_team": "Ipswich Town", "competition_code": target_comp or "PL"},
-            {"fixture_id": "IQ_110", "home_team": "Juventus", "away_team": "Lecce", "competition_code": target_comp or "SA"},
-            {"fixture_id": "IQ_111", "home_team": "Atletico Madrid", "away_team": "Las Palmas", "competition_code": target_comp or "PD"},
-            {"fixture_id": "IQ_112", "home_team": "Borussia Dortmund", "away_team": "Wolfsburg", "competition_code": target_comp or "BL1"},
-            {"fixture_id": "IQ_113", "home_team": "Chelsea", "away_team": "Southampton", "competition_code": target_comp or "PL"},
-            {"fixture_id": "IQ_114", "home_team": "AC Milan", "away_team": "Monza", "competition_code": target_comp or "SA"},
-            {"fixture_id": "IQ_115", "home_team": "Monaco", "away_team": "Le Havre", "competition_code": target_comp or "FL1"},
-            {"fixture_id": "IQ_116", "home_team": "PSV Eindhoven", "away_team": "Waalwijk", "competition_code": target_comp or "DED"},
-            {"fixture_id": "IQ_117", "home_team": "Sporting CP", "away_team": "Farense", "competition_code": target_comp or "PPL"},
-            {"fixture_id": "IQ_118", "home_team": "Benfica", "away_team": "Estoril", "competition_code": target_comp or "PPL"},
-            {"fixture_id": "IQ_119", "home_team": "Tottenham", "away_team": "Leicester City", "competition_code": target_comp or "PL"},
-            {"fixture_id": "IQ_120", "home_team": "Atalanta", "away_team": "Cagliari", "competition_code": target_comp or "SA"},
-            {"fixture_id": "IQ_121", "home_team": "RB Leipzig", "away_team": "Bochum", "competition_code": target_comp or "BL1"},
-            {"fixture_id": "IQ_122", "home_team": "Athletic Bilbao", "away_team": "Leganes", "competition_code": target_comp or "PD"},
-        ]
+    # Allow accumulating legs up to max ticket size requested by user (e.g. 5, 10, 15 games)
+    max_league_picks = 99 if not effective_multi else max(5, int(getattr(req, 'target_games', 10)))
 
-    # In Single League mode, do not cap picks per league at 2, allow accumulating legs up to max ticket size
-    max_league_picks = 99 if not effective_multi else (3 if req.target_odds >= 15.0 else 2)
-
-    engine = MatchIQPickEngine(use_live_odds=req.use_live_odds)
+    use_live = req.use_live_odds or (bool(fixture_pool) and "markets" in (fixture_pool[0] if fixture_pool else {}))
+    engine = MatchIQPickEngine(use_live_odds=use_live)
     built_ticket = engine.build_ticket(
         fixture_pool=fixture_pool,
         target_total_odds=req.target_odds,
         mode=req.mode.upper(),
-        max_league_picks=max_league_picks
+        max_league_picks=max_league_picks,
+        reshuffle_seed=req.reshuffle_seed
     )
 
     return {
