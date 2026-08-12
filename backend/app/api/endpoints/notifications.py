@@ -37,7 +37,7 @@ def save_notifications(notifications: List[Dict[str, Any]]):
         json.dump(notifications, f, indent=2)
 
 def sync_historical_win_notifications() -> List[Dict[str, Any]]:
-    """Scan tracked_tickets.json and generate notifications for all WON tickets."""
+    """Scan tracked_tickets.json and generate notifications for all WON tickets, purging stale notifications for lost/deleted tickets."""
     existing = []
     if os.path.exists(NOTIFICATIONS_FILE):
         try:
@@ -48,8 +48,22 @@ def sync_historical_win_notifications() -> List[Dict[str, Any]]:
         except Exception:
             existing = []
 
-    existing_ticket_ids = {n.get("ticket_id") for n in existing if n.get("ticket_id")}
     tickets = get_tracked_tickets()
+    tickets_by_id = {t.get("id"): t for t in tickets}
+
+    # Filter existing notifications: purge any notification whose ticket is now LOST or deleted
+    valid_existing = []
+    for n in existing:
+        tid = n.get("ticket_id")
+        if tid:
+            t_obj = tickets_by_id.get(tid)
+            if t_obj and t_obj.get("status") == "WON":
+                n["mode"] = t_obj.get("mode") or n.get("mode") or "AUDITOR"
+                valid_existing.append(n)
+        else:
+            valid_existing.append(n)
+
+    existing_ticket_ids = {n.get("ticket_id") for n in valid_existing if n.get("ticket_id")}
     won_tickets = [t for t in tickets if t.get("status") == "WON"]
 
     new_notifs = []
@@ -60,11 +74,13 @@ def sync_historical_win_notifications() -> List[Dict[str, Any]]:
             flex_text = t.get("flex_status_text") or "Ticket Won!"
             odds = t.get("odds") or t.get("total_odds") or "1.00"
             payout = t.get("potential_win") or t.get("pot_win") or 0.0
+            mode = t.get("mode") or "AUDITOR"
 
             new_notifs.append({
                 "id": f"NOTIF-{tid}",
                 "ticket_id": tid,
                 "code": code,
+                "mode": mode,
                 "title": f"🎉 Ticket WON! — {code}",
                 "message": f"{flex_text} • Stake ₦{t.get('stake', 1000):,.2f}",
                 "flex_status_text": flex_text,
@@ -75,11 +91,12 @@ def sync_historical_win_notifications() -> List[Dict[str, Any]]:
                 "read": False
             })
 
-    combined = new_notifs + existing
+    combined = new_notifs + valid_existing
     # Sort descending by creation time
     combined.sort(key=lambda x: x.get("created_at", ""), reverse=True)
     save_notifications(combined)
     return combined
+
 
 @router.get("")
 def get_notifications_endpoint():

@@ -115,3 +115,30 @@ def read_provider_booking_code(req_data: Dict[str, Any], db: Session = Depends(g
 
     return {"status": "UNSUPPORTED_PROVIDER", "message": f"Code reading for {provider} not supported."}
 
+@router.post("/verified-booking")
+async def create_verified_booking_endpoint(req_data: Dict[str, Any], db: Session = Depends(get_db)):
+    """
+    Phase 14 Single High-Level Endpoint: Verified Booking Code Generation.
+    Executes full multi-level resolution, validation, code generation, and post-booking verification.
+    Guarantees zero false-positive verified bookings.
+    """
+    provider = req_data.get("provider", "SPORTYBET").upper()
+    region = req_data.get("region", "ng").lower()
+    statiq_ticket_id = req_data.get("ticket_id") or req_data.get("statiq_ticket_id") or "TKT-GEN"
+    selections = req_data.get("selections", [])
+
+    if not selections:
+        return {"status": "REJECTED", "message": "No selections provided in payload."}
+
+    if provider == "SPORTYBET":
+        from app.services.sportybet_reconciliation import SportyBetVerificationEngine
+        engine = SportyBetVerificationEngine(db)
+        return await engine.generate_verified_booking(
+            statiq_ticket_id=statiq_ticket_id,
+            selections=selections,
+            region=region
+        )
+
+    return {"status": "UNSUPPORTED_PROVIDER", "message": f"Verified booking for {provider} not supported."}
+
+

@@ -65,6 +65,7 @@ export default function App() {
           <BetHistoryTab
             externalSelectedTicketId={selectedNotificationTicketId}
             onClearExternalTicket={() => setSelectedNotificationTicketId(null)}
+            onTicketsChanged={fetchActiveTickets}
           />
         )}
         {activeTab === "backtester" && <BacktesterTab />}

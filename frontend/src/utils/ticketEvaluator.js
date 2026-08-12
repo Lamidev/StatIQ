@@ -168,6 +168,109 @@ export function evaluatePickLive(sel) {
   const marketName = String(sel.market_name || sel.market || "").trim();
   const fullText = `${marketName} ${pickName}`.toLowerCase();
   const pickLower = pickName.toLowerCase();
+  const ht = (sel.home_team || "").toLowerCase();
+  const at = (sel.away_team || "").toLowerCase();
+
+  // 0. TEAM GOALS / TEAM SPECIFIC OVER-UNDER MARKETS (e.g. Fatih Karagumruk Istanbul Over/Under, Home Over 0.5, Team Goals)
+  const isTeamGoalsMarket = (() => {
+    if (fullText.includes("team goals") || fullText.includes("team over") || fullText.includes("team under")) return true;
+    if (fullText.includes("home over") || fullText.includes("home under") || fullText.includes("away over") || fullText.includes("away under")) return true;
+    if (fullText.includes("home team over") || fullText.includes("away team over") || fullText.includes("home team under") || fullText.includes("away team under")) return true;
+    const mktLower = marketName.toLowerCase();
+    if ((ht && mktLower.includes(ht)) || (at && mktLower.includes(at))) {
+      if (mktLower.includes("over/under") || mktLower.includes("over") || mktLower.includes("under") || mktLower.includes("goals")) {
+        return true;
+      }
+    }
+    return false;
+  })();
+
+  if (isTeamGoalsMarket) {
+    const isAway = fullText.includes("away") || (at && fullText.includes(at));
+    const targetScore = isAway ? awayScore : homeScore;
+
+    const overM = fullText.match(/over\s*(\d+\.?\d*)/i);
+    const underM = fullText.match(/under\s*(\d+\.?\d*)/i);
+
+    if (overM) {
+      const line = parseFloat(overM[1]);
+      if (targetScore > line) {
+        return { status: "WON", resultText: pickName || `Over ${line}` };
+      }
+      if (isConcluded) {
+        return { status: "LOST", resultText: `${targetScore} Goals` };
+      }
+      return { status: "PENDING", resultText: "--" };
+    }
+
+    if (underM) {
+      const line = parseFloat(underM[1]);
+      if (targetScore > line) {
+        return { status: "LOST", resultText: `${targetScore} Goals (Exceeded ${line})` };
+      }
+      if (isConcluded) {
+        return { status: "WON", resultText: pickName || `Under ${line}` };
+      }
+      return { status: "PENDING", resultText: "--" };
+    }
+  }
+
+  // 0.5 CORNERS MARKETS (Total Corners, Home Corners, Away Corners)
+  if (fullText.includes("corner")) {
+    const isHome = fullText.includes("home") || (ht && pickLower.includes(ht));
+    const isAway = fullText.includes("away") || (at && pickLower.includes(at));
+
+    let cornerVal = null;
+    if (isHome && sel.home_corners !== undefined && sel.home_corners !== null) {
+      cornerVal = Number(sel.home_corners);
+    } else if (isAway && sel.away_corners !== undefined && sel.away_corners !== null) {
+      cornerVal = Number(sel.away_corners);
+    } else if (sel.total_corners !== undefined && sel.total_corners !== null) {
+      cornerVal = Number(sel.total_corners);
+    } else if (sel.corners !== undefined && sel.corners !== null) {
+      cornerVal = Number(sel.corners);
+    } else if (sel.home_corners !== undefined && sel.away_corners !== undefined && sel.home_corners !== null && sel.away_corners !== null) {
+      cornerVal = Number(sel.home_corners) + Number(sel.away_corners);
+    }
+
+    const overM = fullText.match(/over\s*(\d+\.?\d*)/i);
+    const underM = fullText.match(/under\s*(\d+\.?\d*)/i);
+
+    if (overM) {
+      const line = parseFloat(overM[1]);
+      if (cornerVal !== null && cornerVal > line) {
+        return { status: "WON", resultText: pickName || `Over ${line} Corners` };
+      }
+      if (isConcluded) {
+        if (cornerVal !== null) {
+          return cornerVal > line
+            ? { status: "WON", resultText: pickName || `Over ${line} Corners` }
+            : { status: "LOST", resultText: `${cornerVal} Corners` };
+        }
+        if (sel.leg_status === "WON" || sel.leg_result === "WON") return { status: "WON", resultText: pickName || "Won" };
+        if (sel.leg_status === "LOST" || sel.leg_result === "LOST") return { status: "LOST", resultText: "Lost" };
+        return { status: "LOST", resultText: "Lost" };
+      }
+      return { status: "PENDING", resultText: "--" };
+    }
+
+    if (underM) {
+      const line = parseFloat(underM[1]);
+      if (cornerVal !== null && cornerVal > line) {
+        return { status: "LOST", resultText: `${cornerVal} Corners (Exceeded ${line})` };
+      }
+      if (isConcluded) {
+        if (cornerVal !== null) {
+          return cornerVal <= line
+            ? { status: "WON", resultText: pickName || `Under ${line} Corners` }
+            : { status: "LOST", resultText: `${cornerVal} Corners` };
+        }
+        if (sel.leg_status === "WON" || sel.leg_result === "WON") return { status: "WON", resultText: pickName || "Won" };
+        if (sel.leg_status === "LOST" || sel.leg_result === "LOST") return { status: "LOST", resultText: "Lost" };
+      }
+      return { status: "PENDING", resultText: "--" };
+    }
+  }
 
   // 1. OVER GOALS (Over 0.5, Over 1.5, Over 2.5, Over 3.5, Over 4.5, etc.)
   const overMatch = fullText.match(/over\s*(\d+\.?\d*)/i) || pickLower.match(/over\s*(\d+\.?\d*)/i);
@@ -240,8 +343,6 @@ export function evaluatePickLive(sel) {
       return { status: "WON", resultText: pickName === "Yes" || pickName === "No" ? "Yes" : (pickName || "Yes") };
     }
     if (isConcluded) {
-      const ht = (sel.home_team || "").toLowerCase();
-      const at = (sel.away_team || "").toLowerCase();
       const isHomeTarget = fullText.includes("home") || (ht && pickLower.includes(ht));
       const isAwayTarget = fullText.includes("away") || (at && pickLower.includes(at));
       const teamWon = isHomeTarget ? homeScore > awayScore : (isAwayTarget ? awayScore > homeScore : homeScore !== awayScore);
@@ -255,7 +356,6 @@ export function evaluatePickLive(sel) {
 
   // 5. TEAM GOALS (e.g., Home Team Over 0.5 Goals)
   if (fullText.includes("over 0.5 goals") || fullText.includes("team goals")) {
-    const ht = (sel.home_team || "").toLowerCase();
     const isHome = fullText.includes("home") || (ht && pickLower.includes(ht));
     const targetScore = isHome ? homeScore : awayScore;
 
@@ -283,15 +383,16 @@ export function evaluatePickLive(sel) {
   // 7. EARLY PAYOUT (1UP / 2UP)
   if (fullText.includes("1up") || fullText.includes("1 up") || fullText.includes("2up") || fullText.includes("2 up")) {
     const isAway = pickLower.includes("away") || (at && pickLower.includes(at)) || pickLower === "2";
-    const targetScore = isAway ? awayScore : homeScore;
+    const isHome = pickLower.includes("home") || (ht && pickLower.includes(ht)) || pickLower === "1";
 
     if (fullText.includes("2up") || fullText.includes("2 up")) {
       const diff = isAway ? (awayScore - homeScore) : (homeScore - awayScore);
-      if (diff >= 2 || (isConcluded && diff > 0)) {
+      if (diff >= 2 || (isConcluded && (isAway ? awayScore > homeScore : homeScore > awayScore))) {
         return { status: "WON", resultText: pickName || "2UP Won" };
       }
     } else {
-      if (targetScore >= 1 || (isConcluded && (isAway ? awayScore > homeScore : homeScore > awayScore))) {
+      const teamLeading = isAway ? awayScore > homeScore : homeScore > awayScore;
+      if (teamLeading || (isConcluded && (isAway ? awayScore > homeScore : homeScore > awayScore))) {
         return { status: "WON", resultText: pickName || "1UP Won" };
       }
     }
@@ -318,10 +419,10 @@ export function evaluatePickLive(sel) {
       const adj = isAwayTarget ? (awayScore + hcpVal - homeScore) : (homeScore + hcpVal - awayScore);
       return adj > 0 ? { status: "WON", resultText: pickName } : { status: "LOST", resultText: "Lost" };
     }
-    if (pickLower.includes("home") || pickLower === "1") {
+    if (pickLower.includes("home") || pickLower === "1" || (ht && pickLower.includes(ht))) {
       return homeScore > awayScore ? { status: "WON", resultText: "Home Win" } : { status: "LOST", resultText: homeScore === awayScore ? "Draw" : "Away Win" };
     }
-    if (pickLower.includes("away") || pickLower === "2") {
+    if (pickLower.includes("away") || pickLower === "2" || (at && pickLower.includes(at))) {
       return awayScore > homeScore ? { status: "WON", resultText: "Away Win" } : { status: "LOST", resultText: homeScore === awayScore ? "Draw" : "Home Win" };
     }
     if (pickLower.includes("draw") || pickLower === "x") {

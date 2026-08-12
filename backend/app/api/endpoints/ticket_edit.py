@@ -1,3 +1,5 @@
+import asyncio
+import logging
 from typing import List, Dict, Any, Optional
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
@@ -9,6 +11,7 @@ from app.services.ticket_reeditor import re_edit_ticket
 from app.services.api_football_stats import batch_fetch_match_stats
 from app.core.config import settings
 
+logger = logging.getLogger("matchiq.ticket_edit")
 router = APIRouter()
 
 class SelectionItem(BaseModel):
@@ -62,32 +65,112 @@ def decode_booking_code(req: DecodeRequest, db: Session = Depends(get_db)):
     raise HTTPException(status_code=400, detail=f"Unsupported provider: {req.provider}")
 
 @router.post("/re-edit")
-async def run_re_edit(req: ReEditRequest):
+async def run_re_edit(req: ReEditRequest, db: Session = Depends(get_db)):
     """
     Runs MatchIQ's statistical ticket re-editor.
     Supports target_mode="ODDS" or target_mode="GAMES" (up to 50 games max).
+    Automatically generates a verified SportyBet booking code for the new ticket.
+    Server-side timeout scales with ticket size: 75s for ≤15 legs, up to 120s for 50 legs.
     """
     selections_dict = [s.model_dump() for s in req.selections]
+    n_legs = len(selections_dict)
 
-    res = await re_edit_ticket(
-        selections=selections_dict,
-        target_odds=req.target_odds,
-        mode=req.mode,
-        target_mode=req.target_mode,
-        target_games=req.target_games or 10,
-        reshuffle_seed=req.reshuffle_seed,
-        strict_mode=req.strict_mode,
+    # Adaptive server-side timeout: 75s for ≤15 legs, 100s for 16-30, 120s for 31+
+    reedit_timeout = 75 if n_legs <= 15 else (100 if n_legs <= 30 else 120)
+
+    try:
+        res = await asyncio.wait_for(
+            re_edit_ticket(
+                selections=selections_dict,
+                target_odds=req.target_odds,
+                mode=req.mode,
+                target_mode=req.target_mode,
+                target_games=req.target_games or 10,
+                reshuffle_seed=req.reshuffle_seed,
+                strict_mode=req.strict_mode,
+            ),
+            timeout=reedit_timeout
+        )
+    except asyncio.TimeoutError:
+        logger.warning(f"re_edit_ticket timed out after {reedit_timeout}s for {n_legs}-leg ticket")
+        raise HTTPException(status_code=504, detail=f"Re-edit timed out after {reedit_timeout}s. Try reducing the number of selections or splitting the ticket.")
+
+    # Automatic Phase 14 Verified Booking Code Generation
+    final_sels = res.get("final_selections", [])
+    booking_timeout = 60 if n_legs <= 15 else (90 if n_legs <= 30 else 120)
+    if final_sels:
+        try:
+            from app.services.sportybet_reconciliation import SportyBetVerificationEngine
+            engine = SportyBetVerificationEngine(db)
+            ver_res = await asyncio.wait_for(
+                engine.generate_verified_booking(
+                    statiq_ticket_id="REEDIT-AUTO",
+                    selections=final_sels,
+                    region="ng"
+                ),
+                timeout=booking_timeout
+            )
+            if ver_res.get("status") == "VERIFIED":
+                res["booking_code"] = ver_res.get("booking_code")
+                res["share_url"] = ver_res.get("share_url")
+                res["verification_status"] = ver_res.get("status")
+                res["reconciliation_summary"] = ver_res.get("reconciliation_summary")
+
+                # ── Back-fill real SportyBet odds into final_selections ──────────
+                # audit_resolved contains the actual SportyBet odds per resolved selection.
+                # We match by home+away team name and overwrite estimated_odds / odds
+                # so the frontend always displays the verified real per-leg odds.
+                audit_resolved = ver_res.get("audit_resolved", [])
+                if audit_resolved:
+                    # Build a lookup: (normalised_home, normalised_away) -> real_odds
+                    def _norm(t: str) -> str:
+                        return (t or "").lower().strip()
+
+                    odds_map = {
+                        (_norm(ar.get("home_team", "")), _norm(ar.get("away_team", ""))): float(ar.get("odds", 0))
+                        for ar in audit_resolved
+                        if ar.get("odds") and float(ar.get("odds", 0)) >= 1.01
+                    }
+
+                    for sel in res.get("final_selections", []):
+                        key = (_norm(sel.get("home_team", "")), _norm(sel.get("away_team", "")))
+                        if key in odds_map:
+                            real_odds = odds_map[key]
+                            sel["estimated_odds"] = real_odds
+                            sel["odds"] = real_odds
+                            sel["odds_source"] = "SPORTYBET_VERIFIED"
+
+                    # Recompute total odds from back-filled real values
+                    real_total = 1.0
+                    for sel in res.get("final_selections", []):
+                        real_total *= float(sel.get("estimated_odds") or sel.get("odds") or 1.25)
+                    res["new_total_odds"] = round(real_total, 2)
+
+                res["audit_resolved"] = audit_resolved  # expose for frontend display
+
+        except asyncio.TimeoutError:
+            logger.warning(f"generate_verified_booking timed out after {booking_timeout}s for {n_legs}-leg ticket (re-edit result still returned)")
+        except Exception as e:
+            logger.warning(f"Auto verified booking generation error during re-edit: {e}")
+
+    return res
+
+
+
+@router.post("/generate-code")
+async def generate_new_booking_code(req: GenerateCodeRequest, db: Session = Depends(get_db)):
+    """
+    Generates a new Phase 14 verified SportyBet booking code for the final re-edited selections.
+    """
+    from app.services.sportybet_reconciliation import SportyBetVerificationEngine
+    engine = SportyBetVerificationEngine(db)
+    res = await engine.generate_verified_booking(
+        statiq_ticket_id="REEDIT-TKT",
+        selections=req.selections,
+        region=req.country_code or "ng"
     )
     return res
 
-@router.post("/generate-code")
-def generate_new_booking_code(req: GenerateCodeRequest, db: Session = Depends(get_db)):
-    """
-    Generates a new SportyBet booking code for the final re-edited selections.
-    """
-    adapter = SportyBetAdapter(db)
-    res = adapter.generate_booking_code(req.selections, req.country_code)
-    return res
 
 @router.post("/match-stats")
 async def get_match_stats(req: MatchStatsBatchRequest):

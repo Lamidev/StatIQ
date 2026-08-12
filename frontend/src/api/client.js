@@ -1,161 +1,5 @@
 const API_BASE_URL = "http://localhost:8000/api/v1";
 
-const DEMO_PREDICTIONS = [
-  {
-    prediction_id: 101,
-    competition: "PL",
-    competition_code: "PL",
-    competition_name: "Premier League",
-    home_team: "Arsenal",
-    away_team: "Chelsea",
-    kickoff_datetime: "2026-08-08T15:00:00Z",
-    prob_home: 0.68,
-    prob_draw: 0.20,
-    prob_away: 0.12,
-    prob_over_1_5: 0.85,
-    prob_over_2_5: 0.62,
-    prob_btts_yes: 0.54,
-    expected_home_goals: 2.10,
-    expected_away_goals: 0.90,
-  },
-  {
-    prediction_id: 102,
-    competition: "PD",
-    competition_code: "PD",
-    competition_name: "La Liga",
-    home_team: "Real Madrid",
-    away_team: "Barcelona",
-    kickoff_datetime: "2026-08-09T19:00:00Z",
-    prob_home: 0.55,
-    prob_draw: 0.25,
-    prob_away: 0.20,
-    prob_over_1_5: 0.90,
-    prob_over_2_5: 0.71,
-    prob_btts_yes: 0.68,
-    expected_home_goals: 1.95,
-    expected_away_goals: 1.40,
-  },
-  {
-    prediction_id: 103,
-    competition: "SA",
-    competition_code: "SA",
-    competition_name: "Serie A",
-    home_team: "Inter Milan",
-    away_team: "AC Milan",
-    kickoff_datetime: "2026-08-09T17:00:00Z",
-    prob_home: 0.62,
-    prob_draw: 0.24,
-    prob_away: 0.14,
-    prob_over_1_5: 0.81,
-    prob_over_2_5: 0.58,
-    prob_btts_yes: 0.51,
-    expected_home_goals: 1.80,
-    expected_away_goals: 0.85,
-  },
-  {
-    prediction_id: 104,
-    competition: "BL1",
-    competition_code: "BL1",
-    competition_name: "Bundesliga",
-    home_team: "Bayern Munich",
-    away_team: "Borussia Dortmund",
-    kickoff_datetime: "2026-08-10T16:30:00Z",
-    prob_home: 0.71,
-    prob_draw: 0.18,
-    prob_away: 0.11,
-    prob_over_1_5: 0.92,
-    prob_over_2_5: 0.78,
-    prob_btts_yes: 0.65,
-    expected_home_goals: 2.45,
-    expected_away_goals: 1.10,
-  },
-  {
-    prediction_id: 105,
-    competition: "PL",
-    competition_code: "PL",
-    competition_name: "Premier League",
-    home_team: "Manchester City",
-    away_team: "Liverpool",
-    kickoff_datetime: "2026-08-10T19:30:00Z",
-    prob_home: 0.58,
-    prob_draw: 0.24,
-    prob_away: 0.18,
-    prob_over_1_5: 0.88,
-    prob_over_2_5: 0.66,
-    prob_btts_yes: 0.60,
-    expected_home_goals: 2.05,
-    expected_away_goals: 1.25,
-  },
-  {
-    prediction_id: 106,
-    competition: "FL1",
-    competition_code: "FL1",
-    competition_name: "Ligue 1",
-    home_team: "PSG",
-    away_team: "Marseille",
-    kickoff_datetime: "2026-08-11T20:00:00Z",
-    prob_home: 0.74,
-    prob_draw: 0.17,
-    prob_away: 0.09,
-    prob_over_1_5: 0.89,
-    prob_over_2_5: 0.69,
-    prob_btts_yes: 0.52,
-    expected_home_goals: 2.30,
-    expected_away_goals: 0.80,
-  },
-  {
-    prediction_id: 107,
-    competition: "PD",
-    competition_code: "PD",
-    competition_name: "La Liga",
-    home_team: "Atletico Madrid",
-    away_team: "Sevilla",
-    kickoff_datetime: "2026-08-11T18:00:00Z",
-    prob_home: 0.64,
-    prob_draw: 0.23,
-    prob_away: 0.13,
-    prob_over_1_5: 0.79,
-    prob_over_2_5: 0.48,
-    prob_btts_yes: 0.45,
-    expected_home_goals: 1.70,
-    expected_away_goals: 0.70,
-  },
-  {
-    prediction_id: 108,
-    competition: "SA",
-    competition_code: "SA",
-    competition_name: "Serie A",
-    home_team: "Juventus",
-    away_team: "Napoli",
-    kickoff_datetime: "2026-08-12T19:45:00Z",
-    prob_home: 0.52,
-    prob_draw: 0.28,
-    prob_away: 0.20,
-    prob_over_1_5: 0.76,
-    prob_over_2_5: 0.49,
-    prob_btts_yes: 0.50,
-    expected_home_goals: 1.50,
-    expected_away_goals: 1.10,
-  },
-  {
-    prediction_id: 109,
-    competition: "CL",
-    competition_code: "CL",
-    competition_name: "Champions League",
-    home_team: "Real Madrid",
-    away_team: "Manchester City",
-    kickoff_datetime: "2026-08-15T20:00:00Z",
-    prob_home: 0.48,
-    prob_draw: 0.27,
-    prob_away: 0.25,
-    prob_over_1_5: 0.91,
-    prob_over_2_5: 0.72,
-    prob_btts_yes: 0.67,
-    expected_home_goals: 1.85,
-    expected_away_goals: 1.55,
-  }
-];
-
 export async function fetchLivePredictions(status = "PENDING", limit = 50) {
   try {
     const res = await fetch(`${API_BASE_URL}/predictions/upcoming?limit=${limit}`);
@@ -176,9 +20,9 @@ export async function fetchLivePredictions(status = "PENDING", limit = 50) {
       }
     }
   } catch (err) {
-    console.log("Error fetching live predictions, using fallback dataset:", err);
+    console.error("Error fetching live predictions:", err);
   }
-  return { total: DEMO_PREDICTIONS.length, predictions: DEMO_PREDICTIONS };
+  return { total: 0, predictions: [] };
 }
 
 export async function fetchValueOpportunities(minEdge = 0.03, minEv = 0.05) {
@@ -186,57 +30,12 @@ export async function fetchValueOpportunities(minEdge = 0.03, minEv = 0.05) {
     const res = await fetch(`${API_BASE_URL}/markets/value-opportunities?min_edge=${minEdge}&min_ev=${minEv}`);
     if (res.ok) {
       const data = await res.json();
-      if (data.opportunities && data.opportunities.length > 0) {
-        return data;
-      }
+      return data;
     }
   } catch (err) {
-    console.log("Using fallback value bets data");
+    console.error("Error fetching value opportunities:", err);
   }
-
-  const demoValueBets = [
-    {
-      fixture_id: 101,
-      home_team: "Arsenal",
-      away_team: "Chelsea",
-      market: "1X2",
-      selection: "Arsenal Win",
-      odds: 1.75,
-      implied_probability: 0.571,
-      model_probability: 0.680,
-      model_edge: 0.109,
-      expected_value: 0.190,
-      bookmaker: "SportyBet"
-    },
-    {
-      fixture_id: 104,
-      home_team: "Bayern Munich",
-      away_team: "Dortmund",
-      market: "OVER_UNDER",
-      selection: "Over 2.5 Goals",
-      odds: 1.55,
-      implied_probability: 0.645,
-      model_probability: 0.780,
-      model_edge: 0.135,
-      expected_value: 0.209,
-      bookmaker: "SportyBet"
-    },
-    {
-      fixture_id: 102,
-      home_team: "Real Madrid",
-      away_team: "Barcelona",
-      market: "BTTS",
-      selection: "Both Teams To Score - Yes",
-      odds: 1.70,
-      implied_probability: 0.588,
-      model_probability: 0.680,
-      model_edge: 0.092,
-      expected_value: 0.156,
-      bookmaker: "SportyBet"
-    }
-  ];
-
-  return { total_value_bets: demoValueBets.length, opportunities: demoValueBets };
+  return { total_value_bets: 0, opportunities: [] };
 }
 
 export async function generateScenarioRequest(reqData) {
@@ -246,42 +45,11 @@ export async function generateScenarioRequest(reqData) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(reqData)
     });
-    if (res.ok) {
-      const data = await res.json();
-      if (data.scenarios && data.scenarios.length > 0) {
-        return data;
-      }
-    }
+    if (res.ok) return await res.json();
   } catch (err) {
-    console.log("Using demo scenario response");
+    console.error("Scenario analysis error:", err);
   }
-
-  return {
-    status: "SUCCESS",
-    candidate_pool_size: 24,
-    total_scenarios_generated: 2,
-    scenarios: [
-      {
-        scenario_id: "SCN-001",
-        leg_count: 2,
-        independence_assumption_probability: 0.53,
-        selections: [
-          { fixture_id: 101, home_team: "Arsenal", away_team: "Chelsea", competition_code: "PL", market_type: "1X2", selection: "Arsenal Win", model_probability: 0.68 },
-          { fixture_id: 104, home_team: "Bayern Munich", away_team: "Dortmund", competition_code: "BL1", market_type: "OVER_UNDER", selection: "Over 1.5 Goals", model_probability: 0.92 }
-        ]
-      },
-      {
-        scenario_id: "SCN-002",
-        leg_count: 3,
-        independence_assumption_probability: 0.38,
-        selections: [
-          { fixture_id: 103, home_team: "Inter Milan", away_team: "AC Milan", competition_code: "SA", market_type: "1X2", selection: "Inter Win", model_probability: 0.62 },
-          { fixture_id: 105, home_team: "Man City", away_team: "Liverpool", competition_code: "PL", market_type: "OVER_UNDER", selection: "Over 1.5 Goals", model_probability: 0.88 },
-          { fixture_id: 106, home_team: "PSG", away_team: "Marseille", competition_code: "FL1", market_type: "1X2", selection: "PSG Win", model_probability: 0.74 }
-        ]
-      }
-    ]
-  };
+  return { status: "ERROR", scenarios: [] };
 }
 
 export async function analyzeExternalCode(code, provider = "SPORTYBET") {
@@ -291,51 +59,11 @@ export async function analyzeExternalCode(code, provider = "SPORTYBET") {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ code, provider })
     });
-    if (res.ok) {
-      const data = await res.json();
-      if (data.items && data.items.length > 0) {
-        return data;
-      }
-    }
+    if (res.ok) return await res.json();
   } catch (err) {
-    console.log("Using demo code parser response");
+    console.error("Analyze external code error:", err);
   }
-
-  return {
-    parse_status: "SUCCESS",
-    total_selections: 3,
-    resolved_count: 3,
-    unresolved_count: 0,
-    items: [
-      {
-        external_fixture: "Arsenal vs Chelsea",
-        external_market: "1X2",
-        external_selection: "Arsenal Win",
-        model_probability: 0.68,
-        classification: "VERY_STRONG",
-        suggested_alternatives: []
-      },
-      {
-        external_fixture: "Real Madrid vs Barcelona",
-        external_market: "1X2",
-        external_selection: "Barcelona Win",
-        model_probability: 0.20,
-        classification: "WEAK",
-        suggested_alternatives: [
-          { market: "OVER_UNDER", selection: "Over 1.5 Goals", model_probability: 0.90 },
-          { market: "BTTS", selection: "Both Teams To Score - Yes", model_probability: 0.68 }
-        ]
-      },
-      {
-        external_fixture: "Inter Milan vs AC Milan",
-        external_market: "Double Chance",
-        external_selection: "Inter or Draw",
-        model_probability: 0.86,
-        classification: "VERY_STRONG",
-        suggested_alternatives: []
-      }
-    ]
-  };
+  return { parse_status: "ERROR", total_selections: 0, items: [] };
 }
 
 export async function generateSportyBetCode(selections) {
@@ -358,35 +86,30 @@ export async function fetchDriftReport() {
   try {
     const res = await fetch(`${API_BASE_URL}/monitoring/drift`);
     if (res.ok) return await res.json();
-  } catch (err) {}
-  return {
-    overall_status: "STABLE",
-    rolling_30_days: { sample_size: 45, accuracy_pct: 51.2, brier_score: 0.598, ece: 0.0105, status: "STABLE" },
-    rolling_90_days: { sample_size: 180, accuracy_pct: 49.8, brier_score: 0.603, ece: 0.0112, status: "STABLE" },
-    rolling_180_days: { sample_size: 360, accuracy_pct: 49.5, brier_score: 0.605, ece: 0.0120, status: "STABLE" }
-  };
+  } catch (err) {
+    console.error("Fetch drift report error:", err);
+  }
+  return null;
 }
 
 export async function fetchPipelineHealth() {
   try {
     const res = await fetch(`${API_BASE_URL}/monitoring/pipeline-health`);
     if (res.ok) return await res.json();
-  } catch (err) {}
-  return {
-    pipeline_status: "HEALTHY",
-    unpredicted_upcoming_fixtures_count: 0,
-    total_market_odds_records: 1420,
-    active_provider_market_mappings: 42,
-    issues: []
-  };
+  } catch (err) {
+    console.error("Fetch pipeline health error:", err);
+  }
+  return null;
 }
 
 export async function triggerReconciliation() {
   try {
     const res = await fetch(`${API_BASE_URL}/monitoring/reconcile`, { method: "POST" });
     if (res.ok) return await res.json();
-  } catch (err) {}
-  return { reconciled_count: 5, accuracy_pct: 60.0, avg_brier_score: 0.582, avg_log_loss: 0.985 };
+  } catch (err) {
+    console.error("Trigger reconciliation error:", err);
+  }
+  return null;
 }
 
 /**
@@ -491,11 +214,15 @@ export async function fetchMatchStats(matches) {
 
 /**
  * Run MatchIQ Statistical Ticket Re-Editor (AUDITOR, SWAP, or REMOVE mode).
- * Timeout: 15 seconds. Returns error object on server crash or timeout.
+ * Timeout scales with ticket size: ≤15 games = 30s, 16-30 games = 60s, 31-50 games = 90s.
+ * Returns error object on server crash or timeout.
  */
 export async function runTicketReEdit(selections, targetOdds, mode = "SWAP", targetMode = "ODDS", targetGames = 10, reshuffleSeed = null, strictMode = false) {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 25000);
+  // Adaptive timeout — larger tickets need more time due to parallel HTTP resolution
+  const n = Array.isArray(selections) ? selections.length : 0;
+  const timeoutMs = n > 30 ? 90000 : n > 15 ? 60000 : 30000;
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const res = await fetch(`${API_BASE_URL}/ticket-edit/re-edit`, {
       method: "POST",
@@ -517,13 +244,14 @@ export async function runTicketReEdit(selections, targetOdds, mode = "SWAP", tar
   } catch (err) {
     clearTimeout(timer);
     if (err.name === "AbortError") {
-      console.warn(`Re-edit timed out after 25s (mode=${mode})`);
+      console.warn(`Re-edit timed out after ${timeoutMs / 1000}s (mode=${mode}, games=${n})`);
       return { status: "TIMEOUT", mode, final_selections: [] };
     }
     console.error("Ticket re-edit error:", err);
   }
   return { status: "ERROR", mode, final_selections: [] };
 }
+
 
 /**
  * Generate a loadable SportyBet booking code for final selections.
@@ -541,6 +269,29 @@ export async function generateNewBookingCode(selections, countryCode = "ng") {
   }
   return { status: "ERROR", booking_code: "BC-ERROR" };
 }
+
+/**
+ * Phase 14: Generate 100% Verified SportyBet Booking Code with selection reconciliation.
+ */
+export async function generateVerifiedBookingCode(selections, ticketId = "TKT-GEN", region = "ng") {
+  try {
+    const res = await fetch(`${API_BASE_URL}/providers/verified-booking`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        provider: "SPORTYBET",
+        region,
+        statiq_ticket_id: ticketId,
+        selections
+      })
+    });
+    if (res.ok) return await res.json();
+  } catch (err) {
+    console.error("Generate verified booking error:", err);
+  }
+  return { status: "REJECTED", message: "Network/connection failure during booking verification." };
+}
+
 
 /**
  * Ticket Tracker API Helpers

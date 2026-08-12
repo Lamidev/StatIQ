@@ -382,5 +382,35 @@ class TrackedTicket(Base):
     stale_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
 
+class BookingAuditRecord(Base):
+    """
+    Phase 14 Booking Audit Record Entity.
+    Stores comprehensive audit trail for every booking creation and verification attempt.
+    """
+    __tablename__ = "booking_audit_records"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    statiq_ticket_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True, index=True)
+    provider: Mapped[str] = mapped_column(String(50), default="SPORTYBET", index=True)
+    region: Mapped[str] = mapped_column(String(10), default="NG", index=True)
+
+    requested_selections: Mapped[dict] = mapped_column(JSON)
+    resolved_selections: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    returned_selections: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+
+    booking_code: Mapped[Optional[str]] = mapped_column(String(50), nullable=True, index=True)
+    share_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    verification_status: Mapped[str] = mapped_column(String(30), default="CREATED", index=True)
+    verification_errors: Mapped[list] = mapped_column(JSON, default=list)
+
+    total_odds: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    selection_count: Mapped[int] = mapped_column(Integer, default=0)
+
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), default=datetime.datetime.utcnow)
+    updated_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), default=datetime.datetime.utcnow)
+
+
+
 
 

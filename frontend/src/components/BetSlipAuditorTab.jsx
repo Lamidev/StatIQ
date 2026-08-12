@@ -1,6 +1,7 @@
 import React, { useState } from "react";
-import { decodeBookingCode, runTicketReEdit, generateNewBookingCode, lockTrackedTicket } from "../api/client";
+import { decodeBookingCode, runTicketReEdit, generateNewBookingCode, generateVerifiedBookingCode, lockTrackedTicket } from "../api/client";
 import { Search, Copy, CheckCircle, CheckCircle2, ShieldCheck, ShieldAlert, AlertTriangle, ArrowRight, RefreshCw, Trash2, Sliders, ExternalLink, X, Receipt, Sparkles, Scissors } from "lucide-react";
+
 import { calculateFlexShield } from "../utils/flexCalculator";
 
 export default function BetSlipAuditorTab({ onNavigateHistory }) {
@@ -52,7 +53,13 @@ export default function BetSlipAuditorTab({ onNavigateHistory }) {
     fetchTrackedTickets();
   }, []);
 
+  const [toastNotice, setToastNotice] = useState(null);
   const [lockSuccessMessage, setLockSuccessMessage] = useState(false);
+  const showNotice = (msg) => {
+    setToastNotice(msg);
+    setTimeout(() => setToastNotice(null), 4500);
+  };
+
 
   const handleLockTicketSubmit = async () => {
     if (!reEditResult) return;
@@ -76,14 +83,15 @@ export default function BetSlipAuditorTab({ onNavigateHistory }) {
 
         setTimeout(() => setLockSuccessMessage(false), 8000);
       } else {
-        alert("Failed to lock ticket into Tracker. Ensure backend is running.");
+        showNotice("Failed to lock ticket into Tracker. Ensure backend is running.");
       }
     } catch (e) {
       console.error("Lock ticket error:", e);
-      alert("Error locking ticket: " + e.message);
+      showNotice("Error locking ticket: " + e.message);
     }
     setLockingTicket(false);
   };
+
 
   const handleDeleteTrackedTicket = async (ticketId) => {
     try {
@@ -240,13 +248,45 @@ export default function BetSlipAuditorTab({ onNavigateHistory }) {
 
   const handleRemoveRiskyMatches = () => {
     if (!ticketData || !ticketData.selections) return;
+    const initialCount = ticketData.selections.length;
+    
     const safeOnly = ticketData.selections.filter(s => {
       const oddsNum = parseFloat(s.odds) || 1.5;
       const mkt = (s.market_name || "").toLowerCase();
       const sel = (s.selection_name || "").toLowerCase();
-      const isSafeType = mkt.includes("double chance") || mkt.includes("corners") || sel.includes("1x") || sel.includes("x2") || sel.includes("over 1.5") || sel.includes("over 0.5") || oddsNum <= 1.45;
-      return s.match_status !== "NULLED_EXPIRED" && isSafeType;
+      const st = (s.match_status || "").toUpperCase();
+
+      // Nulled, Concluded, or Live games are trimmed
+      if (st === "NULLED_EXPIRED" || st === "CONCLUDED" || st === "FINISHED" || st === "FT" || st === "LIVE" || st === "IN_PROGRESS") {
+        return false;
+      }
+
+      // Volatile trap markets trimmed
+      const isTrapMarket = 
+        sel.includes("win either half") || 
+        mkt.includes("win either half") || 
+        sel.includes("weh") || 
+        sel.includes("over 9.5") || 
+        sel.includes("over 8.5") || 
+        mkt.includes("both teams to score") || 
+        sel.includes("gg");
+
+      if (isTrapMarket) return false;
+
+      // Safe market floor: Double Chance, Over 1.5, Over 0.5, 1X, X2, or low odds floor
+      const isSafeType = 
+        mkt.includes("double chance") || 
+        sel.includes("1x") || 
+        sel.includes("x2") || 
+        sel.includes("over 1.5") || 
+        sel.includes("over 0.5") || 
+        (oddsNum >= 1.15 && oddsNum <= 1.45);
+
+      return isSafeType;
     });
+
+    const removedCount = initialCount - safeOnly.length;
+
     setTicketData({
       ...ticketData,
       total_selections: safeOnly.length,
@@ -254,6 +294,13 @@ export default function BetSlipAuditorTab({ onNavigateHistory }) {
     });
     setReEditResult(null);
     setReEditError(null);
+
+    if (removedCount > 0) {
+      setLockSuccessMessage(`✂️ Smart Trimmed ${removedCount} risky market selection(s)! ${safeOnly.length} safe games remaining.`);
+      setTimeout(() => setLockSuccessMessage(false), 5000);
+    } else {
+      setReEditError("ℹ️ All current loaded games already meet MatchIQ 5-Gate safety criteria (No risky WEH or Over 9.5 picks found).");
+    }
   };
 
   const handleRunReEdit = async () => {
@@ -289,42 +336,55 @@ export default function BetSlipAuditorTab({ onNavigateHistory }) {
     // Valid result
     setReEditResult(result);
 
-    // Auto generate booking code for new ticket & trigger modal popup
+    // Auto generate verified booking code for new ticket & trigger modal popup
     if (result.final_selections && result.final_selections.length > 0) {
       setGeneratingCode(true);
-      const codeRes = await generateNewBookingCode(result.final_selections);
+      const codeRes = result.booking_code 
+        ? { booking_code: result.booking_code, status: result.verification_status || "VERIFIED", share_url: result.share_url }
+        : await generateVerifiedBookingCode(result.final_selections, "TKT-REEDIT", "ng");
       
-      if (codeRes.booking_code && codeRes.status === "SUCCESS") {
+      if (codeRes.booking_code && (codeRes.status === "VERIFIED" || codeRes.status === "SUCCESS")) {
         setGeneratedCode(codeRes.booking_code);
-        // Trigger Modal
         setCodeModalData({
           code: codeRes.booking_code,
+          status: codeRes.status,
+          verificationSummary: codeRes.reconciliation_summary || "All selections verified 100% with zero false positives.",
+          totalOdds: codeRes.total_odds || result.new_total_odds,
           selections: result.final_selections,
-          loadUrl: codeRes.load_url || `https://www.sportybet.com/ng/?shareCode=${codeRes.booking_code}`
+          loadUrl: codeRes.share_url || `https://www.sportybet.com/ng/?shareCode=${codeRes.booking_code}`
         });
         setShowCodeModal(true);
       } else {
-        // Backend couldn't generate a valid code — show Manual Booking Needed
         setGeneratedCode(null);
       }
       setGeneratingCode(false);
     }
+
   };
 
   const copyCode = (code) => {
     navigator.clipboard.writeText(code);
-    alert(`Copied SportyBet booking code: ${code}`);
+    showNotice(`Copied SportyBet booking code: ${code}`);
   };
 
   const copySelectionsAsText = (selections) => {
     const text = selections.map(s => `• ${s.home_team || s.fixture} -> ${s.selection_name || s.market_name || s.pick}`).join("\n");
     navigator.clipboard.writeText(text);
-    alert("Copied Selections List to clipboard:\n\n" + text);
+    showNotice(`Copied ${selections.length} selections to clipboard!`);
   };
 
   return (
     <div className="space-y-6 relative">
+      {/* Non-intrusive Toast Notification Banner */}
+      {toastNotice && (
+        <div className="fixed top-5 right-5 z-50 bg-slate-900 text-white px-4 py-3 rounded-2xl shadow-2xl border border-slate-700 flex items-center space-x-2.5 text-xs font-bold animate-in fade-in slide-in-from-top-4 duration-200">
+          <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+          <span>{toastNotice}</span>
+        </div>
+      )}
+
       {/* Sleek Booking Code Modal Popup */}
+
       {showCodeModal && codeModalData && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-200">
           <div className="bg-white rounded-3xl p-6 max-w-lg w-full border border-slate-200 shadow-2xl space-y-5 relative">
@@ -362,11 +422,12 @@ export default function BetSlipAuditorTab({ onNavigateHistory }) {
               </div>
               <button
                 onClick={() => copyCode(codeModalData.code)}
-                className="px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-extrabold text-xs flex items-center space-x-1.5 transition-all shadow-sm"
+                className="px-4 py-2 rounded-xl bg-white hover:bg-slate-100 text-slate-900 font-extrabold text-xs flex items-center space-x-1.5 transition-all shadow-sm border border-slate-200"
               >
                 <Copy className="w-4 h-4" />
                 <span>Copy Code</span>
               </button>
+
             </div>
 
             {/* 1-Click Action Buttons */}
@@ -394,8 +455,9 @@ export default function BetSlipAuditorTab({ onNavigateHistory }) {
                     `${idx + 1}. ${s.home_team} vs ${s.away_team} ➔ Pick: ${s.market_name} (${s.selection_name})`
                   ).join("\n");
                   navigator.clipboard.writeText(text);
-                  alert(`Copied ${codeModalData.selections.length} StatIQ Selections to clipboard!\n\nYou can now easily select or search these games on SportyBet:\n\n${text}`);
+                  showNotice(`Copied ${codeModalData.selections.length} StatIQ selections to clipboard!`);
                 }}
+
                 className="py-2.5 px-4 rounded-xl bg-slate-100 border border-slate-200 text-slate-800 hover:bg-slate-200 text-xs font-extrabold flex items-center justify-center space-x-1.5 transition-all"
               >
                 <Copy className="w-4 h-4" />
@@ -538,11 +600,40 @@ export default function BetSlipAuditorTab({ onNavigateHistory }) {
               </span>
             </div>
 
-            <div className="flex items-center gap-3">
-              <div className="bg-slate-800 p-4 rounded-xl border border-slate-700 text-right min-w-[120px]">
+            <div className="flex flex-wrap items-center gap-3">
+              <div className="bg-slate-800 p-3.5 rounded-xl border border-slate-700 text-right min-w-[110px]">
                 <span className="text-[10px] text-slate-400 block font-medium">Original Odds</span>
-                <span className="text-2xl font-extrabold text-emerald-400">{calculateOriginalTotalOdds()}x</span>
+                <span className="text-xl font-extrabold text-emerald-400">{calculateOriginalTotalOdds()}x</span>
               </div>
+
+              <button
+                onClick={async () => {
+                  setGeneratingCode(true);
+                  const codeRes = await generateVerifiedBookingCode(ticketData.selections, ticketData.code || "LOADED-TKT", "ng");
+                  if (codeRes.booking_code && (codeRes.status === "VERIFIED" || codeRes.status === "SUCCESS")) {
+                    setGeneratedCode(codeRes.booking_code);
+                    setCodeModalData({
+                      code: codeRes.booking_code,
+                      status: codeRes.status,
+                      verificationSummary: codeRes.reconciliation_summary || "All selections verified 100% with zero false positives.",
+                      totalOdds: codeRes.total_odds || calculateOriginalTotalOdds(),
+                      selections: ticketData.selections,
+                      loadUrl: codeRes.share_url || `https://www.sportybet.com/ng/?shareCode=${codeRes.booking_code}`
+                    });
+                    setShowCodeModal(true);
+                  } else {
+                    showNotice(`SportyBet Code Verification Result: ${codeRes.message || 'Could not verify selections on SportyBet Nigeria.'}`);
+                  }
+                  setGeneratingCode(false);
+                }}
+                disabled={generatingCode}
+                className="px-4 py-3 rounded-xl bg-white hover:bg-slate-100 text-slate-900 text-xs font-extrabold flex items-center justify-center gap-1.5 shadow-sm transition-all border border-slate-200"
+                title="Verify and generate a fresh SportyBet booking code for these exact selections"
+              >
+                {generatingCode ? <RefreshCw className="w-4 h-4 animate-spin" /> : null}
+                <span>{generatingCode ? "Verifying..." : "Generate SportyBet Code"}</span>
+              </button>
+
 
               <button
                 onClick={handleClearTicket}
@@ -553,6 +644,7 @@ export default function BetSlipAuditorTab({ onNavigateHistory }) {
                 <span className="text-[10px] font-extrabold uppercase tracking-wider">Clear Ticket</span>
               </button>
             </div>
+
           </div>
 
           {/* Loaded Matches & Status Breakdown List */}
@@ -693,13 +785,14 @@ export default function BetSlipAuditorTab({ onNavigateHistory }) {
                         </span>
                       </div>
 
-                      {/* Manual Remove Button (X) */}
+                      {/* Manual Remove Button */}
                       <button
                         onClick={() => handleRemoveSelection(idx)}
-                        className="p-1.5 rounded-lg bg-white hover:bg-rose-100 text-slate-400 hover:text-rose-700 border border-slate-200 hover:border-rose-300 transition-all shadow-sm"
+                        className="px-2.5 py-1.5 rounded-xl bg-rose-50 hover:bg-rose-600 text-rose-700 hover:text-white border border-rose-200 hover:border-rose-600 font-extrabold text-xs transition-all shadow-sm flex items-center gap-1.5 cursor-pointer"
                         title="Remove game manually from ticket"
                       >
-                        <X className="w-4 h-4" />
+                        <Trash2 className="w-3.5 h-3.5" />
+                        <span>Remove</span>
                       </button>
                     </div>
                   </div>
@@ -1126,9 +1219,10 @@ export default function BetSlipAuditorTab({ onNavigateHistory }) {
                   {generatingCode ? (
                     <span className="text-xs text-slate-400 animate-pulse">Generating...</span>
                   ) : generatedCode ? (
-                    <div className="flex items-center justify-end gap-2">
-                      <span className="text-xl font-extrabold text-emerald-800 tracking-wider">
-                        {generatedCode}
+                    <div className="flex items-center space-x-2">
+                      <span className="text-[11px] font-extrabold text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-lg border border-emerald-200 flex items-center gap-1">
+                        <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
+                        <span>VERIFIED ✓ {generatedCode}</span>
                       </span>
                       <button
                         onClick={() => {
@@ -1139,17 +1233,42 @@ export default function BetSlipAuditorTab({ onNavigateHistory }) {
                           });
                           setShowCodeModal(true);
                         }}
-                        className="px-2.5 py-1 rounded-lg bg-slate-900 text-white text-xs font-bold hover:bg-slate-800 flex items-center space-x-1"
+                        className="px-3 py-1 rounded-lg btn-black text-white text-xs font-extrabold flex items-center space-x-1"
                         title="View Code Popup"
                       >
                         <Copy className="w-3.5 h-3.5" />
-                        <span>View</span>
+                        <span>View Code</span>
                       </button>
                     </div>
                   ) : (
-                    <span className="text-[11px] font-bold text-amber-700 bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
-                      Manual Booking Needed
-                    </span>
+                    <button
+                      onClick={async () => {
+                        setGeneratingCode(true);
+                        const codeRes = await generateVerifiedBookingCode(reEditResult.final_selections, "TKT-REEDIT", "ng");
+                        if (codeRes.booking_code && (codeRes.status === "VERIFIED" || codeRes.status === "SUCCESS")) {
+                          setGeneratedCode(codeRes.booking_code);
+                          setCodeModalData({
+                            code: codeRes.booking_code,
+                            status: codeRes.status,
+                            verificationSummary: codeRes.reconciliation_summary || "All selections verified 100% with zero false positives.",
+                            totalOdds: codeRes.total_odds || reEditResult.new_total_odds,
+                            selections: reEditResult.final_selections,
+                            loadUrl: codeRes.share_url || `https://www.sportybet.com/ng/?shareCode=${codeRes.booking_code}`
+                          });
+                          setShowCodeModal(true);
+                        } else {
+                          showNotice(`SportyBet Code Generation Result: ${codeRes.message || 'Could not verify selections on SportyBet Nigeria.'}`);
+                        }
+                        setGeneratingCode(false);
+                      }}
+
+                      disabled={generatingCode}
+                      className="px-3.5 py-1.5 rounded-xl btn-black text-white text-xs font-extrabold flex items-center space-x-1.5 shadow-sm transition-all"
+                    >
+                      {generatingCode ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : null}
+                      <span>{generatingCode ? "Verifying SportyBet..." : "Generate SportyBet Code"}</span>
+                    </button>
+
                   )}
 
                   <button

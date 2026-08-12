@@ -15,10 +15,12 @@ Modes:
              Use when you want a smaller, clean, high-confidence ticket.
 """
 
+import asyncio
 import math
 import logging
 from typing import List, Dict, Any, Optional, Tuple
 from app.predictions.leg_odds_calculator import calculate_dynamic_leg_config
+
 
 logger = logging.getLogger("matchiq.ticket_reeditor")
 
@@ -313,16 +315,19 @@ def _best_auditor_pick_for_game(
     original_odds: Optional[float] = None,
     original_market: Optional[str] = None,
     original_selection: Optional[str] = None,
+    live_odds_data: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """
     Unified Intelligence Pick Selector for AUDITOR mode.
 
-    Re-edits each game on your ticket based on its original market category & 3-Signal Matrix:
-    - Draw No Bet (DNB) IS COMPLETELY ELIMINATED.
-    - 1X2 / Match Winner / 2nd Half -> Upgrades to Double Chance (1X/X2) or Double Chance (12) for zero-draw H2H
-    - Handicap Lines -> Upgrades to Asian Handicap (+1.5) on underdog or Double Chance
-    - Goal Lines (Over 2.5/3.5/BTTS/GG) -> Upgrades to Over 1.5 Goals or Team Over 0.5 Goals
-    - Corners / Bookings -> Upgrades to Total Corners Over 7.5 or Double Chance
+    When live_odds_data is provided (ranked SportyBet odds for this specific game),
+    uses _pick_from_live_odds() to select the highest-probability pick that actually
+    EXISTS on SportyBet, with its real odds. This guarantees:
+      - The market and outcome are available for booking on SportyBet.
+      - The odds shown are the real SportyBet odds, not flat estimates.
+      - The favourite is determined by SportyBet's own pricing, not ELO alone.
+
+    Falls back to ELO/H2H-based category logic if live odds are unavailable.
     """
     orig_o = float(original_odds) if (original_odds and float(original_odds) > 1.05) else per_game_target_odds
     mkt_raw = (original_market or "").lower()
@@ -358,8 +363,44 @@ def _best_auditor_pick_for_game(
 
     is_close_matchup = is_close_matchup or is_tight_odds
 
+    # ── LIVE ODDS PATH: Use real SportyBet odds if available ──────────────────
+    # This is the primary path when live odds have been fetched for this game.
+    # _pick_from_live_odds scans the ranked list and returns the first pick that
+    # passes the min_prob threshold (72%) and matches a safe market category.
+    if live_odds_data:
+        live_pick = _pick_from_live_odds(
+            ranked_odds=live_odds_data,
+            favored_team=favored_team,
+            favored_dc=favored_dc,
+            min_prob=0.72,
+        )
+        if live_pick:
+            real_odds = live_pick.get("raw_odds", 1.25)
+            real_prob = live_pick.get("true_prob", 0.80)
+            reason = (
+                f"Picked {live_pick['selection_name']} @ {real_odds} — real SportyBet odds "
+                f"(implied prob {round(live_pick['implied_prob']*100, 1)}%). "
+                f"SportyBet prices {favored_team} as favourite."
+            )
+            return {
+                "market_name":      live_pick["market_name"],
+                "selection_name":   live_pick["selection_name"],
+                "estimated_prob":   round(real_prob, 3),
+                "estimated_odds":   round(real_odds, 2),
+                "action":           "AUDITED_LIVE_ODDS",
+                "reason":           reason,
+                "confidence_source": "SPORTYBET_LIVE_ODDS",
+                # Pass through IDs so reconciliation can use them directly
+                "_sportybet_market_id":  live_pick.get("market_id"),
+                "_sportybet_outcome_id": live_pick.get("outcome_id"),
+                "_sportybet_specifier":  live_pick.get("specifier"),
+                "_sportybet_event_id":   live_pick.get("event_id"),
+            }
+        # Live odds available but no pick met threshold — fall through to ELO path
+        logger.debug(f"No live pick met threshold for {home} vs {away} — falling back to ELO/category logic")
+
+    # ── FALLBACK PATH: ELO / Category-based logic (no live odds available) ───
     # Rule 1: High-Quality Safe Original Pick Preservation Rule
-    # If original pick is already a safe, model-confirmed market with odds between 1.15 and 1.45, preserve it directly!
     is_straight_win_or_over15 = any(x in mkt_raw for x in ["1x2", "match result", "1up", "2up", "over/under", "over 1.5"])
     if is_straight_win_or_over15 and original_odds and 1.15 <= float(original_odds) <= 1.45 and per_game_target_odds <= 1.30:
         return {
@@ -372,19 +413,22 @@ def _best_auditor_pick_for_game(
             "confidence_source": "STATIQ_CONFIRMED_PICK",
         }
 
-    # ── Category 1: Corners Family ──
+    # ── Category 1: Corners Family (Capped at safe thresholds Over 7.5 or Team Over 4.5) ──
     if any(k in mkt_raw or k in sel_raw for k in ["corner", "corners"]):
         if (rotation_index % 2) == 1:
             market, pick, prob = "Corners", f"{favored_team} Corners Over 4.5", 0.90
         else:
             market, pick, prob = "Corners", "Total Corners Over 7.5", 0.88
 
-    # ── Category 2: Combo & Specials Family ──
-    elif any(k in mkt_raw or k in sel_raw for k in ["or over", "team or over", "win or over", "or under"]):
-        if (rotation_index % 2) == 1:
-            market, pick, prob = "Win Either Half", f"{favored_team} Win Either Half", 0.89
+    # ── Category 2: Combo, Specials & Win Either Half Family ──
+    elif any(k in mkt_raw or k in sel_raw for k in ["or over", "team or over", "win or over", "or under", "win either half", "weh"]):
+        if favored_side == "HOME":
+            if (original_odds and float(original_odds) < 1.15) or per_game_target_odds < 1.15:
+                market, pick, prob = "Home Team or Over 2.5", f"{favored_team} or Over 2.5 Goals", 0.90
+            else:
+                market, pick, prob = "Double Chance", favored_dc, max(0.88, fav_prob)
         else:
-            market, pick, prob = "Combo Market", f"{favored_team} or Over 2.5 Goals", 0.88
+            market, pick, prob = "Double Chance", favored_dc, max(0.88, fav_prob)
 
     # ── Category 3: Both Teams To Score (GG/NG) Family ──
     elif any(k in mkt_raw or k in sel_raw for k in ["gg", "ng", "btts", "both teams"]):
@@ -392,10 +436,7 @@ def _best_auditor_pick_for_game(
 
     # ── Category 4: Handicap & Cushion Lines Family ──
     elif "handicap" in mkt_raw or "handicap" in sel_raw or "(+" in sel_raw or "(-" in sel_raw:
-        if elo_gap >= 180:
-            market, pick, prob = "Asian Handicap", f"{favored_team} (-0.5)", 0.90
-        else:
-            market, pick, prob = "Double Chance", favored_dc, max(0.88, fav_prob)
+        market, pick, prob = "Double Chance", favored_dc, max(0.88, fav_prob)
 
     # ── Category 5: Universal SportyBet Goal & Winner Markets ──
     elif any(k in mkt_raw or k in sel_raw for k in ["over", "under", "goals", "bounds"]):
@@ -406,9 +447,11 @@ def _best_auditor_pick_for_game(
 
     # ── Category 6: Universal SportyBet 1X2 / Double Chance ──
     else:
-        if per_game_target_odds >= 1.35:
+        if (original_odds and float(original_odds) < 1.15) and favored_side == "HOME":
+            market, pick, prob = "Home Team or Over 2.5", f"{favored_team} or Over 2.5 Goals", 0.90
+        elif per_game_target_odds >= 1.35:
             market = original_market or "1X2"
-            pick = f"{favored_team} Win" if favored_side == "HOME" else f"{favored_team} Win"
+            pick = f"{favored_team} Win"
             prob = max(0.75, fav_prob)
         elif original_odds and float(original_odds) <= 1.28:
             market = original_market or "1X2"
@@ -417,31 +460,21 @@ def _best_auditor_pick_for_game(
         else:
             market, pick, prob = "Double Chance", favored_dc, max(0.88, fav_prob)
 
-    # Calculate real market odds dynamically using per_game_target_odds
-    if per_game_target_odds > 1.05:
-        calc_odds = round(per_game_target_odds, 2)
-    elif original_odds and float(original_odds) >= 1.12:
+    # Fallback odds: use original odds if realistic, else derive from probability
+    if original_odds and float(original_odds) >= 1.12:
         calc_odds = round(float(original_odds), 2)
     else:
         calc_odds = round(max(1.12, (1.0 / max(prob, 0.70)) / 1.05), 2)
 
-    calc_odds = max(1.12, calc_odds)
-
     # Detailed human-readable justification log
     if market == "Corners":
         reason = f"Preserved Corners family pick @ {calc_odds} — Upgraded line to Total Corners Over 7.5 for maximum safety."
-    elif market == "Combo Market":
-        reason = f"Preserved Combo family pick @ {calc_odds} — Upgraded to {pick}."
-    elif market == "Both Teams To Score":
-        reason = f"Preserved GG/NG family pick @ {calc_odds} — H2H goal scoring trends support high-probability goals."
     elif market == "Double Chance":
-        reason = f"Upgraded to {pick} @ {calc_odds} — SportyBet prices {favored_team} as favorite & H2H trends support 2-way win/draw buffer."
-    elif market == "Asian Handicap (+1.5)":
-        reason = f"Upgraded to {pick} @ {calc_odds} — Gives {underdog_team} a 1.5-goal safety cushion."
-    elif market == "Team Goals":
-        reason = f"Upgraded to {pick} @ {calc_odds} — {favored_team} averages high goal scoring rate."
+        reason = f"Upgraded to {pick} @ {calc_odds} — ELO/H2H signals price {favored_team} as favourite (live odds unavailable)."
+    elif market == "Over/Under Goals":
+        reason = f"Upgraded to {pick} @ {calc_odds} — High-probability goal line (live odds unavailable)."
     else:
-        reason = f"Upgraded to {pick} @ {calc_odds} — Structural high-probability market (92%+ win chance)."
+        reason = f"Upgraded to {pick} @ {calc_odds} — Structural high-probability market."
 
     return {
         "market_name":    market,
@@ -450,7 +483,7 @@ def _best_auditor_pick_for_game(
         "estimated_odds": calc_odds,
         "action":         "AUDITED_UPGRADED",
         "reason":         reason,
-        "confidence_source": "MATCHIQ_REEDIT_ENGINE",
+        "confidence_source": "MATCHIQ_ELO_FALLBACK",
     }
 
 
@@ -468,7 +501,7 @@ def _upgrade_handicap_selection(sel: Dict[str, Any]) -> Dict[str, Any]:
     # Upgrade Over 2 / Over 2.5 -> Over 1.5
     if "over 2" in pick or "over 2.5" in pick or ("over" in mkt and ("2" in pick or "2.5" in pick)):
         if "over 1.5" not in pick:
-            return {
+            upgraded = {
                 **sel,
                 "market_name": "Over/Under",
                 "selection_name": "Over 1.5",
@@ -476,6 +509,12 @@ def _upgrade_handicap_selection(sel: Dict[str, Any]) -> Dict[str, Any]:
                 "estimated_prob": min(0.95, round(float(sel.get("estimated_prob", 0.82)) * 1.10, 3)),
                 "action": "OVER_15_UPGRADED"
             }
+            # Pop old market/outcome IDs since line has upgraded to Over 1.5
+            upgraded.pop("_sportybet_market_id", None)
+            upgraded.pop("_sportybet_outcome_id", None)
+            upgraded.pop("provider_market_id", None)
+            upgraded.pop("provider_outcome_id", None)
+            return upgraded
 
     if "handicap" in mkt or "handicap" in pick or "(+1" in pick or "(-1" in pick or "(-0.5)" in pick:
         if "(+1.0)" in pick or "+1.0" in pick or "(+1)" in pick or "+1" in pick:
@@ -483,7 +522,7 @@ def _upgrade_handicap_selection(sel: Dict[str, Any]) -> Dict[str, Any]:
             new_mkt = "Asian Handicap (+1.5)"
             new_pick = f"{home} (+1.5)" if is_home else f"{away} (+1.5)"
             
-            return {
+            upgraded = {
                 **sel,
                 "market_name": new_mkt,
                 "selection_name": new_pick,
@@ -491,12 +530,18 @@ def _upgrade_handicap_selection(sel: Dict[str, Any]) -> Dict[str, Any]:
                 "estimated_prob": min(0.95, round(float(sel.get("estimated_prob", 0.85)) * 1.08, 3)),
                 "action": "HANDICAP_UPGRADED"
             }
+            upgraded.pop("_sportybet_market_id", None)
+            upgraded.pop("_sportybet_outcome_id", None)
+            upgraded.pop("provider_market_id", None)
+            upgraded.pop("provider_outcome_id", None)
+            return upgraded
+
         elif "(-1.0)" in pick or "(-1)" in pick or "(-0.5)" in pick or "-1.0" in pick:
             is_home = "home" in pick or home.lower() in pick
             new_mkt = "Double Chance"
             new_pick = f"{home} or Draw (1X)" if is_home else f"Draw or {away} (X2)"
 
-            return {
+            upgraded = {
                 **sel,
                 "market_name": new_mkt,
                 "selection_name": new_pick,
@@ -504,6 +549,11 @@ def _upgrade_handicap_selection(sel: Dict[str, Any]) -> Dict[str, Any]:
                 "estimated_prob": min(0.95, round(float(sel.get("estimated_prob", 0.80)) * 1.12, 3)),
                 "action": "HANDICAP_UPGRADED"
             }
+            upgraded.pop("_sportybet_market_id", None)
+            upgraded.pop("_sportybet_outcome_id", None)
+            upgraded.pop("provider_market_id", None)
+            upgraded.pop("provider_outcome_id", None)
+            return upgraded
 
     return sel
 
@@ -595,6 +645,15 @@ def _build_replacement_candidates(
 
                 candidates.append({
                     "fixture_id": str(ev.get("eventId") or f"IQ_{len(candidates)+100}"),
+                    "game_id": str(ev.get("eventId")),
+                    "provider_event_id": str(ev.get("eventId")),
+                    "provider_market_id": str(mkt.get("id")) if mkt.get("id") else None,
+                    "provider_outcome_id": str(o.get("id")) if o.get("id") else None,
+                    "provider_specifier": mkt.get("specifier"),
+                    "_sportybet_market_id": str(mkt.get("id")) if mkt.get("id") else None,
+                    "_sportybet_outcome_id": str(o.get("id")) if o.get("id") else None,
+                    "_sportybet_specifier": mkt.get("specifier"),
+                    "_sportybet_event_id": str(ev.get("eventId")),
                     "home_team": h_name,
                     "away_team": a_name,
                     "competition": ev.get("tournamentName") or "Top League",
@@ -685,11 +744,9 @@ async def re_edit_ticket(
     seed_val = reshuffle_seed if reshuffle_seed is not None else int(time.time() * 1000)
     rng = random.Random(seed_val)
 
-    # Step 1: Score all selections
-    scored = []
-    for sel in selections:
-        scored_sel = await score_selection(sel)
-        scored.append(scored_sel)
+    # Step 1: Score all selections in parallel (each is independent)
+    scored = list(await asyncio.gather(*[score_selection(sel) for sel in selections]))
+
 
     # Determine working leg count and per_game_target
     if target_mode == "GAMES":
@@ -743,11 +800,11 @@ async def re_edit_ticket(
     # Step 2: For SWAP mode or GAMES mode padding, pre-fetch live replacements ONCE
     live_events_cache: List[Dict[str, Any]] = []
     if mode == "SWAP" or target_mode == "GAMES":
-        import asyncio
         try:
             live_events_cache = await asyncio.to_thread(_fetch_live_replacements_safe)
         except Exception:
             live_events_cache = []
+
 
     # Step 3: Apply mode logic on working_scored
     final_selections = []
@@ -756,8 +813,14 @@ async def re_edit_ticket(
     auditor_rotation_idx = seed_val % 10 if seed_val else 0
 
     h2h_cache: Dict[str, Dict[str, Any]] = {}
+    # Per-game live odds cache: game_id -> ranked odds list from SportyBet
+    live_odds_cache_per_game: Dict[str, List[Dict[str, Any]]] = {}
+
     if mode == "AUDITOR":
         from app.predictions.live_calculator import get_team_rating
+        from app.services.sportybet_reconciliation import SportyBetVerificationEngine
+
+        # Pre-build ELO cache
         for sel in working_scored:
             h = sel.get("home_team", "")
             a = sel.get("away_team", "")
@@ -774,6 +837,46 @@ async def re_edit_ticket(
                     "h2h_available": False,
                 }
 
+        # Pre-fetch ranked live odds for every AUDITOR game in parallel.
+        # Semaphore=12: up to 12 concurrent SportyBet market requests.
+        # Each request has a 3s timeout (set in get_event_markets).
+        # The entire gather is bounded to 25s max via wait_for —
+        # worst-case: ceil(N/12) batches × 3s = ~12s for 50 games.
+        # If the 25s cap is exceeded, we fall back to ELO for all games.
+        _engine = SportyBetVerificationEngine(db_session=None)
+        _sem = asyncio.Semaphore(12)
+
+        async def _fetch_ranked_for_sel(sel):
+            ev_id = str(
+                sel.get("external_fixture_id") or
+                sel.get("game_id") or
+                sel.get("fixture_id") or ""
+            )
+            if not ev_id or ev_id in ("None", "") or ev_id.startswith("AUDIT_"):
+                return ev_id, []
+            async with _sem:
+                ranked = await _engine.fetch_ranked_live_odds(
+                    event_id=ev_id,
+                    home_team=sel.get("home_team", ""),
+                    away_team=sel.get("away_team", ""),
+                    region="ng"
+                )
+            return ev_id, ranked
+
+        try:
+            results = await asyncio.wait_for(
+                asyncio.gather(*[_fetch_ranked_for_sel(s) for s in working_scored]),
+                timeout=25.0  # Hard cap: never stall the pipeline beyond 25s
+            )
+            for ev_id, ranked in results:
+                if ev_id and ranked:
+                    live_odds_cache_per_game[ev_id] = ranked
+            logger.info(f"AUDITOR: fetched live odds for {len(live_odds_cache_per_game)}/{len(working_scored)} games")
+        except asyncio.TimeoutError:
+            logger.warning(f"AUDITOR live odds pre-fetch exceeded 25s for {len(working_scored)} games — using ELO fallback for all")
+        except Exception as _e:
+            logger.warning(f"AUDITOR live odds pre-fetch error: {_e} — falling back to ELO for all games")
+
     for sel in working_scored:
         home = sel.get("home_team", "")
         away = sel.get("away_team", "")
@@ -789,6 +892,10 @@ async def re_edit_ticket(
             h2h_signals = h2h_cache.get(match_key, {})
             game_id = sel.get("game_id") or sel.get("external_fixture_id") or sel.get("fixture_id")
 
+            # Retrieve pre-fetched live odds for this specific game (if available)
+            _ev_id = str(game_id or "")
+            live_odds_for_game = live_odds_cache_per_game.get(_ev_id) or []
+
             auditor_upgrade = _best_auditor_pick_for_game(
                 home, away, per_game_target, auditor_rotation_idx,
                 game_id=game_id,
@@ -798,6 +905,7 @@ async def re_edit_ticket(
                 original_odds=sel.get("odds"),
                 original_market=sel.get("market_name"),
                 original_selection=sel.get("selection_name"),
+                live_odds_data=live_odds_for_game,  # ← Real SportyBet odds
             )
             auditor_rotation_idx += 1
 
@@ -811,6 +919,14 @@ async def re_edit_ticket(
             final_pick = {
                 "fixture_id": game_id or "AUDIT_001",
                 "game_id": game_id,
+                "provider_event_id": auditor_upgrade.get("_sportybet_event_id") or sel.get("provider_event_id") or game_id,
+                "provider_market_id": auditor_upgrade.get("_sportybet_market_id") or sel.get("provider_market_id"),
+                "provider_outcome_id": auditor_upgrade.get("_sportybet_outcome_id") or sel.get("provider_outcome_id"),
+                "provider_specifier": auditor_upgrade.get("_sportybet_specifier") or sel.get("provider_specifier"),
+                "_sportybet_market_id": auditor_upgrade.get("_sportybet_market_id") or sel.get("_sportybet_market_id"),
+                "_sportybet_outcome_id": auditor_upgrade.get("_sportybet_outcome_id") or sel.get("_sportybet_outcome_id"),
+                "_sportybet_specifier": auditor_upgrade.get("_sportybet_specifier") or sel.get("_sportybet_specifier"),
+                "_sportybet_event_id": auditor_upgrade.get("_sportybet_event_id") or sel.get("_sportybet_event_id") or game_id,
                 "home_team": home,
                 "away_team": away,
                 "competition": sel.get("competition", "Domestic League"),
@@ -885,29 +1001,18 @@ async def re_edit_ticket(
             final_selections.append(cand)
             used_match_keys.append(cand["match_key"])
 
-    # Step 4: Target Odds Calibration Pass (when target_mode == "ODDS" and target_odds > 1.0)
-    if target_mode == "ODDS" and target_odds > 1.0 and final_selections:
-        current_total = 1.0
-        for s in final_selections:
-            current_total *= float(s.get("estimated_odds") or s.get("odds") or 1.25)
-
-        if current_total > 0 and abs(current_total - target_odds) > 0.02:
-            n_legs_final = len(final_selections)
-            scale = (target_odds / current_total) ** (1.0 / n_legs_final)
-
-            for s in final_selections:
-                old_o = float(s.get("estimated_odds") or s.get("odds") or 1.25)
-                new_o = round(max(1.08, old_o * scale), 2)
-                s["estimated_odds"] = new_o
-                s["odds"] = new_o
-
-            prod_except_last = 1.0
-            for s in final_selections[:-1]:
-                prod_except_last *= float(s["estimated_odds"])
-            if prod_except_last > 0:
-                last_o = round(target_odds / prod_except_last, 2)
-                final_selections[-1]["estimated_odds"] = max(1.08, last_o)
-                final_selections[-1]["odds"] = max(1.08, last_o)
+    # Step 4: Odds Accuracy Pass
+    # Ensures each selection's displayed odds reflect real SportyBet values.
+    # For AUDITOR picks that came from live odds (confidence_source=SPORTYBET_LIVE_ODDS),
+    # the estimated_odds is already real. For ELO fallback picks, keep as-is.
+    # NOTE: The old uniform calibration pass (scale all odds to hit target) has been
+    # intentionally removed — it was causing all legs to show identical flat odds.
+    for s in final_selections:
+        # Promote raw_odds -> estimated_odds if available and not yet set correctly
+        raw = s.get("raw_odds")
+        if raw and float(raw) >= 1.08:
+            s["estimated_odds"] = float(raw)
+            s["odds"] = float(raw)
 
     # Step 5: Calculate final total odds from final selections
     new_total_odds = 1.0

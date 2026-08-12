@@ -163,6 +163,28 @@ async def build_ai_ticket(req: BuildTicketRequest):
         reshuffle_seed=req.reshuffle_seed
     )
 
+    booking_code = None
+    share_url = None
+    verification_status = None
+    reconciliation_summary = None
+
+    if built_ticket.approved_legs:
+        try:
+            from app.services.sportybet_reconciliation import SportyBetVerificationEngine
+            ver_engine = SportyBetVerificationEngine(db)
+            ver_res = await ver_engine.generate_verified_booking(
+                statiq_ticket_id="AI-TKT-BUILD",
+                selections=built_ticket.approved_legs,
+                region="ng"
+            )
+            if ver_res.get("status") == "VERIFIED":
+                booking_code = ver_res.get("booking_code")
+                share_url = ver_res.get("share_url")
+                verification_status = ver_res.get("status")
+                reconciliation_summary = ver_res.get("reconciliation_summary")
+        except Exception as e:
+            logger.warning(f"Auto verified booking generation error in AI ticket builder: {e}")
+
     return {
         "status": "SUCCESS",
         "ticket": {
@@ -177,6 +199,11 @@ async def build_ai_ticket(req: BuildTicketRequest):
             "approved_legs": built_ticket.approved_legs,
             "rejected_picks": built_ticket.rejected_picks,
             "total_evaluated": built_ticket.total_evaluated,
-            "decision_audit_summary": built_ticket.decision_audit_summary
+            "decision_audit_summary": built_ticket.decision_audit_summary,
+            "booking_code": booking_code,
+            "share_url": share_url,
+            "verification_status": verification_status,
+            "reconciliation_summary": reconciliation_summary
         }
     }
+

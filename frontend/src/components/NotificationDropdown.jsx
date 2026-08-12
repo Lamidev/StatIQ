@@ -187,7 +187,7 @@ export default function NotificationDropdown({ onSelectTicket }) {
                     </p>
                     <div className="flex items-center justify-between mt-1.5 text-[10px] text-slate-500 font-medium">
                       <span className="font-extrabold text-indigo-900 bg-indigo-50 px-2 py-0.5 rounded border border-indigo-200 uppercase">
-                        Feature: {item.mode || "REMOVE"} Mode
+                        Feature: {item.mode || "AUDITOR"} Mode
                       </span>
                       <span className="text-slate-700 font-bold flex items-center space-x-1">
                         <span>Click to view ticket</span>

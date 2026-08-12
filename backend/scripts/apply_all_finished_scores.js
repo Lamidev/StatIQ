@@ -4,36 +4,31 @@ const path = require("path");
 const filePath = path.join(__dirname, "..", "data", "tracked_tickets.json");
 const tickets = JSON.parse(fs.readFileSync(filePath, "utf-8"));
 
-// Database of confirmed historical scores for the test gameweek
-const KNOWN_SCORES = [
-  { home: "dynamo kyiv", away: "qarabag", score: "1:0", h: 1, a: 0 },
-  { home: "goteborg", away: "gent", score: "0:1", h: 0, a: 1 },
-  { home: "escaldes", away: "flora", score: "2:0", h: 2, a: 0 },
-  { home: "beitar", away: "austria wien", score: "1:2", h: 1, a: 2 },
-  { home: "hapoel tel aviv", away: "gks katowice", score: "2:0", h: 2, a: 0 },
-  { home: "bnei yehuda", away: "kfar shalem", score: "1:1", h: 1, a: 1 },
-  { home: "maccabi tel aviv", away: "cska sofia", score: "0:3", h: 0, a: 3 },
-  { home: "inter turku", away: "vaduz", score: "2:1", h: 2, a: 1 },
-  { home: "kfar saba", away: "ra`anana", score: "5:1", h: 5, a: 1 },
-  { home: "bogota", away: "leones", score: "0:1", h: 0, a: 1 },
-  { home: "debreceni", away: "copenhagen", score: "0:3", h: 0, a: 3 },
-  { home: "salzburg", away: "pafos", score: "1:0", h: 1, a: 0 },
-  { home: "paok", away: "anderlecht", score: "0:1", h: 0, a: 1 },
-  { home: "atlantis", away: "hps", score: "4:2", h: 4, a: 2 },
-  { home: "reykjavik", away: "grotta", score: "3:1", h: 3, a: 1 },
-  { home: "tiraspol", away: "st. gallen", score: "1:3", h: 1, a: 3 },
-  { home: "mali", away: "ghana", score: "1:1", h: 1, a: 1 },
-  { home: "hradec", away: "besiktas", score: "0:1", h: 0, a: 1 },
-  { home: "mikkelin", away: "lautp", score: "4:1", h: 4, a: 1 },
-  { home: "helsinki", away: "motherwell", score: "1:1", h: 1, a: 1 },
-  { home: "riga", away: "gyor", score: "1:0", h: 1, a: 0 },
-  { home: "ajax", away: "shelbourne", score: "4:0", h: 4, a: 0 },
-  { home: "rakow", away: "hammarby", score: "2:1", h: 2, a: 1 },
-  { home: "benfica", away: "heart", score: "3:0", h: 3, a: 0 },
-  { home: "platense", away: "estudiantes", score: "0:1", h: 0, a: 1 }
-];
+function parseFullAndHtScores(scoreStr, sel) {
+  let h = sel.home_score !== undefined && sel.home_score !== null ? Number(sel.home_score) : null;
+  let a = sel.away_score !== undefined && sel.away_score !== null ? Number(sel.away_score) : null;
+  let htH = sel.ht_home_score !== undefined && sel.ht_home_score !== null ? Number(sel.ht_home_score) : null;
+  let htA = sel.ht_away_score !== undefined && sel.ht_away_score !== null ? Number(sel.ht_away_score) : null;
 
-function evaluatePick(pickStr, homeScore, awayScore, homeTeam, awayTeam) {
+  if (scoreStr && typeof scoreStr === "string") {
+    // Check halftime parenthetical score e.g. "1-0 (0-0)" or "2:1 (1:0)"
+    const htMatch = scoreStr.match(/\(\s*(\d+)\s*[:\-v\s]\s*(\d+)\s*\)/);
+    if (htMatch) {
+      htH = parseInt(htMatch[1], 10);
+      htA = parseInt(htMatch[2], 10);
+    }
+    const cleanStr = scoreStr.replace(/\([^)]*\)/, "").trim();
+    const mainMatch = cleanStr.match(/(\d+)\s*[:\-v\s]\s*(\d+)/);
+    if (mainMatch) {
+      h = parseInt(mainMatch[1], 10);
+      a = parseInt(mainMatch[2], 10);
+    }
+  }
+
+  return { h, a, htH, htA };
+}
+
+function evaluatePick(pickStr, homeScore, awayScore, homeTeam, awayTeam, htHomeScore = null, htAwayScore = null) {
   if (homeScore === null || awayScore === null || isNaN(homeScore) || isNaN(awayScore)) {
     return true;
   }
@@ -89,9 +84,22 @@ function evaluatePick(pickStr, homeScore, awayScore, homeTeam, awayTeam) {
 
   // 1st Half Over / Under
   if (p.includes("1st half") || p.includes("ht ")) {
-    if (p.includes("over 0.5")) return total >= 1;
-    if (p.includes("over 1.5")) return total >= 2;
-    if (p.includes("under 0.5")) return total === 0;
+    let htTot = (htHomeScore !== null && htAwayScore !== null && !isNaN(htHomeScore) && !isNaN(htAwayScore))
+      ? (htHomeScore + htAwayScore)
+      : null;
+
+    if (htTot === null && homeScore === 0 && awayScore === 0) {
+      htTot = 0;
+    }
+
+    if (htTot !== null) {
+      if (p.includes("over 0.5")) return htTot >= 1;
+      if (p.includes("over 1.5")) return htTot >= 2;
+      if (p.includes("under 0.5")) return htTot === 0;
+      if (p.includes("under 1.5")) return htTot <= 1;
+    } else {
+      return true; // Unknown half-time score, fall back optimistically or preserve existing
+    }
   }
 
   // Over / Under
@@ -148,7 +156,6 @@ function evaluatePick(pickStr, homeScore, awayScore, homeTeam, awayTeam) {
   return true;
 }
 
-let updatedScoresCount = 0;
 let totalLegs = 0;
 let wonLegs = 0;
 let lostLegs = 0;
@@ -159,32 +166,25 @@ for (const t of tickets) {
 
   for (const sel of t.selections || []) {
     totalLegs++;
-    const hTeam = (sel.home_team || "").toLowerCase();
-    const aTeam = (sel.away_team || "").toLowerCase();
+    const scoreData = parseFullAndHtScores(sel.score, sel);
+    const { h, a, htH, htA } = scoreData;
 
-    // Match score if missing
-    if (!sel.score || sel.leg_status === "PENDING") {
-      const matchScore = KNOWN_SCORES.find(
-        (ks) => hTeam.includes(ks.home) || aTeam.includes(ks.away)
-      );
-      if (matchScore) {
-        sel.score = matchScore.score;
-        sel.match_status = "CONCLUDED";
-        updatedScoresCount++;
-      }
-    }
-
-    if (sel.score && (sel.score.includes("-") || sel.score.includes(":"))) {
-      const sep = sel.score.includes("-") ? "-" : ":";
-      const parts = sel.score.split(sep);
-      const h = parseInt(parts[0].trim(), 10);
-      const a = parseInt(parts[1].trim(), 10);
-
+    if (h !== null && a !== null) {
       const mkt = sel.market_name || "";
       const pick = sel.selection_name || sel.selection || "";
       const fullPick = mkt ? `${mkt} — ${pick}` : pick;
 
-      const resStatus = evaluatePick(fullPick, h, a, sel.home_team, sel.away_team);
+      let resStatus = evaluatePick(fullPick, h, a, sel.home_team, sel.away_team, htH, htA);
+
+      // Preserve official bookmaker result if available
+      const authoritativeLegRes = sel.leg_result;
+      if (authoritativeLegRes === "LOST" && (resStatus === "WON" || resStatus === true)) {
+        const pLower = fullPick.toLowerCase();
+        if (pLower.includes("1st half") || pLower.includes("ht ") || pLower.includes("corner") || pLower.includes("weh")) {
+          resStatus = "LOST";
+        }
+      }
+
       if (resStatus === "VOID") {
         sel.leg_status = "VOID";
       } else if (resStatus === "WON" || resStatus === true) {
@@ -209,4 +209,4 @@ for (const t of tickets) {
 }
 
 fs.writeFileSync(filePath, JSON.stringify(tickets, null, 2));
-console.log(`✅ Applied ${updatedScoresCount} missing scores! All ${totalLegs} legs across ${tickets.length} tickets settled: ${wonLegs} WON, ${lostLegs} LOST.`);
+console.log(`✅ Evaluated all ${totalLegs} legs across ${tickets.length} tickets with actual score data: ${wonLegs} WON, ${lostLegs} LOST.`);

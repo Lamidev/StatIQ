@@ -235,13 +235,20 @@ class SportyBetAdapter(BookmakerAdapter):
                 sel_name = out.get("desc") or "1"
                 odds_val = 1.50
 
+                provider_mkt_id = None
+                provider_oc_id = None
+                provider_spec = None
+
                 if markets and len(markets) > 0:
                     mkt = markets[0]
                     mkt_name = mkt.get("desc") or mkt.get("name") or mkt_name
+                    provider_mkt_id = str(mkt.get("id")) if mkt.get("id") else None
+                    provider_spec = mkt.get("specifier")
                     mkt_outcomes = mkt.get("outcomes", [])
                     if mkt_outcomes and len(mkt_outcomes) > 0:
                         sel_item = mkt_outcomes[0]
                         sel_name = sel_item.get("desc") or sel_item.get("name") or sel_name
+                        provider_oc_id = str(sel_item.get("id")) if sel_item.get("id") else None
                         try:
                             raw_o = sel_item.get("odds") or sel_item.get("oddsValue") or sel_item.get("currentOdds")
                             odds_val = float(raw_o) if raw_o is not None else 1.50
@@ -319,6 +326,14 @@ class SportyBetAdapter(BookmakerAdapter):
                 selections.append({
                     "external_fixture_id": game_id,
                     "game_id": game_id,
+                    "provider_event_id": game_id,
+                    "provider_market_id": provider_mkt_id,
+                    "provider_outcome_id": provider_oc_id,
+                    "provider_specifier": provider_spec,
+                    "_sportybet_market_id": provider_mkt_id,
+                    "_sportybet_outcome_id": provider_oc_id,
+                    "_sportybet_specifier": provider_spec,
+                    "_sportybet_event_id": game_id,
                     "home_team": home_team,
                     "away_team": away_team,
                     "market_name": mkt_name,

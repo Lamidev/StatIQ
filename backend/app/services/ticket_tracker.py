@@ -12,6 +12,7 @@ from app.db.models import TrackedTicket
 Base.metadata.create_all(bind=engine)
 
 TRACKER_FILE = os.path.join(os.path.dirname(__file__), "..", "..", "data", "tracked_tickets.json")
+MARKER_FILE = os.path.join(os.path.dirname(__file__), "..", "..", "data", ".tracker_migrated")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Storage & Migration helpers (SQLite ORM)
@@ -44,8 +45,11 @@ def _ticket_to_dict(t: TrackedTicket) -> Dict[str, Any]:
 def _migrate_json_to_db_if_needed(db: Session):
     """
     One-time migration: copies legacy tickets from tracked_tickets.json
-    into the SQLite database if the table is empty.
+    into the SQLite database if the table is empty AND migration hasn't run yet.
     """
+    if os.path.exists(MARKER_FILE):
+        return
+
     try:
         if os.path.exists(TRACKER_FILE):
             count = db.query(TrackedTicket).count()
@@ -56,8 +60,13 @@ def _migrate_json_to_db_if_needed(db: Session):
                     print(f"[TicketTracker] Migrating {len(json_tickets)} legacy tickets from JSON file to SQLite database...")
                     save_tracked_tickets(json_tickets, db=db)
                 bak_path = TRACKER_FILE + ".bak"
-                os.rename(TRACKER_FILE, bak_path)
+                if os.path.exists(TRACKER_FILE):
+                    os.rename(TRACKER_FILE, bak_path)
                 print(f"[TicketTracker] Migration complete. Renamed legacy file to {bak_path}")
+
+        # Mark migration as permanently completed so deleting tickets to 0 does not re-import legacy tickets
+        with open(MARKER_FILE, "w", encoding="utf-8") as f:
+            f.write("migrated")
     except Exception as e:
         print("[TicketTracker] Auto-migration warning:", e)
 
@@ -79,7 +88,7 @@ def get_tracked_tickets(db: Optional[Session] = None) -> List[Dict[str, Any]]:
             db.close()
 
 
-def save_tracked_tickets(tickets: List[Dict[str, Any]], db: Optional[Session] = None):
+def save_tracked_tickets(tickets: List[Dict[str, Any]], db: Optional[Session] = None, create_if_missing: bool = False):
     should_close = False
     if db is None:
         db = SessionLocal()
@@ -109,7 +118,7 @@ def save_tracked_tickets(tickets: List[Dict[str, Any]], db: Optional[Session] = 
                 existing.is_live = data.get("is_live", existing.is_live)
                 existing.stale = data.get("stale", existing.stale)
                 existing.stale_reason = data.get("stale_reason", existing.stale_reason)
-            else:
+            elif create_if_missing:
                 new_t = TrackedTicket(
                     id=ticket_id,
                     code=data.get("code", "CUSTOM"),
@@ -157,6 +166,27 @@ def _parse_score(score_str: str):
     return None, None
 
 
+def _parse_full_and_ht_scores(score_str: str):
+    """
+    Parse a score string like '1-0 (0-0)', '2:1 (1:0)' into (home, away, ht_home, ht_away).
+    """
+    if not score_str or not isinstance(score_str, str):
+        return None, None, None, None
+
+    ht_h, ht_a = None, None
+    m_ht = re.search(r"\(\s*(\d+)\s*[:\-v\s]\s*(\d+)\s*\)", score_str)
+    if m_ht:
+        try:
+            ht_h, ht_a = int(m_ht.group(1)), int(m_ht.group(2))
+        except (ValueError, IndexError):
+            pass
+
+    clean_score = re.sub(r"\([^)]*\)", "", score_str).strip()
+    h, a = _parse_score(clean_score)
+    return h, a, ht_h, ht_a
+
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Lock / Delete
 # ─────────────────────────────────────────────────────────────────────────────
@@ -188,29 +218,8 @@ def lock_ticket(payload: Dict[str, Any], db: Optional[Session] = None) -> Dict[s
     if final_scores:
         new_ticket = _apply_scores_to_ticket(new_ticket, final_scores)
 
-    save_tracked_tickets([new_ticket], db=db)
+    save_tracked_tickets([new_ticket], db=db, create_if_missing=True)
     return new_ticket
-
-
-def delete_tracked_ticket(ticket_id: str, db: Optional[Session] = None) -> bool:
-    should_close = False
-    if db is None:
-        db = SessionLocal()
-        should_close = True
-    try:
-        item = db.query(TrackedTicket).filter(TrackedTicket.id == ticket_id).first()
-        if item:
-            db.delete(item)
-            db.commit()
-            return True
-        return False
-    except Exception as e:
-        db.rollback()
-        print("[TicketTracker] Delete DB error:", e)
-        return False
-    finally:
-        if should_close:
-            db.close()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -218,7 +227,9 @@ def delete_tracked_ticket(ticket_id: str, db: Optional[Session] = None) -> bool:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def evaluate_pick(pick_name: str, home_score: int, away_score: int,
-                  home_team: str = "", away_team: str = "") -> str:
+                  home_team: str = "", away_team: str = "",
+                  ht_home_score: Optional[int] = None,
+                  ht_away_score: Optional[int] = None) -> str:
     """
     Return 'WON', 'LOST', or 'VOID' given the final scores.
     Handles all MatchIQ market types including combo markets.
@@ -231,9 +242,19 @@ def evaluate_pick(pick_name: str, home_score: int, away_score: int,
     at = (away_team or "").lower().strip()
     total = home_score + away_score
 
+    # ── CORNERS MARKETS (Total Corners, Team Corners, 1st Half Corners) ──
+    if "corner" in p:
+        m_ov = re.search(r"over\s*(\d+\.?\d*)", p)
+        m_un = re.search(r"under\s*(\d+\.?\d*)", p)
+        if m_ov:
+            return "WON"
+        if m_un:
+            return "WON"
+
     # Sanitize category prefix so "over/under" doesn't collide with "under 1.5"
     p_market_clean = re.sub(r"double chance\s*&\s*over\s*/\s*under", "", p)
     p_market_clean = re.sub(r"over\s*/\s*under", "", p_market_clean).strip()
+
 
     # ── Combo Markets: Double Chance & Over/Under (e.g. "Home/Away & Over 1.5", "1X & Over 1.5") ──
     if ("double chance" in p or "home/away" in p or "home/draw" in p or "away/draw" in p or "(12)" in p or "(1x)" in p or "(x2)" in p or "12 &" in p or "1x &" in p or "x2 &" in p) and ("over" in p or "under" in p):
@@ -380,10 +401,21 @@ def evaluate_pick(pick_name: str, home_score: int, away_score: int,
 
     # ── 1st Half Over/Under ──
     if "1st half" in p_clean or "ht " in p_clean:
-        if "over 0.5" in p_clean: return "WON" if total >= 1 else "LOST"
-        if "over 1.5" in p_clean: return "WON" if total >= 2 else "LOST"
-        if "under 0.5" in p_clean: return "WON" if total == 0 else "LOST"
-        if "under 1.5" in p_clean: return "WON" if total <= 1 else "LOST"
+        ht_tot = (ht_home_score + ht_away_score) if (ht_home_score is not None and ht_away_score is not None) else None
+        if ht_tot is None and home_score == 0 and away_score == 0:
+            ht_tot = 0
+
+        if ht_tot is not None:
+            if "over 0.5" in p_clean: return "WON" if ht_tot >= 1 else "LOST"
+            if "over 1.5" in p_clean: return "WON" if ht_tot >= 2 else "LOST"
+            if "under 0.5" in p_clean: return "WON" if ht_tot == 0 else "LOST"
+            if "under 1.5" in p_clean: return "WON" if ht_tot <= 1 else "LOST"
+        else:
+            if "over" in p_clean:
+                return "PENDING"
+            if "under 0.5" in p_clean:
+                return "PENDING"
+
 
     # ── Over / Under (standard & whole-integer goal lines) ──
     if "under 0.5" in p_clean: return "WON" if total < 1 else "LOST"
@@ -651,26 +683,114 @@ def evaluate_pick_status(
     away_score: Optional[int],
     home_team: str = "",
     away_team: str = "",
-    is_concluded: bool = False
+    is_concluded: bool = False,
+    home_corners: Optional[int] = None,
+    away_corners: Optional[int] = None,
+    total_corners: Optional[int] = None,
+    ht_home_score: Optional[int] = None,
+    ht_away_score: Optional[int] = None
 ) -> str:
     """
-    Evaluates a pick given scores and match status.
-
-    - If is_concluded == True: Evaluates final outcome ('WON', 'LOST', 'VOID').
-    - If is_concluded == False (Live / Ongoing / Pending / Upcoming):
-        - Returns 'WON' only for Early Win thresholds (e.g., Over 1.5 passed, BTTS Yes both scored).
-        - Returns 'LOST' only for Early Loss thresholds (e.g., Under 2.5 exceeded, BTTS No both scored).
-        - Otherwise returns 'PENDING'!
+    Evaluates a pick given scores, corner statistics, and match status.
     """
+    p = full_pick.lower().strip()
+    ht = home_team.lower().strip()
+    at = away_team.lower().strip()
+
+    # 0. CORNERS MARKETS (Total Corners, Team Corners, 1st Half Corners)
+    if "corner" in p:
+        is_home = "home" in p or (ht and ht in p)
+        is_away = "away" in p or (at and at in p)
+
+        c_val = None
+        if is_home and home_corners is not None:
+            c_val = home_corners
+        elif is_away and away_corners is not None:
+            c_val = away_corners
+        elif total_corners is not None:
+            c_val = total_corners
+        elif home_corners is not None and away_corners is not None:
+            c_val = home_corners + away_corners
+
+        m_over = re.search(r"over\s*(\d+\.?\d*)", p)
+        m_under = re.search(r"under\s*(\d+\.?\d*)", p)
+
+        if m_over:
+            line = float(m_over.group(1))
+            if c_val is not None and c_val > line:
+                return "WON"
+            if is_concluded:
+                if c_val is not None:
+                    return "WON" if c_val > line else "LOST"
+                return "WON"
+            return "PENDING"
+
+        if m_under:
+            line = float(m_under.group(1))
+            if c_val is not None and c_val > line:
+                return "LOST"
+            if is_concluded:
+                if c_val is not None:
+                    return "WON" if c_val <= line else "LOST"
+                return "WON"
+            return "PENDING"
+
+
     if home_score is None or away_score is None:
         return "PENDING" if not is_concluded else "WON"
 
     total = home_score + away_score
     p = full_pick.lower().strip()
+    ht = home_team.lower().strip()
+    at = away_team.lower().strip()
+
+    # 0. TEAM SPECIFIC OVER-UNDER MARKETS (e.g. Fatih Karagumruk Istanbul Over/Under 0.5, Lazio Over 0.5)
+    is_team_goals_market = (
+        "team goals" in p or "team over" in p or "team under" in p or
+        "home over" in p or "home under" in p or "away over" in p or "away under" in p or
+        "home team over" in p or "away team over" in p or "home team under" in p or "away team under" in p or
+        (ht and ht in p and ("over/under" in p or "over" in p or "under" in p)) or
+        (at and at in p and ("over/under" in p or "over" in p or "under" in p))
+    )
+
+    if is_team_goals_market:
+        is_away = ("away" in p) or (at and at in p)
+        target_score = away_score if is_away else home_score
+
+        m_over = re.search(r"over\s*(\d+\.?\d*)", p)
+        m_under = re.search(r"under\s*(\d+\.?\d*)", p)
+
+        if m_over:
+            line = float(m_over.group(1))
+            if target_score > line:
+                return "WON"
+            if is_concluded:
+                return "LOST"
+            return "PENDING"
+
+        if m_under:
+            line = float(m_under.group(1))
+            if target_score > line:
+                return "LOST"
+            if is_concluded:
+                return "WON" if target_score <= line else "LOST"
+            return "PENDING"
+
+    # 4. COMPOUND OR MARKETS (Home/Away Team or Over 2.5 / 1.5)
+    if "or over 2.5" in p or "& over 2.5" in p or "or over 1.5" in p or "& over 1.5" in p or "or over" in p or "& over" in p:
+        m_ov = re.search(r"over\s*(\d+\.?\d*)", p)
+        line = float(m_ov.group(1)) if m_ov else 2.5
+        if total > line:
+            return "WON"
+        if is_concluded:
+            return evaluate_pick(full_pick, home_score, away_score, home_team, away_team, ht_home_score, ht_away_score)
+        if evaluate_pick(full_pick, home_score, away_score, home_team, away_team, ht_home_score, ht_away_score) == "WON":
+            return "WON"
+        return "PENDING"
 
     # 1. OVER GOALS & CORNERS
     m_over = re.search(r"over\s*(\d+\.?\d*)", p)
-    if m_over:
+    if m_over and "1st half" not in p and "ht " not in p and "or over" not in p and "& over" not in p:
         line = float(m_over.group(1))
         if total > line:
             return "WON"
@@ -680,7 +800,7 @@ def evaluate_pick_status(
 
     # 2. UNDER GOALS & CORNERS
     m_under = re.search(r"under\s*(\d+\.?\d*)", p)
-    if m_under:
+    if m_under and "1st half" not in p and "ht " not in p and "or under" not in p and "& under" not in p:
         line = float(m_under.group(1))
         if total > line:
             return "LOST"
@@ -704,27 +824,6 @@ def evaluate_pick_status(
                 return "LOST"
             return "PENDING"
 
-    # 4. COMPOUND OR MARKETS (Home/Away Team or Over 2.5)
-    if "or over 2.5" in p or "& over 2.5" in p:
-        if total >= 3:
-            return "WON"
-        if is_concluded:
-            return evaluate_pick(full_pick, home_score, away_score, home_team, away_team)
-        return "PENDING"
-
-    # 5. TEAM GOALS (Over 0.5)
-    if "team goals" in p or "over 0.5" in p:
-        ht = home_team.lower().strip()
-        at = away_team.lower().strip()
-        is_home = (ht and ht in p) or "home" in p
-        is_away = (at and at in p) or "away" in p
-
-        target = home_score if is_home else (away_score if is_away else total)
-        if target >= 1:
-            return "WON"
-        if is_concluded:
-            return "LOST"
-        return "PENDING"
 
     # 6. WIN EITHER HALF (WEH)
     if "win either half" in p or "weh" in p:
@@ -744,29 +843,35 @@ def evaluate_pick_status(
     if "1up" in p or "1 up" in p or "scores first" in p or "2up" in p or "2 up" in p:
         ht = home_team.lower().strip()
         at = away_team.lower().strip()
-        is_home = "home" in p or (ht and ht in p) or p.startswith("1")
-        is_away = "away" in p or (at and at in p) or p.startswith("2")
+        sel_lower = p.split("—")[-1].strip() if "—" in p else p
+        is_away = "away" in sel_lower or (at and at in sel_lower) or sel_lower == "2"
+        is_home = "home" in sel_lower or (ht and ht in sel_lower) or sel_lower == "1"
 
         if "2up" in p or "2 up" in p:
-            if is_home and (home_score - away_score >= 2 or (is_concluded and home_score > away_score)):
-                return "WON"
-            if is_away and (away_score - home_score >= 2 or (is_concluded and away_score > home_score)):
-                return "WON"
+            if is_away:
+                if away_score - home_score >= 2 or (is_concluded and away_score > home_score):
+                    return "WON"
+            else:
+                if home_score - away_score >= 2 or (is_concluded and home_score > away_score):
+                    return "WON"
         else:
-            if is_home and (home_score >= 1 or (is_concluded and home_score > away_score)):
-                return "WON"
-            if is_away and (away_score >= 1 or (is_concluded and away_score > home_score)):
-                return "WON"
+            if is_away:
+                if away_score > home_score or (is_concluded and away_score > home_score):
+                    return "WON"
+            else:
+                if home_score > away_score or (is_concluded and home_score > away_score):
+                    return "WON"
 
         if is_concluded:
             return "LOST"
         return "PENDING"
 
-    # ALL OTHER MARKETS (Double Chance, 1X2, Asian Handicap, Draw No Bet)
+    # ALL OTHER MARKETS (Double Chance, 1X2, Asian Handicap, Draw No Bet, 1st Half)
     if is_concluded:
-        return evaluate_pick(full_pick, home_score, away_score, home_team, away_team)
+        return evaluate_pick(full_pick, home_score, away_score, home_team, away_team, ht_home_score, ht_away_score)
 
     return "PENDING"
+
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -793,24 +898,68 @@ def evaluate_tracked_tickets(db: Optional[Session] = None) -> List[Dict[str, Any
 
         for sel in t.get("selections", []):
             st = (sel.get("match_status") or "UPCOMING").upper()
-            is_conc = st in ("CONCLUDED", "FINISHED")
+            is_conc = st in ("CONCLUDED", "FINISHED", "FT", "ENDED", "ENDED_AFTER_FT", "COMPLETED")
+
+            kickoff_ms = sel.get("start_time_ms")
+            if not kickoff_ms and sel.get("kickoff_datetime"):
+                try:
+                    from datetime import datetime
+                    dt_val = sel.get("kickoff_datetime")
+                    if isinstance(dt_val, str):
+                        dt = datetime.fromisoformat(dt_val.replace("Z", "+00:00"))
+                        kickoff_ms = int(dt.timestamp() * 1000)
+                except Exception:
+                    pass
+
+            if not is_conc and kickoff_ms and kickoff_ms > 0:
+                # If match started > 110 minutes ago, treat as concluded
+                if (now * 1000 - kickoff_ms) > 110 * 60 * 1000:
+                    is_conc = True
+
             score_str = sel.get("score", "")
 
             if st in ("LIVE", "ONGOING", "IN_PLAY") or sel.get("is_live"):
-                is_ticket_live = True
+                if not is_conc:
+                    is_ticket_live = True
 
             if score_str or is_conc:
-                h, a = _parse_score(score_str) if score_str else (sel.get("home_score"), sel.get("away_score"))
+                if score_str:
+                    h, a, ht_h, ht_a = _parse_full_and_ht_scores(score_str)
+                else:
+                    h, a = sel.get("home_score"), sel.get("away_score")
+                    ht_h, ht_a = None, None
+
+                if ht_h is None: ht_h = sel.get("ht_home_score") or sel.get("home_ht_score") or sel.get("ht_home")
+                if ht_a is None: ht_a = sel.get("ht_away_score") or sel.get("away_ht_score") or sel.get("ht_away")
+
                 mkt_str = sel.get("market_name") or ""
                 sel_str = sel.get("selection_name") or sel.get("selection") or ""
                 full_pick = f"{mkt_str} — {sel_str}".strip(" —") if mkt_str else sel_str
+
+                authoritative_leg_res = sel.get("leg_result")
+                if authoritative_leg_res not in ("WON", "LOST", "VOID"):
+                    authoritative_leg_res = None
 
                 res_status = evaluate_pick_status(
                     full_pick, h, a,
                     home_team=sel.get("home_team", ""),
                     away_team=sel.get("away_team", ""),
-                    is_concluded=is_conc
+                    is_concluded=is_conc,
+                    home_corners=sel.get("home_corners"),
+                    away_corners=sel.get("away_corners"),
+                    total_corners=sel.get("total_corners"),
+                    ht_home_score=ht_h,
+                    ht_away_score=ht_a
                 )
+
+                # Authoritative override: If bookmaker explicitly marked leg LOST, do not let res_status="WON" override it
+                if authoritative_leg_res == "LOST" and res_status == "WON":
+                    p_lower = full_pick.lower()
+                    if ("1st half" in p_lower or "ht " in p_lower or "corner" in p_lower or "weh" in p_lower or "win either half" in p_lower):
+                        res_status = "LOST"
+
+                if authoritative_leg_res and res_status in ("PENDING", None):
+                    res_status = authoritative_leg_res
 
                 if res_status == "VOID":
                     sel["leg_status"] = "VOID"
@@ -830,6 +979,7 @@ def evaluate_tracked_tickets(db: Optional[Session] = None) -> List[Dict[str, Any
                 if is_conc:
                     sel["match_status"] = "CONCLUDED"
                 continue
+
 
             leg_res = sel.get("leg_result") or sel.get("leg_status")
             if leg_res in ("WON", "LOST") and is_conc:
@@ -977,18 +1127,18 @@ def sync_tracked_tickets_with_live_apis(db: Optional[Session] = None) -> List[Di
                             sel["leg_result"] = sb_item["leg_result"]
                             sel["leg_status"] = sb_item["leg_result"]
 
-                        if sb_item.get("match_status"):
-                            st_raw = str(sb_item["match_status"]).upper()
-                            if st_raw in ("IN_PROGRESS", "LIVE", "ONGOING", "H1", "H2", "HT"):
-                                sel["match_status"] = "LIVE"
-                            elif st_raw in ("CONCLUDED", "FT", "FINISHED"):
-                                sel["match_status"] = "CONCLUDED"
-                            else:
-                                sel["match_status"] = st_raw
+                        st_raw = str(sb_item.get("match_status") or "").upper()
+                        code_raw = str(sb_item.get("match_status_code") or "").upper()
+
+                        if st_raw in ("IN_PROGRESS", "LIVE", "ONGOING", "H1", "H2", "HT") or code_raw in ("LIVE", "H1", "H2", "HT"):
+                            sel["match_status"] = "LIVE"
+                        elif st_raw in ("CONCLUDED", "FT", "FINISHED", "NULLED_EXPIRED", "ENDED") or code_raw in ("ENDED", "FT", "FINISHED", "CONCLUDED"):
+                            sel["match_status"] = "CONCLUDED"
+                        elif st_raw:
+                            sel["match_status"] = st_raw
 
                         clock_raw = str(sb_item.get("clock") or "")
-                        period_code = str(sb_item.get("match_status_code") or "")
-                        if period_code == "HT":
+                        if code_raw == "HT":
                             sel["match_time"] = "HT"
                         elif clock_raw and ":" in clock_raw:
                             try:
