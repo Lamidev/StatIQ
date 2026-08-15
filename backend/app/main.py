@@ -101,7 +101,7 @@ def list_staked_tickets(profile_id: Optional[str] = None, db: Session = Depends(
     """Return all tracked tickets immediately (< 2ms), auto-evaluating in-memory scores."""
     all_tickets = evaluate_tracked_tickets(db=db)
     clean_pid = (profile_id or "").strip().upper()
-    admin_profiles = ("ALL", "ADMIN", "THISSLAMI1805", "THISISLAMI1805", "LAMIDEV", "SUPERADMIN", "DEFAULT", "")
+    admin_profiles = ("ALL", "ADMIN", "THISSLAMI1805", "THISISLAMI1805", "LAMIDEV", "SUPERADMIN", "DEFAULT", "NULL", "UNDEFINED", "NONE", "")
     if not clean_pid or clean_pid in admin_profiles:
         return all_tickets
     

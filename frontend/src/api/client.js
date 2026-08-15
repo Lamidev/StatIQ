@@ -5,12 +5,17 @@ const resolveApiBase = () => {
   }
   if (typeof window !== "undefined") {
     const host = window.location.hostname;
-    const protocol = window.location.protocol || "http:";
-    if (host && host !== "localhost" && host !== "127.0.0.1") {
-      return `${protocol}//${host}:8000/api/v1`;
+    // Local development
+    if (host === "localhost" || host === "127.0.0.1") {
+      return "http://localhost:8000/api/v1";
+    }
+    // Local area network mobile testing (e.g. 192.168.x.x)
+    if (/^(192\.168\.|10\.|172\.(1[6-9]|2[0-9]|3[0-1])\.)/.test(host)) {
+      return `http://${host}:8000/api/v1`;
     }
   }
-  return "http://localhost:8000/api/v1";
+  // Production Cloud Render Backend
+  return "https://statiq-backend.onrender.com/api/v1";
 };
 
 const API_BASE_URL = resolveApiBase();
@@ -397,17 +402,44 @@ export function logoutUser() {
 }
 
 /**
- * Ticket Tracker API Helpers
+ * Ticket Tracker API Helpers (with offline/localStorage hybrid persistence)
  */
 export async function fetchTrackedTickets() {
+  const getLocalTickets = () => {
+    try {
+      const raw = localStorage.getItem("statiq_local_tracked_tickets");
+      return raw ? JSON.parse(raw) : [];
+    } catch (e) {
+      return [];
+    }
+  };
+
+  const localList = getLocalTickets();
+
   try {
-    const pid = getUserProfileId();
-    const res = await fetch(`${API_BASE_URL}/ticket-tracker/list?profile_id=${encodeURIComponent(pid)}`);
-    if (res.ok) return await res.json();
+    const rawPid = getUserProfileId();
+    const pid = rawPid && rawPid !== "null" && rawPid !== "undefined" ? String(rawPid).trim() : "";
+    const url = pid ? `${API_BASE_URL}/ticket-tracker/list?profile_id=${encodeURIComponent(pid)}` : `${API_BASE_URL}/ticket-tracker/list`;
+    const res = await fetch(url);
+    if (res.ok) {
+      const data = await res.json();
+      const serverTickets = Array.isArray(data) ? data : data.tickets || [];
+      if (serverTickets.length > 0) {
+        // Merge server and local tickets
+        const map = new Map();
+        [...serverTickets, ...localList].forEach(t => map.set(t.id || t.code, t));
+        const merged = Array.from(map.values());
+        try {
+          localStorage.setItem("statiq_local_tracked_tickets", JSON.stringify(merged));
+        } catch (e) {}
+        return merged;
+      }
+      return localList.length > 0 ? localList : serverTickets;
+    }
   } catch (err) {
-    console.error("Fetch tracked tickets error:", err);
+    console.warn("Backend unreachable, serving local cached tickets:", err);
   }
-  return { tickets: [], total_tickets: 0 };
+  return localList.length > 0 ? localList : { tickets: [], total_tickets: 0 };
 }
 
 export async function syncLiveTrackedTickets() {
@@ -417,14 +449,39 @@ export async function syncLiveTrackedTickets() {
     });
     if (res.ok) return await res.json();
   } catch (err) {
-    console.error("Sync live tickets API error:", err);
+    // Silent on offline/standalone Vercel
   }
   return null;
 }
 
 export async function lockTrackedTicket(payload) {
+  const pid = getUserProfileId() || "DEFAULT";
+  const now = new Date();
+  const dateStr = now.toISOString().replace("T", " ").split(".")[0];
+
+  const localTicket = {
+    id: `TICK-${Date.now()}`,
+    code: payload.code || "CUSTOM",
+    profile_id: payload.profile_id || pid,
+    mode: payload.mode || "SWAP",
+    target_odds: Number(payload.target_odds || payload.total_odds || 1.5),
+    total_odds: Number(payload.total_odds || 1.5),
+    stake: Number(payload.stake || 1000),
+    potential_win: Math.round(Number(payload.stake || 1000) * Number(payload.total_odds || 1.5) * 100) / 100,
+    status: "RUNNING",
+    created_at: dateStr,
+    selections: payload.selections || [],
+    ...payload
+  };
+
   try {
-    const pid = getUserProfileId();
+    const raw = localStorage.getItem("statiq_local_tracked_tickets");
+    const existing = raw ? JSON.parse(raw) : [];
+    const updated = [localTicket, ...existing.filter(t => (t.id || t.code) !== (localTicket.id || localTicket.code))];
+    localStorage.setItem("statiq_local_tracked_tickets", JSON.stringify(updated));
+  } catch (e) {}
+
+  try {
     const fullPayload = {
       ...payload,
       profile_id: payload.profile_id || pid
@@ -436,21 +493,30 @@ export async function lockTrackedTicket(payload) {
     });
     if (res.ok) return await res.json();
   } catch (err) {
-    console.error("Lock tracked ticket error:", err);
+    console.warn("Backend lock failed, ticket saved locally:", err);
   }
-  return { status: "ERROR" };
+  return localTicket;
 }
 
 export async function deleteTrackedTicket(ticketId) {
   try {
-    const res = await fetch(`${API_BASE_URL}/ticket-tracker/${ticketId}`, {
+    const raw = localStorage.getItem("statiq_local_tracked_tickets");
+    if (raw) {
+      const list = JSON.parse(raw);
+      const filtered = list.filter(t => t.id !== ticketId && t.code !== ticketId);
+      localStorage.setItem("statiq_local_tracked_tickets", JSON.stringify(filtered));
+    }
+  } catch (e) {}
+
+  try {
+    const res = await fetch(`${API_BASE_URL}/ticket-tracker/${encodeURIComponent(ticketId)}`, {
       method: "DELETE"
     });
     if (res.ok) return await res.json();
   } catch (err) {
-    console.error("Delete tracked ticket error:", err);
+    console.warn("Backend delete unreachable, deleted locally");
   }
-  return { status: "ERROR" };
+  return { status: "SUCCESS" };
 }
 
 /**
