@@ -255,6 +255,56 @@ def evaluate_pick(pick_name: str, home_score: int, away_score: int,
     p_market_clean = re.sub(r"double chance\s*&\s*over\s*/\s*under", "", p)
     p_market_clean = re.sub(r"over\s*/\s*under", "", p_market_clean).strip()
 
+    # ── Both Halves Under / Over Markets (e.g. Both Halves Under 1.5, Both Halves Over 1.5) ──
+    if "both halves" in p or "both half" in p or "goals in both halves" in p or "score in both halves" in p or "scores in both halves" in p:
+        is_no = "no" in p or "ng" in p
+        is_under = "under" in p
+        is_over = "over" in p or (not is_under and ("score" in p or "goals" in p))
+
+        m_line = re.search(r"(?:under|over)\s*(\d+\.?\d*)", p)
+        line = float(m_line.group(1)) if m_line else (1.5 if is_under else 0.5)
+
+        ht_tot = (ht_home_score + ht_away_score) if (ht_home_score is not None and ht_away_score is not None) else None
+        h2_tot = (total - ht_tot) if (ht_tot is not None and total >= ht_tot) else None
+
+        if is_under:
+            max_under_single = int(line) if line > int(line) else int(line) - 1  # For 1.5 -> 1
+            max_total_if_both_under = max_under_single * 2                       # For 1.5 -> 2
+
+            # If total match goals > max_total_if_both_under (e.g. >= 3 goals for line 1.5):
+            # It's mathematically impossible for both halves to be <= 1 goal.
+            # Therefore "No" is guaranteed WON, and "Yes" is guaranteed LOST.
+            if total > max_total_if_both_under:
+                return "WON" if is_no else "LOST"
+
+            if ht_tot is not None and h2_tot is not None:
+                both_under = (ht_tot < line) and (h2_tot < line)
+                if both_under:
+                    return "LOST" if is_no else "WON"
+                else:
+                    return "WON" if is_no else "LOST"
+
+            if total <= max_under_single:
+                return "LOST" if is_no else "WON"
+            return "LOST" if is_no else "WON"
+
+        if is_over:
+            min_over_single = int(line) + 1  # For 1.5 -> 2, For 0.5 -> 1
+            min_total_if_both_over = min_over_single * 2  # For 1.5 -> 4, For 0.5 -> 2
+
+            if total < min_total_if_both_over:
+                return "WON" if is_no else "LOST"
+
+            if ht_tot is not None and h2_tot is not None:
+                both_over = (ht_tot > line) and (h2_tot > line)
+                if both_over:
+                    return "LOST" if is_no else "WON"
+                else:
+                    return "WON" if is_no else "LOST"
+
+            return "LOST" if is_no else "WON"
+
+
 
     # ── Combo Markets: Double Chance & Over/Under (e.g. "Home/Away & Over 1.5", "1X & Over 1.5") ──
     if ("double chance" in p or "home/away" in p or "home/draw" in p or "away/draw" in p or "(12)" in p or "(1x)" in p or "(x2)" in p or "12 &" in p or "1x &" in p or "x2 &" in p) and ("over" in p or "under" in p):
@@ -788,9 +838,57 @@ def evaluate_pick_status(
             return "WON"
         return "PENDING"
 
+    # ── Both Halves Under / Over Markets ──
+    if "both halves" in p or "both half" in p or "goals in both halves" in p or "score in both halves" in p or "scores in both halves" in p:
+        is_no = "no" in p or "ng" in p
+        is_under = "under" in p
+        is_over = "over" in p or (not is_under and ("score" in p or "goals" in p))
+
+        m_line = re.search(r"(?:under|over)\s*(\d+\.?\d*)", p)
+        line = float(m_line.group(1)) if m_line else (1.5 if is_under else 0.5)
+
+        ht_tot = (ht_home_score + ht_away_score) if (ht_home_score is not None and ht_away_score is not None) else None
+        h2_tot = (total - ht_tot) if (ht_tot is not None and total >= ht_tot) else None
+
+        if is_under:
+            max_under_single = int(line) if line > int(line) else int(line) - 1
+            max_total_if_both_under = max_under_single * 2
+
+            # Early win for "No" / Early loss for "Yes" if total goals > 2*floor(line)
+            if total > max_total_if_both_under:
+                return "WON" if is_no else "LOST"
+
+            # If HT score is known and H1 alone exceeded the line
+            if ht_tot is not None and ht_tot >= line:
+                return "WON" if is_no else "LOST"
+
+            if is_concluded:
+                return evaluate_pick(full_pick, home_score, away_score, home_team, away_team, ht_home_score, ht_away_score)
+
+            return "PENDING"
+
+        if is_over:
+            min_over_single = int(line) + 1
+            min_total_if_both_over = min_over_single * 2
+
+            if is_concluded and total < min_total_if_both_over:
+                return "WON" if is_no else "LOST"
+
+            if ht_tot is not None and h2_tot is not None:
+                both_over = (ht_tot > line) and (h2_tot > line)
+                if both_over:
+                    return "LOST" if is_no else "WON"
+                elif is_concluded:
+                    return "WON" if is_no else "LOST"
+
+            if is_concluded:
+                return evaluate_pick(full_pick, home_score, away_score, home_team, away_team, ht_home_score, ht_away_score)
+
+            return "PENDING"
+
     # 1. OVER GOALS & CORNERS
     m_over = re.search(r"over\s*(\d+\.?\d*)", p)
-    if m_over and "1st half" not in p and "ht " not in p and "or over" not in p and "& over" not in p:
+    if m_over and "1st half" not in p and "ht " not in p and "or over" not in p and "& over" not in p and "both halve" not in p:
         line = float(m_over.group(1))
         if total > line:
             return "WON"
@@ -800,7 +898,7 @@ def evaluate_pick_status(
 
     # 2. UNDER GOALS & CORNERS
     m_under = re.search(r"under\s*(\d+\.?\d*)", p)
-    if m_under and "1st half" not in p and "ht " not in p and "or under" not in p and "& under" not in p:
+    if m_under and "1st half" not in p and "ht " not in p and "or under" not in p and "& under" not in p and "both halve" not in p:
         line = float(m_under.group(1))
         if total > line:
             return "LOST"
