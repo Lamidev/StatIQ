@@ -7,6 +7,7 @@ import BetHistoryTab from "./components/BetHistoryTab";
 import BacktesterTab from "./components/BacktesterTab";
 import AccessControlTab from "./components/AccessControlTab";
 import PasskeyAuthGate from "./components/PasskeyAuthGate";
+import PWAInstallPrompt from "./components/PWAInstallPrompt";
 
 import { fetchTrackedTickets } from "./api/client";
 
@@ -48,7 +49,7 @@ export default function App() {
       setAuthenticatedUser(user);
       fetchActiveTickets();
     }}>
-      <div className="min-h-screen flex flex-col bg-slate-50 text-slate-900 font-sans">
+      <div className="min-h-screen flex flex-col bg-slate-50 text-slate-900 font-sans overflow-x-hidden w-full max-w-full">
         {/* Clean Categorized Navigation Header */}
         <Header
           activeTab={activeTab}
@@ -60,7 +61,7 @@ export default function App() {
         />
 
       {/* Main View Container */}
-      <main className="flex-1 max-w-7xl w-full mx-auto px-2.5 sm:px-6 lg:px-8 py-3.5 sm:py-8">
+      <main className="flex-1 max-w-7xl w-full mx-auto px-2.5 sm:px-6 lg:px-8 py-3.5 sm:py-8 overflow-hidden">
 
         {activeTab === "fixtures" && <GameweekFixturesTab />}
         {activeTab === "builder" && <TicketBuilderTab />}
@@ -80,6 +81,9 @@ export default function App() {
         {activeTab === "backtester" && <BacktesterTab />}
         {activeTab === "access" && <AccessControlTab currentUser={authenticatedUser} />}
       </main>
+
+      {/* PWA Mobile Installation Prompt Banner */}
+      <PWAInstallPrompt />
 
       {/* Footer */}
       <footer className="border-t border-slate-200 py-6 bg-white">

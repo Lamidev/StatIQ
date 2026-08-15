@@ -236,7 +236,7 @@ def evaluate_pick(pick_name: str, home_score: int, away_score: int,
     Handles all MatchIQ market types including combo markets.
     """
     if home_score is None or away_score is None:
-        return "WON"  # Can't evaluate — optimistically pass
+        return "PENDING"
 
     p = (pick_name or "").lower().strip()
     ht = (home_team or "").lower().strip()
@@ -773,7 +773,7 @@ def evaluate_pick_status(
             if is_concluded:
                 if c_val is not None:
                     return "WON" if c_val > line else "LOST"
-                return "WON"
+                return "PENDING"
             return "PENDING"
 
         if m_under:
@@ -783,12 +783,12 @@ def evaluate_pick_status(
             if is_concluded:
                 if c_val is not None:
                     return "WON" if c_val <= line else "LOST"
-                return "WON"
+                return "PENDING"
             return "PENDING"
 
 
     if home_score is None or away_score is None:
-        return "PENDING" if not is_concluded else "WON"
+        return "PENDING"
 
     total = home_score + away_score
     p = full_pick.lower().strip()
@@ -928,13 +928,33 @@ def evaluate_pick_status(
     if "win either half" in p or "weh" in p:
         ht = home_team.lower().strip()
         at = away_team.lower().strip()
-        is_home = (ht and ht in p) or "home" in p
         is_away = (at and at in p) or "away" in p
+        is_home = not is_away
 
-        team_leading = (home_score > away_score) if is_home else (away_score > home_score)
-        if team_leading and is_concluded:
-            return "WON"
+        # Check HT score split if available
+        if ht_home_score is not None and ht_away_score is not None:
+            h1_home_won = ht_home_score > ht_away_score
+            h1_away_won = ht_away_score > ht_home_score
+
+            h2_home = home_score - ht_home_score
+            h2_away = away_score - ht_away_score
+            h2_home_won = h2_home > h2_away
+            h2_away_won = h2_away > h2_home
+
+            if is_home and (h1_home_won or h2_home_won):
+                return "WON"
+            if is_away and (h1_away_won or h2_away_won):
+                return "WON"
+
         if is_concluded:
+            team_won = (home_score > away_score) if is_home else (away_score > home_score)
+            if team_won:
+                return "WON"
+            # 2nd half comeback in high scoring draw (e.g. 3-3, 2-2)
+            if is_away and away_score >= 2 and home_score == away_score:
+                return "WON"
+            if is_home and home_score >= 2 and home_score == away_score:
+                return "WON"
             return "LOST"
         return "PENDING"
 

@@ -101,10 +101,15 @@ def list_staked_tickets(profile_id: Optional[str] = None, db: Session = Depends(
     """Return all tracked tickets immediately (< 2ms), auto-evaluating in-memory scores."""
     all_tickets = evaluate_tracked_tickets(db=db)
     clean_pid = (profile_id or "").strip().upper()
-    admin_profiles = ("ALL", "ADMIN", "THISSLAMI1805")
-    if clean_pid and clean_pid not in admin_profiles:
-        return [t for t in all_tickets if str(t.get("profile_id", "DEFAULT")).upper() == clean_pid]
-    return all_tickets
+    admin_profiles = ("ALL", "ADMIN", "THISSLAMI1805", "THISISLAMI1805", "LAMIDEV", "SUPERADMIN", "DEFAULT", "")
+    if not clean_pid or clean_pid in admin_profiles:
+        return all_tickets
+    
+    # User-specific tickets + any global default tickets
+    return [
+        t for t in all_tickets 
+        if str(t.get("profile_id", "DEFAULT")).upper() in (clean_pid, "DEFAULT", "ALL")
+    ]
 
 @app.post("/api/v1/ticket-tracker/sync-live-api")
 def sync_live_tickets_endpoint(db: Session = Depends(get_db)):

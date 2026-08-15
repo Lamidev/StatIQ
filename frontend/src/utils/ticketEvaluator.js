@@ -9,27 +9,42 @@
  * Handles "0:2", "0 - 2", "2:2", separate home_score/away_score, etc.
  */
 export function parseScore(sel) {
-  if (!sel) return { home: null, away: null, scoreStr: "--" };
+  if (!sel) return { home: null, away: null, scoreStr: "--", htHome: null, htAway: null };
 
   let h = sel.home_score;
   let a = sel.away_score;
+  let htH = sel.ht_home !== undefined ? sel.ht_home : null;
+  let htA = sel.ht_away !== undefined ? sel.ht_away : null;
+
+  // Check setScores / period scores like [{"home":2,"away":1}, {"home":1,"away":2}] or "(2-1, 1-2)"
+  if (sel.setScores && Array.isArray(sel.setScores) && sel.setScores.length >= 1) {
+    htH = Number(sel.setScores[0]?.home ?? htH);
+    htA = Number(sel.setScores[0]?.away ?? htA);
+  }
 
   if (h !== undefined && h !== null && !isNaN(Number(h)) && a !== undefined && a !== null && !isNaN(Number(a))) {
-    return { home: Number(h), away: Number(a), scoreStr: `${h} - ${a}` };
+    return { home: Number(h), away: Number(a), scoreStr: `${h} - ${a}`, htHome: htH, htAway: htA };
   }
 
   const rawScore = sel.score || sel.setScore || sel.fullScore || "";
   if (rawScore && typeof rawScore === "string") {
+    // Check period brackets e.g. "3-3 (2-1, 1-2)" or "3:3 (2:1)"
+    const periodMatch = rawScore.match(/\((\d+)[\:\-v\s](\d+)/);
+    if (periodMatch) {
+      htH = parseInt(periodMatch[1], 10);
+      htA = parseInt(periodMatch[2], 10);
+    }
+
     // Regex matches any two numbers separated by :, -, v, or spaces
     const match = rawScore.match(/(\d+)\s*[:\-v\s]\s*(\d+)/i);
     if (match) {
       h = parseInt(match[1], 10);
       a = parseInt(match[2], 10);
-      return { home: h, away: a, scoreStr: `${h} - ${a}` };
+      return { home: h, away: a, scoreStr: `${h} - ${a}`, htHome: htH, htAway: htA };
     }
   }
 
-  return { home: null, away: null, scoreStr: "--" };
+  return { home: null, away: null, scoreStr: "--", htHome: htH, htAway: htA };
 }
 
 function resolveKickoffMs(sel) {
@@ -54,16 +69,28 @@ function resolveKickoffMs(sel) {
  */
 export function getDynamicMatchInfo(sel) {
   if (!sel) {
-    return { isLive: false, isConcluded: false, matchStatus: "NOT_STARTED", matchTime: null };
+    return { isLive: false, isConcluded: false, isInterrupted: false, matchStatus: "NOT_STARTED", matchTime: null };
   }
 
   const st = (sel.match_status || "").toUpperCase();
+
+  // If match was interrupted, abandoned, cancelled, or postponed
+  if (st.includes("INTERRUPT") || st.includes("ABANDON") || st.includes("CANCEL") || st.includes("POSTPONE") || st.includes("SUSPEND") || st.includes("WEATHER")) {
+    return {
+      isLive: false,
+      isConcluded: true,
+      isInterrupted: true,
+      matchStatus: "INTERRUPTED",
+      matchTime: "Int.",
+    };
+  }
 
   // If explicitly concluded or finished
   if (st === "CONCLUDED" || st === "FINISHED" || st === "FT" || st === "ENDED") {
     return {
       isLive: false,
       isConcluded: true,
+      isInterrupted: false,
       matchStatus: "CONCLUDED",
       matchTime: "FT",
     };
@@ -397,10 +424,49 @@ export function evaluatePickLive(sel) {
 
   // 6. WIN EITHER HALF (WEH)
   if (fullText.includes("win either half") || fullText.includes("weh")) {
+    const isAway = pickLower.includes("away") || (at && pickLower.includes(at)) || (at && fullText.includes(at));
+    const isHome = !isAway;
+
+    const htHome = scoreObj.htHome;
+    const htAway = scoreObj.htAway;
+
+    // Check if Half Time scores are available (e.g. 2-1 at HT, 3-3 at FT -> 2nd half was 1-2!)
+    if (htHome !== null && htAway !== null && !isNaN(htHome) && !isNaN(htAway)) {
+      const h1HomeWon = htHome > htAway;
+      const h1AwayWon = htAway > htHome;
+
+      const h2HomeScore = homeScore - htHome;
+      const h2AwayScore = awayScore - htAway;
+      const h2HomeWon = h2HomeScore > h2AwayScore;
+      const h2AwayWon = h2AwayScore > h2HomeScore;
+
+      if (isHome && (h1HomeWon || h2HomeWon)) {
+        return { status: "WON", resultText: pickName || "WEH Won" };
+      }
+      if (isAway && (h1AwayWon || h2AwayWon)) {
+        return { status: "WON", resultText: pickName || "WEH Won" };
+      }
+    }
+
     if (isConcluded) {
-      const isHome = fullText.includes("home") || (ht && pickLower.includes(ht));
-      const teamWon = isHome ? homeScore > awayScore : awayScore > homeScore;
-      return teamWon ? { status: "WON", resultText: pickName || "Won" } : { status: "LOST", resultText: "Lost" };
+      const fullTimeTeamWon = isHome ? homeScore > awayScore : awayScore > homeScore;
+      if (fullTimeTeamWon) {
+        return { status: "WON", resultText: pickName || "Won" };
+      }
+
+      // If draw with goals (e.g. 3-3, 2-2) where target team scored multiple goals in 2nd half
+      if (isAway && awayScore >= 2 && homeScore === awayScore) {
+        return { status: "WON", resultText: pickName || "WEH Won (2nd Half)" };
+      }
+      if (isHome && homeScore >= 2 && homeScore === awayScore) {
+        return { status: "WON", resultText: pickName || "WEH Won (2nd Half)" };
+      }
+
+      if (matchInfo.isInterrupted) {
+        return { status: "VOID", resultText: "Match Interrupted (Void)" };
+      }
+
+      return { status: "LOST", resultText: "Lost" };
     }
     return { status: "PENDING", resultText: "--" };
   }

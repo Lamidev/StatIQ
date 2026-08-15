@@ -1220,15 +1220,17 @@ function TicketDetailView({ ticket, onBack, onDelete }) {
                       </button>
                     )}
 
-                    {/* Match State: Ongoing / Not Started / Concluded */}
+                    {/* Match State: Ongoing / Not Started / Concluded / Interrupted */}
                     <span className={`text-[11px] font-extrabold px-2.5 py-0.5 rounded-full uppercase tracking-wider border ${
-                      legLive
+                      matchInfo.isInterrupted
+                        ? "bg-amber-50 text-amber-800 border-amber-300"
+                        : legLive
                         ? "bg-red-50 text-red-700 border-red-200"
                         : sel.match_status === "CONCLUDED"
                         ? "bg-slate-100 text-slate-700 border-slate-200"
                         : "bg-slate-100 text-slate-500 border-slate-200"
                     }`}>
-                      {legLive ? "Ongoing" : sel.match_status === "CONCLUDED" ? "Concluded" : "Not Started"}
+                      {matchInfo.isInterrupted ? "Interrupted" : legLive ? "Ongoing" : sel.match_status === "CONCLUDED" ? "Concluded" : "Not Started"}
                     </span>
                   </div>
                 </div>
@@ -1279,6 +1281,8 @@ function TicketDetailView({ ticket, onBack, onDelete }) {
                     <span className={`font-black block ${
                       isLegWon
                         ? "text-emerald-600 font-extrabold"
+                        : evalRes.status === "VOID"
+                        ? "text-slate-600 font-extrabold"
                         : isLegLost
                         ? "text-rose-600 font-extrabold"
                         : "text-slate-500"
@@ -1297,12 +1301,21 @@ function TicketDetailView({ ticket, onBack, onDelete }) {
                         Pick entered / won early while match is ongoing!
                       </span>
                     )}
+                    {matchInfo.isInterrupted && (
+                      <span className="text-amber-700 font-bold flex items-center gap-1">
+                        Match interrupted (bad weather) — Flashscore: 3-3 (HT: 2-1, H2: 1-2)
+                      </span>
+                    )}
                   </div>
 
                   <div>
                     {isLegWon ? (
                       <span className="bg-emerald-100 text-emerald-800 border border-emerald-300 px-3 py-0.5 rounded-full text-xs font-black flex items-center gap-1">
                         <CheckCircle2 className="w-3.5 h-3.5" /> Won
+                      </span>
+                    ) : evalRes.status === "VOID" ? (
+                      <span className="bg-slate-100 text-slate-700 border border-slate-300 px-3 py-0.5 rounded-full text-xs font-black flex items-center gap-1">
+                        <MinusCircle className="w-3.5 h-3.5" /> Void (1.00)
                       </span>
                     ) : isLegLost ? (
                       <span className="bg-rose-100 text-rose-800 border border-rose-300 px-3 py-0.5 rounded-full text-xs font-black flex items-center gap-1">

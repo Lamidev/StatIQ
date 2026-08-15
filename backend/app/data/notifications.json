@@ -140,6 +140,20 @@
     "read": true
   },
   {
+    "id": "NOTIF-TICK-1786635558",
+    "ticket_id": "TICK-1786635558",
+    "code": "XVQGS1",
+    "mode": "REMOVE",
+    "title": "\ud83c\udf89 Ticket WON! \u2014 XVQGS1",
+    "message": "WON (Clean Sweep - 0 Losses) \u2022 Stake \u20a6500.00",
+    "flex_status_text": "WON (Clean Sweep - 0 Losses)",
+    "status": "WON",
+    "odds": 2.16,
+    "potential_payout": 1080.0,
+    "created_at": "2026-08-13 16:39:18",
+    "read": true
+  },
+  {
     "id": "NOTIF-TICK-1786635405",
     "ticket_id": "TICK-1786635405",
     "code": "XVQGS1",
@@ -224,20 +238,6 @@
     "read": true
   },
   {
-    "id": "NOTIF-TICK-1786465342",
-    "ticket_id": "TICK-1786465342",
-    "code": "UVHGDQ",
-    "mode": "AUDITOR",
-    "title": "\ud83c\udf89 Ticket WON! \u2014 UVHGDQ",
-    "message": "WON (Clean Sweep - 0 Losses) \u2022 Stake \u20a65,000.00",
-    "flex_status_text": "WON (Clean Sweep - 0 Losses)",
-    "status": "WON",
-    "odds": 10.06,
-    "potential_payout": 50300.0,
-    "created_at": "2026-08-11 17:22:22",
-    "read": true
-  },
-  {
     "id": "NOTIF-TICK-1786465287",
     "ticket_id": "TICK-1786465287",
     "code": "UVHGDQ",
@@ -308,20 +308,6 @@
     "read": true
   },
   {
-    "id": "NOTIF-TICK-1786464666",
-    "ticket_id": "TICK-1786464666",
-    "code": "QYALGG",
-    "mode": "AUDITOR",
-    "title": "\ud83c\udf89 Ticket WON! \u2014 QYALGG",
-    "message": "WON (Clean Sweep - 0 Losses) \u2022 Stake \u20a65,000.00",
-    "flex_status_text": "WON (Clean Sweep - 0 Losses)",
-    "status": "WON",
-    "odds": 2.0,
-    "potential_payout": 10000.0,
-    "created_at": "2026-08-11 17:11:06",
-    "read": true
-  },
-  {
     "id": "NOTIF-TICK-1786464477",
     "ticket_id": "TICK-1786464477",
     "code": "QYALGG",
@@ -350,34 +336,6 @@
     "read": true
   },
   {
-    "id": "NOTIF-TICK-1786381248",
-    "ticket_id": "TICK-1786381248",
-    "code": "PJZJGA",
-    "mode": "AUDITOR",
-    "title": "\ud83c\udf89 Ticket WON! \u2014 PJZJGA",
-    "message": "WON (Clean Sweep - 0 Losses) \u2022 Stake \u20a65,000.00",
-    "flex_status_text": "WON (Clean Sweep - 0 Losses)",
-    "status": "WON",
-    "odds": 5.02,
-    "potential_payout": 25100.0,
-    "created_at": "2026-08-10 18:00:48",
-    "read": true
-  },
-  {
-    "id": "NOTIF-TICK-1786361224",
-    "ticket_id": "TICK-1786361224",
-    "code": "K05PX6",
-    "mode": "AUDITOR",
-    "title": "\ud83c\udf89 Ticket WON! \u2014 K05PX6",
-    "message": "WON (Clean Sweep - 0 Losses) \u2022 Stake \u20a65,000.00",
-    "flex_status_text": "WON (Clean Sweep - 0 Losses)",
-    "status": "WON",
-    "odds": 2.4,
-    "potential_payout": 12000.0,
-    "created_at": "2026-08-10 12:27:04",
-    "read": true
-  },
-  {
     "id": "NOTIF-TICK-1786361159",
     "ticket_id": "TICK-1786361159",
     "code": "K05PX6",
@@ -389,20 +347,6 @@
     "odds": 2.0,
     "potential_payout": 10000.0,
     "created_at": "2026-08-10 12:25:59",
-    "read": true
-  },
-  {
-    "id": "NOTIF-TICK-1786360795",
-    "ticket_id": "TICK-1786360795",
-    "code": "NND53A",
-    "mode": "AUDITOR",
-    "title": "\ud83c\udf89 Ticket WON! \u2014 NND53A",
-    "message": "WON (Clean Sweep - 0 Losses) \u2022 Stake \u20a6500.00",
-    "flex_status_text": "WON (Clean Sweep - 0 Losses)",
-    "status": "WON",
-    "odds": 2.0,
-    "potential_payout": 1000.0,
-    "created_at": "2026-08-10 12:19:55",
     "read": true
   },
   {

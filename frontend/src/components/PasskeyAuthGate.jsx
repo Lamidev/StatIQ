@@ -81,12 +81,12 @@ export default function PasskeyAuthGate({ onAuthenticated, children }) {
 
   if (!isAuthenticated) {
     return (
-      <div className="min-h-screen bg-[#F8FAFC] flex flex-col items-center justify-center p-4 text-slate-900 relative selection:bg-slate-900 selection:text-white">
+      <div className="min-h-screen bg-[#F8FAFC] flex flex-col items-center justify-center p-4 text-slate-900 relative selection:bg-slate-900 selection:text-white overflow-x-hidden w-full">
         {/* Subtle Ambient Background Auras */}
-        <div className="absolute top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[550px] h-[550px] bg-gradient-to-tr from-emerald-100/50 via-indigo-100/40 to-slate-100/60 rounded-full blur-3xl pointer-events-none -z-10" />
+        <div className="absolute top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[320px] sm:w-[550px] h-[320px] sm:h-[550px] bg-gradient-to-tr from-emerald-100/50 via-indigo-100/40 to-slate-100/60 rounded-full blur-3xl pointer-events-none -z-10" />
 
         {/* Main Card */}
-        <div className="max-w-md w-full bg-white border border-slate-200/90 rounded-3xl p-6 sm:p-9 shadow-2xl shadow-slate-200/60 space-y-7 relative">
+        <div className="w-full max-w-md bg-white border border-slate-200/90 rounded-3xl p-6 sm:p-9 shadow-2xl shadow-slate-200/60 space-y-7 relative mx-auto">
           {/* Brand Header */}
           <div className="text-center space-y-3">
             <div className="w-12 h-12 rounded-2xl bg-slate-900 text-white flex items-center justify-center mx-auto shadow-md shadow-slate-900/10">
@@ -119,11 +119,11 @@ export default function PasskeyAuthGate({ onAuthenticated, children }) {
                 <Key className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
                 <input
                   type="text"
-                  placeholder="Enter unique access passkey..."
+                  placeholder="Enter access passkey..."
                   value={passkeyInput}
                   onChange={(e) => setPasskeyInput(e.target.value)}
                   autoFocus
-                  className="w-full bg-slate-50 hover:bg-slate-50/80 focus:bg-white border border-slate-200 rounded-2xl pl-10 pr-4 py-3.5 text-sm font-mono font-bold text-slate-900 placeholder:text-slate-400 focus:outline-hidden focus:border-slate-900 focus:ring-4 focus:ring-slate-900/5 uppercase transition-all shadow-2xs"
+                  className="w-full bg-slate-50 hover:bg-slate-50/80 focus:bg-white border border-slate-200 rounded-2xl pl-10 pr-4 py-3.5 text-sm font-mono font-bold text-slate-900 placeholder:text-slate-400 focus:outline-hidden focus:border-slate-900 focus:ring-4 focus:ring-slate-900/5 transition-all shadow-2xs"
                 />
               </div>
             </div>
@@ -173,17 +173,6 @@ export default function PasskeyAuthGate({ onAuthenticated, children }) {
                 5-Gate AI
               </span>
             </div>
-          </div>
-
-          {/* Quick Admin Access Link */}
-          <div className="text-center pt-1">
-            <button
-              onClick={() => setPasskeyInput("thisslami1805")}
-              className="text-[11px] font-bold text-slate-400 hover:text-slate-900 transition-colors inline-flex items-center gap-1.5 cursor-pointer"
-            >
-              <ShieldCheck className="w-3.5 h-3.5 text-slate-400" />
-              <span>Admin Quick Access</span>
-            </button>
           </div>
         </div>
 

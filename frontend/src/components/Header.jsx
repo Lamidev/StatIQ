@@ -23,42 +23,24 @@ export default function Header({ activeTab, setActiveTab, activeTicketCount = 0,
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex items-center justify-between h-16">
           {/* Logo */}
-          <div className="flex items-center space-x-3">
-            <div className="w-9 h-9 rounded-lg bg-slate-900 flex items-center justify-center text-white">
-              <Activity className="w-5 h-5" />
+          <div className="flex items-center space-x-2.5 sm:space-x-3">
+            <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl bg-slate-900 flex items-center justify-center text-white shrink-0 shadow-sm">
+              <Activity className="w-4 h-4 sm:w-5 sm:h-5 text-emerald-400" />
             </div>
             <div>
-              <span className="text-lg font-extrabold text-slate-900 tracking-tight">
+              <span className="text-base sm:text-lg font-black text-slate-900 tracking-tight leading-none block">
                 StatIQ
               </span>
-              <span className="text-xs text-slate-500 block -mt-1 font-medium">
-                AI Football Prediction Engine
+              <span className="text-[10px] sm:text-xs text-slate-500 font-medium block mt-0.5">
+                AI Football Engine
               </span>
             </div>
           </div>
 
-          {/* Right Header Actions: Passkey Badge, Status Pill, Notifications */}
-          <div className="flex items-center space-x-2.5">
-            {/* Passkey Manager Button */}
-            <button
-              onClick={() => setActiveTab("access")}
-              className="flex items-center gap-1.5 bg-slate-900 hover:bg-slate-800 text-white px-3.5 py-1.5 rounded-full text-xs font-black transition-all shadow-sm cursor-pointer"
-              title="Go to Access Control & Passkeys Page"
-            >
-              <Key className="w-3.5 h-3.5 text-emerald-400" />
-              <span className="hidden sm:inline">Passkey:</span>
-              <span className="text-emerald-400 font-mono font-black">
-                {currentPid}
-              </span>
-              {userRole === "ADMIN" && (
-                <span className="bg-emerald-500 text-slate-950 text-[9px] px-1.5 py-0.2 rounded-md uppercase font-black">
-                  Admin
-                </span>
-              )}
-            </button>
-
-            <div className="hidden md:flex items-center space-x-2 bg-emerald-50 text-emerald-700 border border-emerald-200 px-3 py-1 rounded-full text-xs font-semibold">
-              <CheckCircle2 className="w-3.5 h-3.5" />
+          {/* Right Header Actions: Status Pill & Notifications */}
+          <div className="flex items-center space-x-2">
+            <div className="hidden sm:flex items-center space-x-1.5 bg-emerald-50 text-emerald-800 border border-emerald-200 px-3 py-1 rounded-full text-xs font-bold shadow-2xs">
+              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
               <span>AI Brain Ready</span>
             </div>
 
