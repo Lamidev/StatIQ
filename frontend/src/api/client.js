@@ -1,4 +1,6 @@
-const API_BASE_URL = "http://localhost:8000/api/v1";
+const rawBase = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000/api/v1";
+const API_BASE_URL = rawBase.endsWith("/api/v1") ? rawBase : `${rawBase.replace(/\/$/, "")}/api/v1`;
+
 
 export async function fetchLivePredictions(status = "PENDING", limit = 50) {
   try {
