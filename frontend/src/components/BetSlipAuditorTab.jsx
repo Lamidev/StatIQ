@@ -1,10 +1,10 @@
 import React, { useState } from "react";
-import { decodeBookingCode, runTicketReEdit, generateNewBookingCode, generateVerifiedBookingCode, lockTrackedTicket } from "../api/client";
+import { decodeBookingCode, runTicketReEdit, generateNewBookingCode, generateVerifiedBookingCode, lockTrackedTicket, fetchTrackedTickets as fetchTrackedTicketsApi, deleteTrackedTicket as deleteTrackedTicketApi } from "../api/client";
 import { Search, Copy, CheckCircle, CheckCircle2, ShieldCheck, ShieldAlert, AlertTriangle, ArrowRight, RefreshCw, Trash2, Sliders, ExternalLink, X, Receipt, Sparkles, Scissors } from "lucide-react";
 
 import { calculateFlexShield } from "../utils/flexCalculator";
 
-export default function BetSlipAuditorTab({ onNavigateHistory }) {
+export default function BetSlipAuditorTab({ onNavigateHistory, onTicketLocked }) {
   const [inputCode, setInputCode] = useState("");
   const [loading, setLoading] = useState(false);
   const [ticketData, setTicketData] = useState(null);
@@ -41,11 +41,9 @@ export default function BetSlipAuditorTab({ onNavigateHistory }) {
 
   const fetchTrackedTickets = async () => {
     try {
-      const res = await fetch("http://127.0.0.1:8000/api/v1/ticket-tracker/list");
-      if (res.ok) {
-        const data = await res.json();
-        setTrackedTickets(data.tickets || []);
-      }
+      const data = await fetchTrackedTicketsApi();
+      const list = Array.isArray(data) ? data : data.tickets || [];
+      setTrackedTickets(list);
     } catch (e) {}
   };
 
@@ -95,10 +93,11 @@ export default function BetSlipAuditorTab({ onNavigateHistory }) {
 
   const handleDeleteTrackedTicket = async (ticketId) => {
     try {
-      await fetch(`http://127.0.0.1:8000/api/v1/ticket-tracker/${ticketId}`, { method: "DELETE" });
+      await deleteTrackedTicketApi(ticketId);
       await fetchTrackedTickets();
     } catch (e) {}
   };
+
 
   const [autoRefresh, setAutoRefresh] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -743,7 +742,7 @@ export default function BetSlipAuditorTab({ onNavigateHistory }) {
 
                         {s.kickoff_datetime_str && !isInProgress && !isConcluded && (
                           <span className="text-[10px] text-slate-600 font-bold bg-slate-100 px-2 py-0.5 rounded border border-slate-200">
-                            ⏰ {s.kickoff_datetime_str}
+                            {s.kickoff_datetime_str}
                           </span>
                         )}
 
@@ -963,7 +962,7 @@ export default function BetSlipAuditorTab({ onNavigateHistory }) {
                           targetMode === "ODDS" ? "bg-white shadow-sm text-slate-900" : "text-slate-500 hover:text-slate-800"
                         }`}
                       >
-                        🎯 Target Odds
+                        Target Odds
                       </button>
                       <button
                         onClick={() => setTargetMode("GAMES")}
@@ -971,7 +970,7 @@ export default function BetSlipAuditorTab({ onNavigateHistory }) {
                           targetMode === "GAMES" ? "bg-white shadow-sm text-slate-900" : "text-slate-500 hover:text-slate-800"
                         }`}
                       >
-                        🎮 Target Games
+                        Target Games
                       </button>
                     </div>
 
@@ -1035,7 +1034,7 @@ export default function BetSlipAuditorTab({ onNavigateHistory }) {
                                   : "bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100"
                               }`}
                             >
-                              {num}{num === 50 ? " ⭐" : ""}
+                              {num}
                             </button>
                           ))}
                         </div>
@@ -1139,10 +1138,10 @@ export default function BetSlipAuditorTab({ onNavigateHistory }) {
                     {reEditing
                       ? "Running..."
                       : mode === "AUDITOR"
-                      ? "✅ Audit & Upgrade Picks"
+                      ? "Audit & Upgrade Picks"
                       : mode === "SWAP"
-                      ? "🔄 Re-Edit Ticket"
-                      : "🗑️ Remove Risky Picks"}
+                      ? "Re-Edit Ticket"
+                      : "Remove Risky Picks"}
                   </button>
                 </div>
               )}
@@ -1174,7 +1173,7 @@ export default function BetSlipAuditorTab({ onNavigateHistory }) {
                   <div className="flex items-center space-x-2">
                     <CheckCircle className="w-5 h-5 text-white" />
                     <span className="text-xs font-extrabold">
-                      📌 Ticket Successfully Locked! Staked ticket is now active and being tracked live in Bet History.
+                      Ticket Successfully Locked! Staked ticket is now active and being tracked live in Bet History.
                     </span>
                   </div>
                   <button
@@ -1200,7 +1199,7 @@ export default function BetSlipAuditorTab({ onNavigateHistory }) {
                       className="px-2 py-0.5 rounded bg-emerald-100 hover:bg-emerald-200 text-emerald-800 text-[10px] font-extrabold transition-all border border-emerald-300"
                       title="Clear current result and change target odds or mode"
                     >
-                      🔄 Reset & Change Settings
+                      Reset & Change Settings
                     </button>
                   </div>
                   <h3 className="text-lg font-extrabold text-slate-900 mt-0.5">
@@ -1222,7 +1221,7 @@ export default function BetSlipAuditorTab({ onNavigateHistory }) {
                     <div className="flex items-center space-x-2">
                       <span className="text-[11px] font-extrabold text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-lg border border-emerald-200 flex items-center gap-1">
                         <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
-                        <span>VERIFIED ✓ {generatedCode}</span>
+                        <span>VERIFIED {generatedCode}</span>
                       </span>
                       <button
                         onClick={() => {

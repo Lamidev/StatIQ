@@ -296,12 +296,99 @@ export async function generateVerifiedBookingCode(selections, ticketId = "TKT-GE
 }
 
 
+export async function verifyPasskeyApi(passkey) {
+  try {
+    const res = await fetch(`${API_BASE_URL}/auth/verify`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ passkey }),
+    });
+    return await res.json();
+  } catch (err) {
+    return { success: false, message: "Network connection failure." };
+  }
+}
+
+export async function fetchAdminPasskeys() {
+  try {
+    const res = await fetch(`${API_BASE_URL}/auth/passkeys`);
+    if (res.ok) return await res.json();
+  } catch (err) {
+    console.error("Fetch passkeys error:", err);
+  }
+  return { total: 0, passkeys: [] };
+}
+
+export async function createPasskeyApi(payload) {
+  try {
+    const res = await fetch(`${API_BASE_URL}/auth/passkeys/create`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    return await res.json();
+  } catch (err) {
+    return { success: false, message: "Failed to create passkey" };
+  }
+}
+
+export async function togglePasskeyApi(key, isActive) {
+  try {
+    const res = await fetch(`${API_BASE_URL}/auth/passkeys/toggle`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ key, is_active: isActive }),
+    });
+    return await res.json();
+  } catch (err) {
+    return { success: false };
+  }
+}
+
+export async function deletePasskeyApi(key) {
+  try {
+    const res = await fetch(`${API_BASE_URL}/auth/passkeys/${encodeURIComponent(key)}`, {
+      method: "DELETE",
+    });
+    return await res.json();
+  } catch (err) {
+    return { success: false };
+  }
+}
+
+export function getUserProfileId() {
+  if (typeof window === "undefined") return null;
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const codeParam = params.get("code") || params.get("profile") || params.get("user") || params.get("passkey");
+    if (codeParam) {
+      const clean = codeParam.toUpperCase().trim();
+      localStorage.setItem("statiq_profile_id", clean);
+      localStorage.setItem("statiq_passkey", clean);
+      return clean;
+    }
+    return localStorage.getItem("statiq_passkey") || localStorage.getItem("statiq_profile_id") || null;
+  } catch (e) {
+    return null;
+  }
+}
+
+export function logoutUser() {
+  if (typeof window !== "undefined") {
+    localStorage.removeItem("statiq_passkey");
+    localStorage.removeItem("statiq_profile_id");
+    const cleanUrl = window.location.origin + window.location.pathname;
+    window.history.replaceState({}, document.title, cleanUrl);
+  }
+}
+
 /**
  * Ticket Tracker API Helpers
  */
 export async function fetchTrackedTickets() {
   try {
-    const res = await fetch(`${API_BASE_URL}/ticket-tracker/list`);
+    const pid = getUserProfileId();
+    const res = await fetch(`${API_BASE_URL}/ticket-tracker/list?profile_id=${encodeURIComponent(pid)}`);
     if (res.ok) return await res.json();
   } catch (err) {
     console.error("Fetch tracked tickets error:", err);
@@ -323,10 +410,15 @@ export async function syncLiveTrackedTickets() {
 
 export async function lockTrackedTicket(payload) {
   try {
+    const pid = getUserProfileId();
+    const fullPayload = {
+      ...payload,
+      profile_id: payload.profile_id || pid
+    };
     const res = await fetch(`${API_BASE_URL}/ticket-tracker/lock`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
+      body: JSON.stringify(fullPayload)
     });
     if (res.ok) return await res.json();
   } catch (err) {
@@ -373,5 +465,54 @@ export async function buildAiTicket(payload) {
     console.error("AI Ticket builder error:", err);
   }
   return { status: "ERROR" };
+}
+
+
+export async function fetchNotificationsList() {
+
+  try {
+    const res = await fetch(`${API_BASE_URL}/notifications`);
+    if (res.ok) return await res.json();
+  } catch (err) {
+    console.error("Fetch notifications error:", err);
+  }
+  return { notifications: [], unread_count: 0 };
+}
+
+export async function markNotificationRead(payload) {
+  try {
+    const res = await fetch(`${API_BASE_URL}/notifications/mark-read`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    if (res.ok) return await res.json();
+  } catch (err) {
+    console.error("Mark notification read error:", err);
+  }
+  return null;
+}
+
+export async function clearAllNotifications() {
+  try {
+    const res = await fetch(`${API_BASE_URL}/notifications/clear`, {
+      method: "DELETE"
+    });
+    if (res.ok) return await res.json();
+  } catch (err) {
+    console.error("Clear notifications error:", err);
+  }
+  return null;
+}
+
+
+export async function fetchTodaysSportybetGames(day = "today") {
+  try {
+    const res = await fetch(`${API_BASE_URL}/fixtures/sportybet-today?day=${day}`);
+    if (res.ok) return await res.json();
+  } catch (err) {
+    console.error("Fetch today's SportyBet games error:", err);
+  }
+  return { total_matches: 0, total_leagues: 0, leagues: [] };
 }
 

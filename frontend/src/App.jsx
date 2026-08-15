@@ -5,19 +5,22 @@ import TicketBuilderTab from "./components/TicketBuilderTab";
 import BetSlipAuditorTab from "./components/BetSlipAuditorTab";
 import BetHistoryTab from "./components/BetHistoryTab";
 import BacktesterTab from "./components/BacktesterTab";
+import AccessControlTab from "./components/AccessControlTab";
+import PasskeyAuthGate from "./components/PasskeyAuthGate";
+
+import { fetchTrackedTickets } from "./api/client";
 
 export default function App() {
   const [activeTab, setActiveTab] = useState("fixtures");
   const [activeTickets, setActiveTickets] = useState([]);
   const [selectedNotificationTicketId, setSelectedNotificationTicketId] = useState(null);
+  const [authenticatedUser, setAuthenticatedUser] = useState(null);
 
   const fetchActiveTickets = useCallback(async () => {
     try {
-      const res = await fetch("http://127.0.0.1:8000/api/v1/ticket-tracker/list");
-      if (res.ok) {
-        const data = await res.json();
-        setActiveTickets(data.filter((t) => t.status === "RUNNING"));
-      }
+      const data = await fetchTrackedTickets();
+      const list = Array.isArray(data) ? data : data.tickets || [];
+      setActiveTickets(list.filter((t) => t.status === "RUNNING"));
     } catch (e) {
       // fallback
     }
@@ -41,18 +44,24 @@ export default function App() {
   );
 
   return (
-    <div className="min-h-screen flex flex-col bg-slate-50 text-slate-900 font-sans">
-      {/* Clean Categorized Navigation Header */}
-      <Header
-        activeTab={activeTab}
-        setActiveTab={setActiveTab}
-        activeTicketCount={activeTicketCount}
-        activeGameCount={activeGameCount}
-        onSelectTicket={handleSelectNotificationTicket}
-      />
+    <PasskeyAuthGate onAuthenticated={(user) => {
+      setAuthenticatedUser(user);
+      fetchActiveTickets();
+    }}>
+      <div className="min-h-screen flex flex-col bg-slate-50 text-slate-900 font-sans">
+        {/* Clean Categorized Navigation Header */}
+        <Header
+          activeTab={activeTab}
+          setActiveTab={setActiveTab}
+          activeTicketCount={activeTicketCount}
+          activeGameCount={activeGameCount}
+          onSelectTicket={handleSelectNotificationTicket}
+          currentUser={authenticatedUser}
+        />
 
       {/* Main View Container */}
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      <main className="flex-1 max-w-7xl w-full mx-auto px-2.5 sm:px-6 lg:px-8 py-3.5 sm:py-8">
+
         {activeTab === "fixtures" && <GameweekFixturesTab />}
         {activeTab === "builder" && <TicketBuilderTab />}
         {activeTab === "auditor" && (
@@ -69,6 +78,7 @@ export default function App() {
           />
         )}
         {activeTab === "backtester" && <BacktesterTab />}
+        {activeTab === "access" && <AccessControlTab currentUser={authenticatedUser} />}
       </main>
 
       {/* Footer */}
@@ -83,5 +93,6 @@ export default function App() {
         </div>
       </footer>
     </div>
+    </PasskeyAuthGate>
   );
 }

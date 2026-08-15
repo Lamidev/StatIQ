@@ -82,8 +82,8 @@ export default function ValueBetsTab() {
                 </span>
 
                 <button
-                  onClick={() => alert(`Copied pick: ${item.selection}`)}
-                  className="px-3 py-1.5 rounded-lg btn-black text-xs"
+                  onClick={() => navigator.clipboard.writeText(item.selection)}
+                  className="px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs transition-all cursor-pointer"
                 >
                   Copy Pick
                 </button>

@@ -202,6 +202,7 @@ def lock_ticket(payload: Dict[str, Any], db: Optional[Session] = None) -> Dict[s
     new_ticket = {
         "id": ticket_id,
         "code": payload.get("code", "CUSTOM"),
+        "profile_id": str(payload.get("profile_id") or payload.get("user_id") or "DEFAULT").upper(),
         "mode": payload.get("mode", "SWAP"),
         "target_odds": payload.get("target_odds", 1.5),
         "total_odds": total_odds,
@@ -1010,9 +1011,19 @@ def evaluate_tracked_tickets(db: Optional[Session] = None) -> List[Dict[str, Any
                     pass
 
             if not is_conc and kickoff_ms and kickoff_ms > 0:
-                # If match started > 110 minutes ago, treat as concluded
-                if (now * 1000 - kickoff_ms) > 110 * 60 * 1000:
+                elapsed_ms = (now * 1000) - kickoff_ms
+                if elapsed_ms > 110 * 60 * 1000:
                     is_conc = True
+                    sel["match_status"] = "CONCLUDED"
+                elif elapsed_ms >= 0:
+                    # Match has kicked off and is currently active
+                    sel["match_status"] = "LIVE"
+                    sel["is_live"] = True
+                    is_ticket_live = True
+                else:
+                    # Future match
+                    sel["match_status"] = "UPCOMING"
+                    sel["is_live"] = False
 
             score_str = sel.get("score", "")
 
@@ -1216,10 +1227,10 @@ def sync_tracked_tickets_with_live_apis(db: Optional[Session] = None) -> List[Di
                             if h is not None:
                                 sel["home_score"] = h
                                 sel["away_score"] = a
-                        if sb_item.get("home_score") is not None:
+                        if sb_item.get("home_score") is not None and sb_item.get("away_score") is not None:
                             sel["home_score"] = sb_item["home_score"]
-                        if sb_item.get("away_score") is not None:
                             sel["away_score"] = sb_item["away_score"]
+                            sel["score"] = f"{sel['home_score']} - {sel['away_score']}"
 
                         if sb_item.get("leg_result"):
                             sel["leg_result"] = sb_item["leg_result"]
@@ -1238,6 +1249,14 @@ def sync_tracked_tickets_with_live_apis(db: Optional[Session] = None) -> List[Di
                         clock_raw = str(sb_item.get("clock") or "")
                         if code_raw == "HT":
                             sel["match_time"] = "HT"
+                        elif sb_item.get("status_label") and "Live" in sb_item.get("status_label"):
+                            label = sb_item.get("status_label")
+                            if "(" in label and ")" in label:
+                                sel["match_time"] = label.split("(")[1].split(")")[0].strip()
+                            else:
+                                sel["match_time"] = sb_item.get("match_time") or "In Progress"
+                        elif sb_item.get("match_time"):
+                            sel["match_time"] = sb_item.get("match_time")
                         elif clock_raw and ":" in clock_raw:
                             try:
                                 mins = int(clock_raw.split(":")[0])
@@ -1245,11 +1264,85 @@ def sync_tracked_tickets_with_live_apis(db: Optional[Session] = None) -> List[Di
                                 sel["match_time"] = f"{mins}' {half}"
                             except Exception:
                                 sel["match_time"] = clock_raw
-                        elif sb_item.get("status_label"):
-                            sel["match_time"] = sb_item["status_label"]
 
                         if sb_item.get("start_time_ms"):
                             sel["start_time_ms"] = sb_item["start_time_ms"]
+
+        # Additionally query SportyBet Live Facts Center feed for real-time goal scores
+        try:
+            import httpx
+            live_headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+                'Accept': 'application/json, text/plain, */*',
+                'Referer': 'https://www.sportybet.com/ng/',
+                'Origin': 'https://www.sportybet.com'
+            }
+            live_url = "https://www.sportybet.com/api/ng/factsCenter/wapLiveEvents?sportId=sr:sport:1&pageSize=100"
+            with httpx.Client(timeout=4.0, headers=live_headers, verify=False) as client:
+                resp = client.get(live_url)
+                if resp.status_code == 200:
+                    l_data = resp.json()
+                    if l_data and l_data.get("bizCode") == 10000:
+                        live_events = l_data.get("data", []) or []
+                        for ev in live_events:
+                            ev_h = (ev.get("homeTeamName") or ev.get("homeTeam") or "").strip().lower()
+                            ev_a = (ev.get("awayTeamName") or ev.get("awayTeam") or "").strip().lower()
+                            ev_gid = str(ev.get("eventId") or ev.get("gameId") or "")
+                            
+                            ev_score = ev.get("setScore") or ev.get("score") or ev.get("currentScore") or ""
+                            ev_h_score = ev.get("homeScore") or ev.get("home_score")
+                            ev_a_score = ev.get("awayScore") or ev.get("away_score")
+                            ev_clock = ev.get("playedSeconds") or ev.get("clock") or ""
+                            ev_status = (ev.get("matchStatus") or "LIVE").upper()
+
+                            # Match across all active/running tickets
+                            active_slips = [t for t in tickets if (t.get("status") or "RUNNING").upper() in ("RUNNING", "PENDING", "LIVE", "")]
+                            for t in active_slips:
+                                for sel in t.get("selections", []):
+                                    sel_h = (sel.get("home_team") or "").strip().lower()
+                                    sel_a = (sel.get("away_team") or "").strip().lower()
+                                    sel_gid = str(sel.get("game_id") or sel.get("fixture_id") or "")
+
+                                    # Match by ID or team token keywords
+                                    is_match = False
+                                    if ev_gid and sel_gid and ev_gid == sel_gid:
+                                        is_match = True
+                                    elif ev_h and sel_h and ev_a and sel_a:
+                                        h_tokens = [w for w in sel_h.split() if len(w) > 3]
+                                        a_tokens = [w for w in sel_a.split() if len(w) > 3]
+                                        h_match = any(tok in ev_h for tok in h_tokens) if h_tokens else (sel_h in ev_h or ev_h in sel_h)
+                                        a_match = any(tok in ev_a for tok in a_tokens) if a_tokens else (sel_a in ev_a or ev_a in sel_a)
+                                        if h_match and a_match:
+                                            is_match = True
+
+                                    if is_match:
+                                        sel["match_status"] = "LIVE"
+                                        sel["is_live"] = True
+                                        if ev_h_score is not None and ev_a_score is not None:
+                                            sel["home_score"] = int(ev_h_score)
+                                            sel["away_score"] = int(ev_a_score)
+                                            sel["score"] = f"{ev_h_score} - {ev_a_score}"
+                                        elif ev_score:
+                                            sel["score"] = ev_score
+                                            h, a = _parse_score(ev_score)
+                                            if h is not None:
+                                                sel["home_score"] = h
+                                                sel["away_score"] = a
+
+                                        if ev_clock:
+                                            try:
+                                                if isinstance(ev_clock, (int, float)):
+                                                    mins = int(ev_clock) // 60
+                                                    half = "H1" if mins <= 45 else "H2"
+                                                    sel["match_time"] = f"{mins}' {half}"
+                                                elif ":" in str(ev_clock):
+                                                    mins = int(str(ev_clock).split(":")[0])
+                                                    half = "H1" if mins <= 45 else "H2"
+                                                    sel["match_time"] = f"{mins}' {half}"
+                                            except Exception:
+                                                pass
+        except Exception as live_err:
+            print("[TicketTracker] Live factsCenter sync warning:", live_err)
 
         # Persist full tickets list to DB
         save_tracked_tickets(tickets, db=db)

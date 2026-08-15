@@ -74,7 +74,6 @@ export default function ScenarioBuilderTab() {
   const copySelectionsAsText = (selections) => {
     const text = selections.map(s => `• ${s.home_team} vs ${s.away_team} -> ${s.selection}`).join("\n");
     navigator.clipboard.writeText(text);
-    alert("Copied Selections List to clipboard:\n\n" + text);
   };
 
   const handleRemoveSelection = (scenarioId, selIdx) => {
@@ -155,12 +154,13 @@ export default function ScenarioBuilderTab() {
               <button
                 onClick={() => {
                   navigator.clipboard.writeText(codeModalData.code);
-                  alert(`Copied SportyBet Booking Code: ${codeModalData.code}`);
+                  setCopiedCode(true);
+                  setTimeout(() => setCopiedCode(false), 2500);
                 }}
-                className="px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-extrabold text-xs flex items-center space-x-1.5 transition-all shadow-sm"
+                className="px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-extrabold text-xs flex items-center space-x-1.5 transition-all shadow-sm cursor-pointer"
               >
-                <Copy className="w-4 h-4" />
-                <span>Copy Code</span>
+                {copiedCode ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                <span>{copiedCode ? "Copied!" : "Copy Code"}</span>
               </button>
             </div>
 

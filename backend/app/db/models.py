@@ -411,6 +411,23 @@ class BookingAuditRecord(Base):
     updated_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), default=datetime.datetime.utcnow)
 
 
+class AccessPasskey(Base):
+    """
+    Beta Access Passkey Entity.
+    Controls access gates, roles (ADMIN vs BETA_TESTER), and profile isolation.
+    """
+    __tablename__ = "access_passkeys"
+
+    key: Mapped[str] = mapped_column(String(50), primary_key=True)
+    label: Mapped[str] = mapped_column(String(100), default="Beta Tester")
+    role: Mapped[str] = mapped_column(String(20), default="BETA_TESTER")  # ADMIN or BETA_TESTER
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), default=datetime.datetime.utcnow)
+    last_used_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    notes: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+
+
+
 
 
 

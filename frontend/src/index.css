@@ -57,3 +57,12 @@ body {
   background-color: #000000;
   box-shadow: 0 4px 12px rgba(15, 23, 42, 0.15);
 }
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+

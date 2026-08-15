@@ -23,15 +23,15 @@ import {
   Target,
 } from "lucide-react";
 import { fetchTrackedTickets, deleteTrackedTicket, syncLiveTrackedTickets } from "../api/client";
-import { isTicketLive, isLegLive, evaluatePickLive, getDynamicMatchInfo, parseScore } from "../utils/ticketEvaluator";
+import { isTicketLive, isLegLive, evaluatePickLive, evaluateTicketStatus, getDynamicMatchInfo, parseScore } from "../utils/ticketEvaluator";
 
 export default function BetHistoryTab({ externalSelectedTicketId, onClearExternalTicket, onTicketsChanged }) {
   const [tickets, setTickets] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
-  // Filters: ALL (Show Won, Lost & Active together by default), ACTIVE, LIVE, WON, LOST
-  const [statusFilter, setStatusFilter] = useState("ALL"); 
+  // Filters: ACTIVE (Default - Show running & live tickets first), LIVE, WON, LOST, ALL
+  const [statusFilter, setStatusFilter] = useState("ACTIVE"); 
   const [dateFilter, setDateFilter] = useState("ALL"); 
   const [searchQuery, setSearchQuery] = useState("");
 
@@ -97,20 +97,16 @@ export default function BetHistoryTab({ externalSelectedTicketId, onClearExterna
     }
   }, [externalSelectedTicketId]);
 
-  // Periodic live clock ticker (every 15s) + background sync (every 30s, only when live)
+  // Periodic live clock ticker and real-time live score sync (every 10s)
   useEffect(() => {
     const timer = setInterval(() => {
       setLiveTick((prev) => {
         const next = prev + 1;
-        // Always refresh cached data for clock ticking
         loadData(true);
-        // Every 2 ticks (30s), fire a background SportyBet sync only if relevant
-        if (next % 2 === 0) {
-          syncLiveTrackedTickets().then(() => loadData(true));
-        }
+        syncLiveTrackedTickets().then(() => loadData(true));
         return next;
       });
-    }, 15000);
+    }, 10000);
     return () => clearInterval(timer);
   }, []);
 
@@ -147,15 +143,26 @@ export default function BetHistoryTab({ externalSelectedTicketId, onClearExterna
     }
   };
 
-  // Filter Logic
-  const filteredTickets = tickets.filter((t) => {
+  // Filter Logic: Dynamically settle tickets in real-time
+  const evaluatedTickets = tickets.map((t) => {
+    const evalStatus = evaluateTicketStatus(t);
+    return {
+      ...t,
+      status: evalStatus.status,
+      isWon: evalStatus.isWon,
+      isLost: evalStatus.isLost,
+      isLive: evalStatus.isLive
+    };
+  });
+
+  const filteredTickets = evaluatedTickets.filter((t) => {
     const isWon = t.status === "WON";
     const isLost = t.status === "LOST";
     const isActive = t.status === "RUNNING" || t.status === "PENDING" || !t.status;
-    const hasLiveGames = isTicketLive(t);
+    const hasLiveGames = t.isLive || isTicketLive(t);
 
     if (statusFilter === "LIVE" && !hasLiveGames) return false;
-    if (statusFilter === "ACTIVE" && !isActive) return false;
+    if (statusFilter === "ACTIVE" && (isWon || isLost)) return false;
     if (statusFilter === "WON" && !isWon) return false;
     if (statusFilter === "LOST" && !isLost) return false;
 
@@ -200,32 +207,32 @@ export default function BetHistoryTab({ externalSelectedTicketId, onClearExterna
   const liveTicketCount = tickets.filter((t) => isTicketLive(t)).length;
 
   return (
-    <div className="space-y-6 max-w-6xl mx-auto">
+    <div className="space-y-4 sm:space-y-6 max-w-6xl mx-auto">
       {/* Top Banner / Header */}
-      <div className="bg-slate-900 text-white p-6 rounded-2xl shadow-md flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+      <div className="bg-slate-900 text-white p-4 sm:p-6 rounded-xl sm:rounded-2xl shadow-md flex flex-col md:flex-row items-start md:items-center justify-between gap-3 sm:gap-4">
         <div>
-          <div className="flex items-center gap-2.5 mb-1">
-            <Receipt className="w-5 h-5 text-emerald-400" />
-            <h1 className="text-xl font-extrabold tracking-tight">
+          <div className="flex items-center gap-2 mb-1 flex-wrap">
+            <Receipt className="w-4 h-4 sm:w-5 sm:h-5 text-emerald-400" />
+            <h1 className="text-base sm:text-xl font-extrabold tracking-tight">
               Tickets & Bet History
             </h1>
             {liveTicketCount > 0 && (
-              <span className="bg-red-500/20 text-red-400 border border-red-500/40 px-2.5 py-0.5 rounded-full text-xs font-black flex items-center gap-1.5 animate-pulse">
-                <span className="w-2 h-2 rounded-full bg-red-500 animate-ping"></span>
+              <span className="bg-red-500/20 text-red-400 border border-red-500/40 px-2 py-0.5 rounded-full text-[10px] sm:text-xs font-black flex items-center gap-1.5 animate-pulse">
+                <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-ping"></span>
                 {liveTicketCount} LIVE IN-PLAY
               </span>
             )}
           </div>
-          <p className="text-xs text-slate-400">
-            Track live ticket outcomes, win/loss history, match clocks, and SportyBet leg-by-leg settlement.
+          <p className="text-[11px] sm:text-xs text-slate-400">
+            Track live ticket outcomes, win/loss history, match clocks, and SportyBet leg settlement.
           </p>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 self-end sm:self-auto">
           <button
             onClick={() => loadData(false)}
             disabled={loading}
-            className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 text-white px-4 py-2 rounded-xl text-xs font-bold transition-all border border-slate-700 shadow-sm"
+            className="flex items-center gap-1.5 sm:gap-2 bg-slate-800 hover:bg-slate-700 text-white px-3 py-1.5 sm:px-4 sm:py-2 rounded-xl text-xs font-bold transition-all border border-slate-700 shadow-sm"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} />
             <span>Sync History</span>
@@ -235,20 +242,21 @@ export default function BetHistoryTab({ externalSelectedTicketId, onClearExterna
 
       {/* Summary Metrics Cards Bar */}
       {!selectedTicket && (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm space-y-1">
-            <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider block">
-              Total Tracked Tickets
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-2 sm:gap-3">
+          <div className="bg-white p-3 sm:p-4 rounded-xl sm:rounded-2xl border border-slate-200 shadow-sm space-y-1">
+            <span className="text-[9px] sm:text-[10px] font-extrabold text-slate-400 uppercase tracking-wider block">
+              Total Tracked
             </span>
             <div className="flex items-center justify-between">
-              <span className="text-xl font-black text-slate-900">{tickets.length}</span>
+              <span className="text-lg sm:text-xl font-black text-slate-900">{tickets.length}</span>
               {liveTicketCount > 0 && (
-                <span className="text-[10px] font-extrabold bg-red-100 text-red-700 px-2 py-0.5 rounded-full">
+                <span className="text-[9px] sm:text-[10px] font-extrabold bg-red-100 text-red-700 px-1.5 py-0.5 rounded-full">
                   {liveTicketCount} Live
                 </span>
               )}
             </div>
           </div>
+
 
           <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm space-y-1">
             <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider block">
@@ -408,11 +416,11 @@ export default function BetHistoryTab({ externalSelectedTicketId, onClearExterna
             {/* Status Filter Tabs (Active / Live / Won / Lost / All) */}
             <div className="flex items-center bg-slate-100 p-1 rounded-xl overflow-x-auto gap-1">
               {[
-                { id: "ACTIVE", label: "⏳ Active Staked" },
-                { id: "LIVE", label: `🔴 Live Tickets (${liveTicketCount})` },
-                { id: "WON", label: "🏆 Won" },
-                { id: "LOST", label: "❌ Lost" },
-                { id: "ALL", label: "📜 All History" },
+                { id: "ACTIVE", label: `Active Staked (${tickets.filter((t) => t.status === "RUNNING" || t.status === "PENDING" || !t.status).length})` },
+                { id: "LIVE", label: `Live In-Play (${liveTicketCount})` },
+                { id: "WON", label: `Won (${tickets.filter((t) => t.status === "WON").length})` },
+                { id: "LOST", label: `Lost (${tickets.filter((t) => t.status === "LOST").length})` },
+                { id: "ALL", label: `All History (${tickets.length})` },
               ].map((tab) => (
                 <button
                   key={tab.id}
@@ -504,44 +512,70 @@ export default function BetHistoryTab({ externalSelectedTicketId, onClearExterna
                 />
               ))}
 
-              {/* Pagination */}
+              {/* Smart Compact Sliding Pagination */}
               {totalPages > 1 && (
-                <div className="flex items-center justify-between bg-white p-4 rounded-2xl border border-slate-200 shadow-sm text-xs font-bold text-slate-600">
-                  <span>
-                    Showing {pageIndex * itemsPerPage + 1} -{" "}
-                    {Math.min((pageIndex + 1) * itemsPerPage, filteredTickets.length)} of{" "}
-                    {filteredTickets.length} Tickets
+                <div className="flex flex-col sm:flex-row items-center justify-between gap-3 bg-white p-3.5 sm:p-4 rounded-2xl border border-slate-200 shadow-sm text-xs font-bold text-slate-600">
+                  <span className="text-slate-500 font-medium">
+                    Showing <span className="text-slate-900 font-black">{pageIndex * itemsPerPage + 1}</span> -{" "}
+                    <span className="text-slate-900 font-black">{Math.min((pageIndex + 1) * itemsPerPage, filteredTickets.length)}</span> of{" "}
+                    <span className="text-slate-900 font-black">{filteredTickets.length}</span> Tickets
                   </span>
 
-                  <div className="flex items-center gap-1.5">
+                  <div className="flex items-center gap-1 sm:gap-1.5 flex-wrap justify-center">
                     <button
                       onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
                       disabled={currentPage === 1}
-                      className="p-2 rounded-lg border border-slate-200 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed"
+                      className="px-2.5 py-1.5 rounded-xl border border-slate-200 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed text-xs font-extrabold flex items-center gap-1 cursor-pointer transition-all"
                     >
-                      <ChevronLeft className="w-4 h-4" />
+                      <ChevronLeft className="w-3.5 h-3.5" />
+                      <span className="hidden sm:inline">Prev</span>
                     </button>
 
-                    {Array.from({ length: totalPages }, (_, i) => i + 1).map((page) => (
-                      <button
-                        key={page}
-                        onClick={() => setCurrentPage(page)}
-                        className={`w-8 h-8 rounded-lg text-xs font-extrabold transition-all ${
-                          currentPage === page
-                            ? "bg-slate-900 text-white"
-                            : "border border-slate-200 text-slate-700 hover:bg-slate-50"
-                        }`}
-                      >
-                        {page}
-                      </button>
-                    ))}
+                    {(() => {
+                      const getPages = () => {
+                        if (totalPages <= 5) {
+                          return Array.from({ length: totalPages }, (_, i) => i + 1);
+                        }
+                        if (currentPage <= 3) {
+                          return [1, 2, 3, 4, "...", totalPages];
+                        }
+                        if (currentPage >= totalPages - 2) {
+                          return [1, "...", totalPages - 3, totalPages - 2, totalPages - 1, totalPages];
+                        }
+                        return [1, "...", currentPage - 1, currentPage, currentPage + 1, "...", totalPages];
+                      };
+
+                      return getPages().map((item, idx) => {
+                        if (item === "...") {
+                          return (
+                            <span key={`dots-${idx}`} className="px-1 text-slate-400 font-black select-none">
+                              ...
+                            </span>
+                          );
+                        }
+                        return (
+                          <button
+                            key={item}
+                            onClick={() => setCurrentPage(item)}
+                            className={`w-7 h-7 sm:w-8 sm:h-8 rounded-xl text-xs font-black transition-all cursor-pointer ${
+                              currentPage === item
+                                ? "bg-slate-900 text-white shadow-xs"
+                                : "border border-slate-200 text-slate-700 hover:bg-slate-50"
+                            }`}
+                          >
+                            {item}
+                          </button>
+                        );
+                      });
+                    })()}
 
                     <button
                       onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
                       disabled={currentPage === totalPages}
-                      className="p-2 rounded-lg border border-slate-200 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed"
+                      className="px-2.5 py-1.5 rounded-xl border border-slate-200 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed text-xs font-extrabold flex items-center gap-1 cursor-pointer transition-all"
                     >
-                      <ChevronRight className="w-4 h-4" />
+                      <span className="hidden sm:inline">Next</span>
+                      <ChevronRight className="w-3.5 h-3.5" />
                     </button>
                   </div>
                 </div>
@@ -850,36 +884,31 @@ function TicketDetailView({ ticket, onBack, onDelete }) {
   const potWinVal = Number(ticket.potential_win || stakeVal * oddsVal);
   const returnVal = isWon ? potWinVal : 0;
 
-  // Local state for live interactive simulation testing
-  const [localSelections, setLocalSelections] = useState(selections);
+  // Local override state for live interactive simulation testing
+  const [simulationOverrides, setSimulationOverrides] = useState({});
 
-  useEffect(() => {
-    setLocalSelections(ticket.selections || []);
-  }, [ticket]);
+  const displaySelections = (ticket.selections || []).map((sel, idx) => {
+    return simulationOverrides[idx] ? { ...sel, ...simulationOverrides[idx] } : sel;
+  });
 
   // Simulate a live goal scored for interactive testing
   const simulateLiveGoal = (index) => {
-    setLocalSelections((prev) =>
-      prev.map((sel, idx) => {
-        if (idx !== index) return sel;
-        const curHome = sel.home_score !== undefined ? sel.home_score : (sel.score ? parseInt(sel.score.split("-")[0]) : 0);
-        const curAway = sel.away_score !== undefined ? sel.away_score : (sel.score ? parseInt(sel.score.split("-")[1]) : 0);
-        
-        // Add a goal to away or home team
-        const newAway = curAway + 1;
-        const newScoreStr = `${curHome} - ${newAway}`;
-        
-        return {
-          ...sel,
-          home_score: curHome,
-          away_score: newAway,
-          score: newScoreStr,
-          match_status: "LIVE",
-          match_time: "42' H1",
-          is_live: true,
-        };
-      })
-    );
+    const sel = displaySelections[index];
+    const curHome = sel.home_score !== undefined && sel.home_score !== null ? sel.home_score : (sel.score ? parseInt(sel.score.split("-")[0]) : 0);
+    const curAway = sel.away_score !== undefined && sel.away_score !== null ? sel.away_score : (sel.score ? parseInt(sel.score.split("-")[1]) : 0);
+    const newAway = curAway + 1;
+    const newScoreStr = `${curHome} - ${newAway}`;
+    setSimulationOverrides(prev => ({
+      ...prev,
+      [index]: {
+        home_score: curHome,
+        away_score: newAway,
+        score: newScoreStr,
+        match_status: "LIVE",
+        match_time: "42' H1",
+        is_live: true,
+      }
+    }));
   };
 
   return (
@@ -925,7 +954,7 @@ function TicketDetailView({ ticket, onBack, onDelete }) {
         <div className="flex items-center justify-between border-b border-slate-800 pb-3">
           <div>
             <span className="text-[10px] text-slate-400 block font-bold uppercase tracking-wider">Selection Type</span>
-            <span className="text-sm font-extrabold text-white">Multiple ({localSelections.length} Legs)</span>
+            <span className="text-sm font-extrabold text-white">Multiple ({displaySelections.length} Legs)</span>
           </div>
 
           <div className="text-right">
@@ -996,10 +1025,10 @@ function TicketDetailView({ ticket, onBack, onDelete }) {
                   Re-Editor Feature Used
                 </span>
                 <h4 className="font-extrabold text-slate-900 text-sm">
-                  {m === "SWAP" || m === "HYBRID" ? "🔄 SWAP MODE (Hybrid Re-Edit)" :
-                   m === "REMOVE" ? "✂️ REMOVE MODE (Dropped Risky Picks)" :
-                   m === "BUILDER" || m === "ACCUMULATOR" ? "🎯 AI TICKET BUILDER" :
-                   "🛡️ AUDITOR MODE (Structural Pick Upgrades)"}
+                  {m === "SWAP" || m === "HYBRID" ? "SWAP MODE (Hybrid Re-Edit)" :
+                   m === "REMOVE" ? "REMOVE MODE (Dropped Risky Picks)" :
+                   m === "BUILDER" || m === "ACCUMULATOR" ? "AI TICKET BUILDER" :
+                   "AUDITOR MODE (Structural Pick Upgrades)"}
                 </h4>
                 <p className="text-[11px] text-slate-500 mt-0.5">
                   {m === "SWAP" || m === "HYBRID" ? "Kept safe original ticket games, and swapped risky games with high-confidence picks from top European leagues." :
@@ -1053,7 +1082,7 @@ function TicketDetailView({ ticket, onBack, onDelete }) {
           </div>
 
           <span className="text-[11px] font-black uppercase px-3 py-1 rounded-xl bg-white border border-slate-200 shadow-xs tracking-wider">
-            {isWon ? "🏆 TICKET WON" : isLost ? "❌ TICKET BUST / LOST" : "⏳ TICKET RUNNING"}
+            {isWon ? "TICKET WON" : isLost ? "TICKET BUST / LOST" : "TICKET RUNNING"}
           </span>
         </div>
       )}
@@ -1067,10 +1096,10 @@ function TicketDetailView({ ticket, onBack, onDelete }) {
           <span className="text-xs font-extrabold text-slate-600">
             {(() => {
               const m = (ticket.mode || "AUDITOR").toUpperCase();
-              if (m === "SWAP" || m === "HYBRID") return "🔄 SWAP MODE (Optimized Leg Replacement)";
-              if (m === "REMOVE") return "✂️ REMOVE MODE (Dropped Risky Picks)";
-              if (m === "BUILDER" || m === "ACCUMULATOR" || m === "ROLLOVER") return "🎯 AI BUILDER (Target Odds Slip)";
-              return "🛡️ AUDITOR MODE (Structural Pick Upgrades)";
+              if (m === "SWAP" || m === "HYBRID") return "SWAP MODE (Optimized Leg Replacement)";
+              if (m === "REMOVE") return "REMOVE MODE (Dropped Risky Picks)";
+              if (m === "BUILDER" || m === "ACCUMULATOR" || m === "ROLLOVER") return "AI BUILDER (Target Odds Slip)";
+              return "AUDITOR MODE (Structural Pick Upgrades)";
             })()}
           </span>
         </div>
@@ -1098,13 +1127,13 @@ function TicketDetailView({ ticket, onBack, onDelete }) {
         {isWon && (
           <div className="text-emerald-700 font-extrabold flex items-center gap-1.5 pt-1">
             <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-            <span>🏆 TICKET WON</span>
+            <span>TICKET WON</span>
           </div>
         )}
         {isLost && (
           <div className="text-rose-700 font-extrabold flex items-center gap-1.5 pt-1">
             <XCircle className="w-4 h-4 text-rose-600" />
-            <span>❌ TICKET BUST / LOST</span>
+            <span>TICKET BUST / LOST</span>
           </div>
         )}
       </div>
@@ -1113,7 +1142,7 @@ function TicketDetailView({ ticket, onBack, onDelete }) {
       <div className="space-y-3 pt-2">
         <div className="flex items-center justify-between">
           <h3 className="text-xs font-black text-slate-900 uppercase tracking-wider">
-            Leg Selections & Live Outcomes ({localSelections.length})
+            Leg Selections & Live Outcomes ({displaySelections.length})
           </h3>
           <span className="text-[11px] font-bold text-slate-500">
             Real-time Early Win Detection Active
@@ -1121,7 +1150,7 @@ function TicketDetailView({ ticket, onBack, onDelete }) {
         </div>
 
         <div className="space-y-3">
-          {localSelections.map((sel, idx) => {
+          {displaySelections.map((sel, idx) => {
             const matchInfo = getDynamicMatchInfo(sel);
             const legLive = matchInfo.isLive;
             const evalRes = evaluatePickLive(sel);

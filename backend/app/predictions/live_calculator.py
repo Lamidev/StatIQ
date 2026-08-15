@@ -121,9 +121,9 @@ TEAM_RATINGS: Dict[str, int] = {
     "Angers SCO": 1630, "Angers": 1630,
 
     # Netherlands & Portugal
-    "PSV": 1850, "PSV Eindhoven": 1850, "Feyenoord": 1820, "Feyenoord Rotterdam": 1820,
+    "PSV": 1860, "PSV Eindhoven": 1860, "Feyenoord": 1820, "Feyenoord Rotterdam": 1820,
     "Ajax": 1810, "AFC Ajax": 1810, "AZ": 1730, "AZ Alkmaar": 1730, "Twente": 1700, "FC Twente": 1700,
-    "PEC Zwolle": 1520, "Sparta Rotterdam": 1540,
+    "PEC Zwolle": 1520, "Sparta Rotterdam": 1540, "Excelsior": 1480, "Excelsior Rotterdam": 1480, "SBV Excelsior": 1480,
     "Benfica": 1860, "SL Benfica": 1860, "Sporting CP": 1870, "Sporting": 1870,
     "Porto": 1850, "FC Porto": 1850, "Braga": 1740, "SC Braga": 1740,
     "Alverca Futebol": 1480, "FC Alverca SAD": 1480, "Academico de Viseu FC": 1450,
@@ -139,15 +139,25 @@ TEAM_RATINGS: Dict[str, int] = {
     "Dundee United": 1490, "Dundee United FC": 1490,
     "St. Mirren": 1490, "St Mirren FC": 1490,
 
-    # Turkey & Other European Competitions
+    # Turkey (Super Lig) & Other European Competitions
     "Galatasaray": 1840, "Galatasaray SK": 1840,
-    "Fenerbahce": 1830, "Fenerbahçe SK": 1830,
+    "Fenerbahce": 1830, "Fenerbahçe SK": 1830, "Fenerbahce Istanbul": 1830,
     "Besiktas": 1750, "Beşiktaş JK": 1750,
-    "Trabzonspor": 1710, "Malmo": 1680, "Malmö FF": 1680,
-    "Rosenborg": 1640, "Rosenborg BK": 1640, "Lillestroem SK": 1580,
-    "Greuther Furth": 1560, "St. Pauli": 1660, "FC St. Pauli": 1660,
+    "Trabzonspor": 1710, "Basaksehir": 1690, "Istanbul Basaksehir": 1690,
+    "Kasimpasa": 1580, "Kasimpasa Istanbul": 1580, "Kasimpasa SK": 1580,
+    "Konyaspor": 1590, "Caykur Rizespor": 1570, "Rizespor": 1570,
+    "Gaziantep FK": 1560, "Gaziantep": 1560, "Alanyaspor": 1570, "Corendon Alanyaspor": 1570,
+    "Genclerbirligi": 1520, "Genclerbirligi SK": 1520,
+    "Antalyaspor": 1580, "Sivasspor": 1570, "Samsunspor": 1630, "Goztepe": 1620, "Eyupspor": 1620,
 
-    # South America & International
+    # England (Championship) & Netherlands
+    "Stoke City": 1550, "Swansea City": 1540,
+    "Willem II": 1540, "Willem II Tilburg": 1540, "NEC Nijmegen": 1670, "N.E.C. Nijmegen": 1670,
+    "Bryne FK": 1480, "Bryne": 1480, "Moss FK": 1460, "Moss": 1460,
+
+    # Nordic & South America
+    "Malmo": 1680, "Malmö FF": 1680, "Rosenborg": 1640, "Rosenborg BK": 1640, "Lillestroem SK": 1580,
+    "Greuther Furth": 1560, "St. Pauli": 1660, "FC St. Pauli": 1660,
     "Flamengo": 1810, "Palmeiras": 1820, "Botafogo": 1770, "River Plate": 1800, "Boca Juniors": 1780,
     "Argentina": 1990, "France": 1985, "England": 1950, "Brazil": 1940, "Spain": 1960, "Germany": 1920,
 }

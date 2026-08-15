@@ -1,3 +1,4 @@
+from typing import Optional
 from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from app.api.endpoints.predictions import router as predictions_router
@@ -11,6 +12,7 @@ from app.api.endpoints.fixtures import router as fixtures_router
 from app.api.endpoints.ticket_edit import router as ticket_edit_router
 from app.api.endpoints.ticket_builder import router as ticket_builder_router
 from app.api.endpoints.notifications import router as notifications_router
+from app.api.endpoints.auth import router as auth_router
 from app.db.session import engine
 from app.db.models import Base
 
@@ -33,6 +35,7 @@ app.add_middleware(
 )
 
 # Mount Routers
+app.include_router(auth_router, prefix="/api/v1/auth", tags=["Passkey Authentication"])
 app.include_router(predictions_router, prefix="/api/v1/predictions", tags=["Live Predictions"])
 app.include_router(markets_router, prefix="/api/v1/markets", tags=["Market Analyzer"])
 app.include_router(scenarios_router, prefix="/api/v1/scenarios", tags=["Scenario Builder"])
@@ -94,9 +97,14 @@ def lock_staked_ticket(payload: dict, db: Session = Depends(get_db)):
     return lock_ticket(payload, db=db)
 
 @app.get("/api/v1/ticket-tracker/list")
-def list_staked_tickets(db: Session = Depends(get_db)):
+def list_staked_tickets(profile_id: Optional[str] = None, db: Session = Depends(get_db)):
     """Return all tracked tickets immediately (< 2ms), auto-evaluating in-memory scores."""
-    return evaluate_tracked_tickets(db=db)
+    all_tickets = evaluate_tracked_tickets(db=db)
+    clean_pid = (profile_id or "").strip().upper()
+    admin_profiles = ("ALL", "ADMIN", "THISSLAMI1805")
+    if clean_pid and clean_pid not in admin_profiles:
+        return [t for t in all_tickets if str(t.get("profile_id", "DEFAULT")).upper() == clean_pid]
+    return all_tickets
 
 @app.post("/api/v1/ticket-tracker/sync-live-api")
 def sync_live_tickets_endpoint(db: Session = Depends(get_db)):

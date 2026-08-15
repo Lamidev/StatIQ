@@ -67,7 +67,7 @@
     "odds": 2.81,
     "potential_payout": 14050.0,
     "created_at": "2026-08-14 14:42:13",
-    "read": false
+    "read": true
   },
   {
     "id": "NOTIF-TICK-1786637332",
@@ -123,7 +123,7 @@
     "odds": 2.78,
     "potential_payout": 13900.0,
     "created_at": "2026-08-13 16:47:46",
-    "read": false
+    "read": true
   },
   {
     "id": "NOTIF-TICK-1786635853",
@@ -154,20 +154,6 @@
     "read": true
   },
   {
-    "id": "NOTIF-TICK-1786551555",
-    "ticket_id": "TICK-1786551555",
-    "code": "W02GVL",
-    "mode": "REMOVE",
-    "title": "\ud83c\udf89 Ticket WON! \u2014 W02GVL",
-    "message": "WON (Covered by Flex Cut-3 \u2014 3 loss paid out) \u2022 Stake \u20a6500.00",
-    "flex_status_text": "WON (Covered by Flex Cut-3 \u2014 3 loss paid out)",
-    "status": "WON",
-    "odds": 600.13,
-    "potential_payout": 300065.0,
-    "created_at": "2026-08-12 17:19:15",
-    "read": true
-  },
-  {
     "id": "NOTIF-TICK-1786551541",
     "ticket_id": "TICK-1786551541",
     "code": "W02GVL",
@@ -179,34 +165,6 @@
     "odds": 600.13,
     "potential_payout": 300065.0,
     "created_at": "2026-08-12 17:19:01",
-    "read": true
-  },
-  {
-    "id": "NOTIF-TICK-1786551520",
-    "ticket_id": "TICK-1786551520",
-    "code": "W02GVL",
-    "mode": "REMOVE",
-    "title": "\ud83c\udf89 Ticket WON! \u2014 W02GVL",
-    "message": "WON (Clean Sweep - 0 Losses) \u2022 Stake \u20a6500.00",
-    "flex_status_text": "WON (Clean Sweep - 0 Losses)",
-    "status": "WON",
-    "odds": 43.83,
-    "potential_payout": 21915.0,
-    "created_at": "2026-08-12 17:18:40",
-    "read": false
-  },
-  {
-    "id": "NOTIF-TICK-1786551460",
-    "ticket_id": "TICK-1786551460",
-    "code": "W02GVL",
-    "mode": "REMOVE",
-    "title": "\ud83c\udf89 Ticket WON! \u2014 W02GVL",
-    "message": "WON (Clean Sweep - 0 Losses) \u2022 Stake \u20a6500.00",
-    "flex_status_text": "WON (Clean Sweep - 0 Losses)",
-    "status": "WON",
-    "odds": 7.56,
-    "potential_payout": 3780.0,
-    "created_at": "2026-08-12 17:17:40",
     "read": true
   },
   {
@@ -375,7 +333,7 @@
     "odds": 2.0,
     "potential_payout": 10000.0,
     "created_at": "2026-08-11 17:07:57",
-    "read": false
+    "read": true
   },
   {
     "id": "NOTIF-TICK-1786381943",

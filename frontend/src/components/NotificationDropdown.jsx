@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import { Bell, Trophy, CheckCheck, Trash2, ChevronRight, X } from "lucide-react";
+import { fetchNotificationsList, markNotificationRead, clearAllNotifications } from "../api/client";
 
 export default function NotificationDropdown({ onSelectTicket }) {
   const [isOpen, setIsOpen] = useState(false);
@@ -9,12 +10,9 @@ export default function NotificationDropdown({ onSelectTicket }) {
 
   const fetchNotifications = async () => {
     try {
-      const res = await fetch("http://127.0.0.1:8000/api/v1/notifications");
-      if (res.ok) {
-        const data = await res.json();
-        setNotifications(data.notifications || []);
-        setUnreadCount(data.unread_count || 0);
-      }
+      const data = await fetchNotificationsList();
+      setNotifications(data.notifications || []);
+      setUnreadCount(data.unread_count || 0);
     } catch (e) {
       console.error("Failed to fetch notifications:", e);
     }
@@ -40,13 +38,8 @@ export default function NotificationDropdown({ onSelectTicket }) {
   const handleMarkAllRead = async (e) => {
     e.stopPropagation();
     try {
-      const res = await fetch("http://127.0.0.1:8000/api/v1/notifications/mark-read", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ all: true })
-      });
-      if (res.ok) {
-        const data = await res.json();
+      const data = await markNotificationRead({ all: true });
+      if (data) {
         setNotifications(data.notifications || []);
         setUnreadCount(0);
       }
@@ -58,13 +51,9 @@ export default function NotificationDropdown({ onSelectTicket }) {
   const handleClearAll = async (e) => {
     e.stopPropagation();
     try {
-      const res = await fetch("http://127.0.0.1:8000/api/v1/notifications/clear", {
-        method: "DELETE"
-      });
-      if (res.ok) {
-        setNotifications([]);
-        setUnreadCount(0);
-      }
+      await clearAllNotifications();
+      setNotifications([]);
+      setUnreadCount(0);
     } catch (err) {
       console.error("Failed to clear notifications:", err);
     }
@@ -73,11 +62,7 @@ export default function NotificationDropdown({ onSelectTicket }) {
   const handleItemClick = async (item) => {
     if (!item.read) {
       try {
-        await fetch("http://127.0.0.1:8000/api/v1/notifications/mark-read", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ id: item.id })
-        });
+        await markNotificationRead({ id: item.id });
         setNotifications((prev) =>
           prev.map((n) => (n.id === item.id ? { ...n, read: true } : n))
         );
@@ -91,6 +76,7 @@ export default function NotificationDropdown({ onSelectTicket }) {
       onSelectTicket(item.ticket_id);
     }
   };
+
 
   return (
     <div className="relative inline-block text-left" ref={dropdownRef}>

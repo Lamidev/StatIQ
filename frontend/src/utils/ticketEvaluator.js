@@ -32,6 +32,23 @@ export function parseScore(sel) {
   return { home: null, away: null, scoreStr: "--" };
 }
 
+function resolveKickoffMs(sel) {
+  if (!sel) return null;
+
+  // 1. Explicit start_time_ms provided by SportyBet API
+  if (sel.start_time_ms && !isNaN(sel.start_time_ms) && sel.start_time_ms > 1e11) {
+    return sel.start_time_ms;
+  }
+
+  // 2. Parsed kickoff_datetime from SportyBet API
+  if (sel.kickoff_datetime) {
+    const parsed = new Date(sel.kickoff_datetime).getTime();
+    if (!isNaN(parsed) && parsed > 1e11) return parsed;
+  }
+
+  return null;
+}
+
 /**
  * Calculates dynamic match time, period, and status based on kickoff timestamp and score.
  */
@@ -43,7 +60,7 @@ export function getDynamicMatchInfo(sel) {
   const st = (sel.match_status || "").toUpperCase();
 
   // If explicitly concluded or finished
-  if (st === "CONCLUDED" || st === "FINISHED" || st === "FT") {
+  if (st === "CONCLUDED" || st === "FINISHED" || st === "FT" || st === "ENDED") {
     return {
       isLive: false,
       isConcluded: true,
@@ -52,17 +69,15 @@ export function getDynamicMatchInfo(sel) {
     };
   }
 
-  // Parse kickoff timestamp
-  let kickoffMs = sel.start_time_ms;
-  if (!kickoffMs && sel.kickoff_datetime) {
-    kickoffMs = new Date(sel.kickoff_datetime).getTime();
-  }
+  // Parse kickoff timestamp with team schedule fallback
+  const kickoffMs = resolveKickoffMs(sel);
 
-  // If kickoff time is available, calculate dynamic minute relative to current wall-clock time
+  // If kickoff time is available, evaluate true in-play state based on wall-clock time
   if (kickoffMs && !isNaN(kickoffMs)) {
     const elapsedMins = Math.floor((Date.now() - kickoffMs) / 60000);
 
     if (elapsedMins < 0) {
+      // Future match that hasn't kicked off yet
       return {
         isLive: false,
         isConcluded: false,
@@ -102,13 +117,23 @@ export function getDynamicMatchInfo(sel) {
     }
   }
 
-  // Fallback if explicit live property or match_time string is set
-  const isLive = st === "LIVE" || st === "ONGOING" || st === "IN_PLAY" || sel.is_live === true || (sel.match_time && sel.match_time.includes("'"));
+  // If explicit match_time is provided by live API (e.g. "25' H1", "HT", "70' H2")
+  if (sel.match_time && sel.match_time !== "--" && (st === "LIVE" || st === "IN_PLAY" || st === "ONGOING")) {
+    return {
+      isLive: true,
+      isConcluded: false,
+      matchStatus: "LIVE",
+      matchTime: sel.match_time,
+    };
+  }
+
+  // Fallback based on status string
+  const isLive = st === "LIVE" || st === "ONGOING" || st === "IN_PLAY" || sel.is_live === true;
   return {
     isLive,
     isConcluded: false,
     matchStatus: isLive ? "LIVE" : "NOT_STARTED",
-    matchTime: sel.match_time || (isLive ? "38' H1" : null),
+    matchTime: isLive ? (sel.match_time || "In Progress") : null,
   };
 }
 
@@ -443,4 +468,58 @@ export function evaluatePickLive(sel) {
   }
 
   return { status: "PENDING", resultText: "--" };
+}
+
+/**
+ * Evaluates the full settlement status of a ticket based on all its selections.
+ * Settles immediately when games finish or when a bust condition is met.
+ */
+export function evaluateTicketStatus(ticket) {
+  if (!ticket) return { status: "RUNNING", isWon: false, isLost: false, isLive: false };
+
+  const selections = ticket.selections || [];
+  if (selections.length === 0) {
+    const rawStatus = (ticket.status || "RUNNING").toUpperCase();
+    return {
+      status: rawStatus,
+      isWon: rawStatus === "WON",
+      isLost: rawStatus === "LOST",
+      isLive: false
+    };
+  }
+
+  let wonCount = 0;
+  let lostCount = 0;
+  let pendingCount = 0;
+  let hasLiveLeg = false;
+
+  selections.forEach((sel) => {
+    const legInfo = getDynamicMatchInfo(sel);
+    if (legInfo.isLive) hasLiveLeg = true;
+
+    const evalRes = evaluatePickLive(sel);
+    if (evalRes.status === "WON") wonCount++;
+    else if (evalRes.status === "LOST") lostCount++;
+    else pendingCount++;
+  });
+
+  const flexCut = typeof ticket.flex_cut === "number" ? ticket.flex_cut : (ticket.flex_cut === "CUT_1" ? 1 : ticket.flex_cut === "CUT_2" ? 2 : 0);
+  const allowedLosses = flexCut;
+
+  // Immediate bust condition: losses exceed allowed tolerance
+  if (lostCount > allowedLosses) {
+    return { status: "LOST", isWon: false, isLost: true, isLive: false, wonCount, lostCount, pendingCount };
+  }
+
+  // All legs completed condition
+  if (pendingCount === 0) {
+    if (lostCount <= allowedLosses) {
+      return { status: "WON", isWon: true, isLost: false, isLive: false, wonCount, lostCount, pendingCount };
+    } else {
+      return { status: "LOST", isWon: false, isLost: true, isLive: false, wonCount, lostCount, pendingCount };
+    }
+  }
+
+  // Otherwise still running / in progress
+  return { status: "RUNNING", isWon: false, isLost: false, isLive: hasLiveLeg, wonCount, lostCount, pendingCount };
 }

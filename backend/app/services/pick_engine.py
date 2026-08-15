@@ -15,6 +15,8 @@ Also provides Fractional Kelly Criterion bankroll stake sizing.
 """
 
 import math
+import random
+import time
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass, field
 
@@ -40,6 +42,7 @@ class PickDecision:
     rejection_reason: Optional[str]
     decision_audit_log: List[str]
     kelly_quarter_stake_pct: float
+    raw_match_data: Optional[Dict[str, Any]] = None
 
 @dataclass
 class BuiltTicket:
@@ -55,6 +58,53 @@ class BuiltTicket:
     total_evaluated: int
     decision_audit_summary: List[str]
     recommended_stake_pct: float
+
+TOP_LEAGUES_BOOST = {
+    "PREMIER LEAGUE": 10.0,
+    "LALIGA": 9.5,
+    "SERIE A": 9.5,
+    "BUNDESLIGA": 9.5,
+    "LIGUE 1": 9.0,
+    "EREDIVISIE": 8.5,
+    "PRIMEIRA LIGA": 8.5,
+    "LIGA PORTUGAL": 8.5,
+    "SUPER LIG": 8.5,
+    "SAUDI PRO LEAGUE": 8.0,
+    "BELGIUM": 8.0,
+    "SCOTTISH PREMIERSHIP": 8.0,
+    "CHAMPIONS LEAGUE": 10.0,
+    "EUROPA LEAGUE": 9.5,
+    "CONFERENCE LEAGUE": 9.0,
+    "COPPA ITALIA": 8.5,
+    "DFB POKAL": 8.5,
+    "COPA DEL REY": 8.5,
+    "FA CUP": 8.5,
+    "EFL CUP": 8.0,
+}
+
+TOP_POWERHOUSE_CLUBS = {
+    # Premier League
+    "MANCHESTER CITY", "MAN CITY", "LIVERPOOL", "ARSENAL", "CHELSEA", "MANCHESTER UNITED", "MAN UTD", "TOTTENHAM", "ASTON VILLA", "NEWCASTLE",
+    # LaLiga
+    "REAL MADRID", "BARCELONA", "ATLETICO MADRID", "ATLETICO", "SEVILLA", "REAL SOCIEDAD", "VILLARREAL", "ATHLETIC BILBAO", "VALENCIA",
+    # Bundesliga
+    "BAYERN MUNICH", "BAYERN MUNCHEN", "BORUSSIA DORTMUND", "DORTMUND", "BAYER LEVERKUSEN", "LEVERKUSEN", "RB LEIPZIG", "EINTRACHT FRANKFURT", "STUTTGART",
+    # Serie A
+    "INTER", "INTER MILAN", "AC MILAN", "MILAN", "JUVENTUS", "NAPOLI", "ATALANTA", "ROMA", "LAZIO", "FIORENTINA", "TORINO", "UDINESE",
+    # Ligue 1
+    "PARIS SAINT-GERMAIN", "PSG", "MARSEILLE", "MONACO", "LYON", "LILLE", "LENS",
+    # Eredivisie
+    "PSV", "PSV EINDHOVEN", "AJAX", "FEYENOORD", "AZ ALKMAAR",
+    # Liga Portugal
+    "PORTO", "BENFICA", "SPORTING CP", "SPORTING LISBON", "BRAGA",
+    # Super Lig
+    "FENERBAHCE", "GALATASARAY", "BESIKTAS", "TRABZONSPOR",
+    # Saudi Pro League
+    "AL NASSR", "AL-NASSR", "AL HILAL", "AL-HILAL", "AL ITTIHAD", "AL-ITTIHAD", "AL AHLI", "AL-AHLI",
+    # Scotland & Europe Elite
+    "CELTIC", "RANGERS", "VIKTORIA PLZEN", "SLAVIA PRAGUE", "SPARTA PRAGUE", "GENK", "CLUB BRUGGE", "ANDERLECHT",
+    "RED BULL SALZBURG", "SHAKHTAR DONETSK", "DINAMO ZAGREB", "OLYMPIACOS", "PAOK", "AEK ATHENS", "BODØ/GLIMT", "LUDOGORETS", "KRASNODAR"
+}
 
 class MatchIQPickEngine:
     """
@@ -122,164 +172,338 @@ class MatchIQPickEngine:
         gate_results = {}
 
         # Fetch / compute probabilities & structural context
-        probs_data = calculate_matchiq_probabilities(home, away)
-        # Override with fixture specific probabilities if present
-        ph = (fixture.get("ai_prob_home") or probs_data["ai_prob_home"]) / 100.0
-        pd = (fixture.get("ai_prob_draw") or probs_data["ai_prob_draw"]) / 100.0
-        pa = (fixture.get("ai_prob_away") or probs_data["ai_prob_away"]) / 100.0
-        po15 = (fixture.get("ai_prob_over_1_5") or probs_data["ai_prob_over_1_5"]) / 100.0
-        po25 = (fixture.get("ai_prob_over_2_5") or probs_data["ai_prob_over_2_5"]) / 100.0
-        p_corners = (fixture.get("ai_prob_corners_over_7_5") or probs_data["ai_prob_corners_over_7_5"]) / 100.0
+        # Extract live odds dictionaries if present on fixture
+        ou_lines = fixture.get("ou_lines") or []
+        dc_odds = fixture.get("double_chance") or {}
 
+        # Also inspect raw_markets for 1X2 if not in result_1x2
+        r1x2 = dict(fixture.get("result_1x2") or {})
+        if "1" in r1x2 and "home" not in r1x2:
+            r1x2["home"] = r1x2["1"]
+        if "X" in r1x2 and "draw" not in r1x2:
+            r1x2["draw"] = r1x2["X"]
+        if "2" in r1x2 and "away" not in r1x2:
+            r1x2["away"] = r1x2["2"]
+        if "home" in r1x2 and "1" not in r1x2:
+            r1x2["1"] = r1x2["home"]
+        if "draw" in r1x2 and "X" not in r1x2:
+            r1x2["X"] = r1x2["draw"]
+        if "away" in r1x2 and "2" not in r1x2:
+            r1x2["2"] = r1x2["away"]
+
+        if not r1x2 and fixture.get("markets"):
+            for m in fixture.get("markets", []):
+                m_desc = (m.get("desc") or m.get("name") or "").lower()
+                if "1x2" in m_desc or "match result" in m_desc:
+                    for o in m.get("outcomes", []):
+                        o_desc = (o.get("desc") or o.get("name") or "").lower()
+                        try:
+                            val = float(o.get("odds"))
+                            if o_desc in ["1", "home", home.lower()]:
+                                r1x2["home"] = val
+                                r1x2["1"] = val
+                            elif o_desc in ["x", "draw"]:
+                                r1x2["draw"] = val
+                                r1x2["X"] = val
+                            elif o_desc in ["2", "away", away.lower()]:
+                                r1x2["away"] = val
+                                r1x2["2"] = val
+                        except (ValueError, TypeError):
+                            pass
+
+        fixture["result_1x2"] = r1x2
+
+        h_odd = float(r1x2.get("home", 0.0)) if r1x2.get("home") else None
+        d_odd = float(r1x2.get("draw", 0.0)) if r1x2.get("draw") else None
+        a_odd = float(r1x2.get("away", 0.0)) if r1x2.get("away") else None
+
+        # Fetch baseline Elo calculations
+        probs_data = calculate_matchiq_probabilities(home, away)
         elo_gap = probs_data.get("elo_gap", 0.0)
         tier_context = probs_data.get("tier_context", "COMPETITIVE")
 
-        # Ingest live SportyBet 1X2 odds if available to objectively determine tier dominance
-        raw_markets = fixture.get("markets") or []
-        for m in raw_markets:
-            m_desc = (m.get("desc") or m.get("name") or "").lower()
-            if "1x2" in m_desc or "match result" in m_desc:
-                h_odds = a_odds = None
-                for o in m.get("outcomes", []):
-                    o_desc = (o.get("desc") or o.get("name") or "").lower()
-                    try:
-                        val = float(o.get("odds"))
-                        if o_desc in ["1", "home", home.lower()]:
-                            h_odds = val
-                        elif o_desc in ["2", "away", away.lower()]:
-                            a_odds = val
-                    except (ValueError, TypeError):
-                        pass
-                if h_odds and a_odds:
-                    if a_odds <= 1.80 and h_odds >= 3.50:
-                        tier_context = "AWAY_DOMINANT"
-                        elo_gap = max(elo_gap, 120.0)
-                    elif h_odds <= 1.80 and a_odds >= 3.50:
-                        tier_context = "HOME_DOMINANT"
-                        elo_gap = max(elo_gap, 120.0)
+        # Ground Truth Calibration: Unambiguous Favorite vs Underdog determination
+        if h_odd and d_odd and a_odd and h_odd > 1.0 and a_odd > 1.0:
+            margin_inv = (1.0 / h_odd) + (1.0 / d_odd) + (1.0 / a_odd)
+            ph = (1.0 / h_odd) / margin_inv
+            pd = (1.0 / d_odd) / margin_inv
+            pa = (1.0 / a_odd) / margin_inv
+
+            # Ground Truth Dominance Classification from live SportyBet market odds
+            if h_odd <= 1.45 and a_odd >= 3.80:
+                tier_context = "HOME_DOMINANT"
+                elo_gap = 200.0
+            elif a_odd <= 1.45 and h_odd >= 3.80:
+                tier_context = "AWAY_DOMINANT"
+                elo_gap = -200.0
+            elif h_odd <= 1.85 and a_odd >= 2.50:
+                tier_context = "HOME_FAVORITE"
+                elo_gap = 120.0
+            elif a_odd <= 1.85 and h_odd >= 2.50:
+                tier_context = "AWAY_FAVORITE"
+                elo_gap = -120.0
+            elif h_odd < a_odd and (a_odd - h_odd) >= 0.60:
+                tier_context = "HOME_SLIGHT_FAVORITE"
+                elo_gap = 60.0
+            elif a_odd < h_odd and (h_odd - a_odd) >= 0.60:
+                tier_context = "AWAY_SLIGHT_FAVORITE"
+                elo_gap = -60.0
+            else:
+                tier_context = "COMPETITIVE"
+                elo_gap = 0.0
+        else:
+            raw_ph = fixture.get("ai_prob_home") or probs_data["ai_prob_home"]
+            raw_pd = fixture.get("ai_prob_draw") or probs_data["ai_prob_draw"]
+            raw_pa = fixture.get("ai_prob_away") or probs_data["ai_prob_away"]
+            ph = raw_ph if raw_ph <= 1.0 else (raw_ph / 100.0)
+            pd = raw_pd if raw_pd <= 1.0 else (raw_pd / 100.0)
+            pa = raw_pa if raw_pa <= 1.0 else (raw_pa / 100.0)
+
+        raw_po15 = fixture.get("ai_prob_over_1_5") or probs_data.get("ai_prob_over_1_5", 78.0)
+        po15 = raw_po15 if raw_po15 <= 1.0 else (raw_po15 / 100.0)
+
+        raw_po25 = fixture.get("ai_prob_over_2_5") or probs_data.get("ai_prob_over_2_5", 52.0)
+        po25 = raw_po25 if raw_po25 <= 1.0 else (raw_po25 / 100.0)
 
         audit_log.append(f"Fixture: {home} vs {away} [{comp}]")
-        audit_log.append(f"Elo/Odds Gap: {elo_gap:+.1f} pts -> Tier Context: {tier_context}")
+        audit_log.append(f"Elo/Odds Gap: {elo_gap:+.1f} pts -> Tier Context: {tier_context} (Home: {ph*100:.1f}%, Draw: {pd*100:.1f}%, Away: {pa*100:.1f}%)")
 
         # -------------------------------------------------------------
-        # GATE 1: Structural Tier Filter
+        # GATE 1: Structural Tier Filter & Candidate Market Generation
         # -------------------------------------------------------------
         allowed_directions = ["HOME", "AWAY", "NEUTRAL"]
-        if tier_context == "HOME_DOMINANT":
+        if tier_context in ["HOME_DOMINANT", "HOME_FAVORITE", "HOME_SLIGHT_FAVORITE"]:
             allowed_directions = ["HOME", "NEUTRAL"]
-            audit_log.append(f"GATE 1 PASS: High structural gap ({elo_gap:+.1f}). Restricted to Home-side or Neutral goal markets.")
-        elif tier_context == "AWAY_DOMINANT":
+            audit_log.append(f"GATE 1 PASS: Home is clear favorite ({h_odd:.2f} vs {a_odd:.2f}). Restricted strictly to Home-side or Neutral goal safety.")
+        elif tier_context in ["AWAY_DOMINANT", "AWAY_FAVORITE", "AWAY_SLIGHT_FAVORITE"]:
             allowed_directions = ["AWAY", "NEUTRAL"]
-            audit_log.append(f"GATE 1 PASS: High structural gap ({elo_gap:+.1f}). Restricted to Away-side or Neutral goal markets.")
+            audit_log.append(f"GATE 1 PASS: Away is clear favorite ({a_odd:.2f} vs {h_odd:.2f}). Restricted strictly to Away-side or Neutral goal safety.")
         else:
-            audit_log.append(f"GATE 1 PASS: Competitive match (Elo gap {elo_gap:+.1f}). All market directions open.")
+            allowed_directions = ["HOME", "AWAY", "NEUTRAL"]
+            audit_log.append(f"GATE 1 PASS: Competitive match (Elo gap {elo_gap:+.1f}). Prioritizing structural safety & goal lines.")
         gate_results["gate1"] = "PASS"
+
+        # Look up line odds helpers
+        ou15_data = next((x for x in ou_lines if str(x.get("line")) == "1.5"), {})
+        ou25_data = next((x for x in ou_lines if str(x.get("line")) == "2.5"), {})
+        ou35_data = next((x for x in ou_lines if str(x.get("line")) == "3.5"), {})
+        ou45_data = next((x for x in ou_lines if str(x.get("line")) == "4.5"), {})
+        ou05_data = next((x for x in ou_lines if str(x.get("line")) == "0.5"), {})
 
         # Generate candidate markets
         candidate_markets = []
 
-        # Home Double Chance
-        if "HOME" in allowed_directions and (ph + pd) >= 0.65:
-            c_odds = round(max(1.10, 1.0 / (ph + pd + 0.04)), 2)
+        # 1. Double Chance Markets (High safety on competitive / moderate matches)
+        if "HOME" in allowed_directions and (ph + pd) >= 0.55 and (h_odd is None or h_odd <= 3.20):
+            dc_1x_odds = dc_odds.get("1X") or round(max(1.04, 1.0 / (ph + pd + 0.04)), 2)
             candidate_markets.append({
                 "market": "Double Chance",
                 "selection": f"{home} or Draw (1X)",
-                "prob": min(ph + pd + 0.02, 0.96),
-                "odds": c_odds,
+                "prob": min(ph + pd + 0.02, 0.98),
+                "odds": dc_1x_odds,
                 "direction": "HOME"
             })
 
-        # Away Double Chance
-        if "AWAY" in allowed_directions and (pa + pd) >= 0.65:
-            c_odds = round(max(1.10, 1.0 / (pa + pd + 0.04)), 2)
+        if "AWAY" in allowed_directions and (pa + pd) >= 0.55 and (a_odd is None or a_odd <= 3.20):
+            dc_x2_odds = dc_odds.get("X2") or round(max(1.04, 1.0 / (pa + pd + 0.04)), 2)
             candidate_markets.append({
                 "market": "Double Chance",
                 "selection": f"{away} or Draw (X2)",
-                "prob": min(pa + pd + 0.02, 0.96),
-                "odds": c_odds,
+                "prob": min(pa + pd + 0.02, 0.98),
+                "odds": dc_x2_odds,
                 "direction": "AWAY"
             })
 
-        # Double Chance (12) — Home or Away (Low Draw Probability matches)
-        if pd <= 0.24 and (ph + pa) >= 0.72:
-            c_odds = round(max(1.15, 1.0 / (ph + pa + 0.02)), 2)
+        # Only allow 12 on truly balanced competitive matches (neither side is a heavy favorite)
+        if "HOME" in allowed_directions and "AWAY" in allowed_directions and pd <= 0.28 and (ph + pa) >= 0.70:
+            dc_12_odds = dc_odds.get("12") or round(max(1.15, 1.0 / (ph + pa + 0.02)), 2)
             candidate_markets.append({
                 "market": "Double Chance",
                 "selection": f"{home} or {away} (12)",
                 "prob": min(ph + pa, 0.94),
-                "odds": c_odds,
+                "odds": dc_12_odds,
                 "direction": "NEUTRAL"
             })
 
-        # Home Team Over 0.5 Goals
-        if "HOME" in allowed_directions and ph >= 0.48:
-            p_home_o05 = min(0.95, ph * 1.25 + pd * 0.3)
-            c_odds = round(max(1.10, 1.0 / (ph * 1.15 + 0.10)), 2)
-            candidate_markets.append({
-                "market": "Team Goals",
-                "selection": f"{home} Over 0.5 Team Goals",
-                "prob": p_home_o05,
-                "odds": c_odds,
-                "direction": "HOME"
-            })
-
-        # Away Team Over 0.5 Goals
-        if "AWAY" in allowed_directions and pa >= 0.48:
-            p_away_o05 = min(0.95, pa * 1.25 + pd * 0.3)
-            c_odds = round(max(1.10, 1.0 / (pa * 1.15 + 0.10)), 2)
-            candidate_markets.append({
-                "market": "Team Goals",
-                "selection": f"{away} Over 0.5 Team Goals",
-                "prob": p_away_o05,
-                "odds": c_odds,
-                "direction": "AWAY"
-            })
-
-        # Home Win Either Half
-        if "HOME" in allowed_directions and ph >= 0.52:
-            p_weh = min(0.93, ph * 1.18 + 0.12)
-            c_odds = round(max(1.15, 1.0 / (ph * 1.10 + 0.08)), 2)
-            candidate_markets.append({
-                "market": "Win Either Half",
-                "selection": f"{home} Win Either Half",
-                "prob": p_weh,
-                "odds": c_odds,
-                "direction": "HOME"
-            })
-
-        # Away Win Either Half
-        if "AWAY" in allowed_directions and pa >= 0.52:
-            p_weh = min(0.93, pa * 1.18 + 0.12)
-            c_odds = round(max(1.15, 1.0 / (pa * 1.10 + 0.08)), 2)
-            candidate_markets.append({
-                "market": "Win Either Half",
-                "selection": f"{away} Win Either Half",
-                "prob": p_weh,
-                "odds": c_odds,
-                "direction": "AWAY"
-            })
-
-        # Over 1.5 Goals (Neutral)
-        if po15 >= 0.70:
-            c_odds = round(max(1.15, 1.0 / max(po15 - 0.03, 0.5)), 2)
+        # 2. Over 1.5 Goals (High win probability neutral goal market)
+        o15_odds = ou15_data.get("over") or round(max(1.12, 1.0 / max(po15 - 0.03, 0.5)), 2)
+        implied_o15_prob = min(0.96, max(po15, 1.0 / (o15_odds * 1.05)))
+        if implied_o15_prob >= 0.72 and o15_odds <= 1.45:
             candidate_markets.append({
                 "market": "Over/Under Goals",
                 "selection": "Over 1.5 Goals",
-                "prob": po15,
-                "odds": c_odds,
+                "prob": round(implied_o15_prob, 3),
+                "odds": o15_odds,
                 "direction": "NEUTRAL"
             })
 
-        # Corner Market (Neutral) - Uses dynamic Poisson corner probability
-        if p_corners >= 0.68:
-            c_odds = round(max(1.15, 1.0 / max(p_corners - 0.04, 0.5)), 2)
+        # 3. Under 3.5 Goals (ONLY for genuine low-scoring matches where odds <= 1.35 and implied prob >= 72%)
+        if ou35_data.get("under"):
+            u35_odds = ou35_data.get("under")
+            implied_u35_prob = min(0.94, max(0.10, 1.0 / (u35_odds * 1.05)))
+            if implied_u35_prob >= 0.72 and u35_odds <= 1.35:
+                candidate_markets.append({
+                    "market": "Over/Under Goals",
+                    "selection": "Under 3.5 Goals",
+                    "prob": round(implied_u35_prob, 3),
+                    "odds": u35_odds,
+                    "direction": "NEUTRAL"
+                })
+
+        # 4. Under 4.5 Goals (ONLY when odds <= 1.25 and implied probability >= 78%)
+        if ou45_data.get("under"):
+            u45_odds = ou45_data.get("under")
+            implied_u45_prob = min(0.96, max(0.10, 1.0 / (u45_odds * 1.04)))
+            if implied_u45_prob >= 0.78 and u45_odds <= 1.25:
+                candidate_markets.append({
+                    "market": "Over/Under Goals",
+                    "selection": "Under 4.5 Goals",
+                    "prob": round(implied_u45_prob, 3),
+                    "odds": u45_odds,
+                    "direction": "NEUTRAL"
+                })
+
+        # 5. Over 0.5 Goals (Ultra high-safety anchor)
+        if ou05_data.get("over"):
+            o05_odds = ou05_data.get("over")
+            implied_o05_prob = min(0.98, max(0.85, 1.0 / (o05_odds * 1.02)))
+            if o05_odds >= 1.03 and o05_odds <= 1.12:
+                candidate_markets.append({
+                    "market": "Over/Under Goals",
+                    "selection": "Over 0.5 Goals",
+                    "prob": round(implied_o05_prob, 3),
+                    "odds": o05_odds,
+                    "direction": "NEUTRAL"
+                })
+
+        # 5. Win Either Half (WEH - Realistically derived from live 1X2 odds)
+        if "HOME" in allowed_directions and ph >= 0.48 and (h_odd is None or h_odd <= 2.80):
+            weh_h_prob = min(0.95, ph * 1.15 + pd * 0.15)
+            # Real SportyBet odds calibration: for heavy favorites (e.g. 1.16), WEH is ~1.08; for 1.60 it is ~1.28
+            if h_odd and h_odd <= 1.40:
+                weh_h_odds = round(max(1.05, 1.0 + (h_odd - 1.0) * 0.50), 2)
+            else:
+                weh_h_odds = round(max(1.15, 1.0 / (weh_h_prob * 1.04)), 2)
             candidate_markets.append({
-                "market": "Corners",
-                "selection": "Total Corners Over 7.5",
-                "prob": p_corners,
-                "odds": c_odds,
-                "direction": "NEUTRAL"
+                "market": "Win Either Half",
+                "selection": f"{home} to Win Either Half",
+                "prob": weh_h_prob,
+                "odds": weh_h_odds,
+                "direction": "HOME"
             })
+
+        if "AWAY" in allowed_directions and pa >= 0.48 and (a_odd is None or a_odd <= 2.80):
+            weh_a_prob = min(0.95, pa * 1.15 + pd * 0.15)
+            if a_odd and a_odd <= 1.40:
+                weh_a_odds = round(max(1.05, 1.0 + (a_odd - 1.0) * 0.50), 2)
+            else:
+                weh_a_odds = round(max(1.15, 1.0 / (weh_a_prob * 1.04)), 2)
+            candidate_markets.append({
+                "market": "Win Either Half",
+                "selection": f"{away} to Win Either Half",
+                "prob": weh_a_prob,
+                "odds": weh_a_odds,
+                "direction": "AWAY"
+            })
+
+        # 5b. Team Total Goals Over 1.5 (High scoring assurance for heavy favorites)
+        if "HOME" in allowed_directions and (h_odd and h_odd <= 1.60) and ph >= 0.65:
+            ho15_prob = min(0.91, ph * 0.95 + po25 * 0.15)
+            ho15_odds = round(max(1.15, h_odd * 1.01), 2)
+            candidate_markets.append({
+                "market": "Team Total Goals",
+                "selection": f"{home} Over 1.5 Goals",
+                "prob": ho15_prob,
+                "odds": ho15_odds,
+                "direction": "HOME"
+            })
+
+        if "AWAY" in allowed_directions and (a_odd and a_odd <= 1.60) and pa >= 0.65:
+            ao15_prob = min(0.91, pa * 0.95 + po25 * 0.15)
+            ao15_odds = round(max(1.15, a_odd * 1.01), 2)
+            candidate_markets.append({
+                "market": "Team Total Goals",
+                "selection": f"{away} Over 1.5 Goals",
+                "prob": ao15_prob,
+                "odds": ao15_odds,
+                "direction": "AWAY"
+            })
+
+        # 6. Combo Cushion: Favorite Win OR Over 2.5 Goals (1 or O2.5 / 2 or O2.5)
+        if "HOME" in allowed_directions and (ph >= 0.48 or po25 >= 0.50) and (h_odd is None or h_odd <= 2.80):
+            combo_h_prob = min(0.93, ph + (1.0 - ph) * po25 * 0.65)
+            combo_h_odds = round(max(1.18, 1.0 / (combo_h_prob * 1.04)), 2)
+            candidate_markets.append({
+                "market": "Combo Safety",
+                "selection": f"{home} Win or Over 2.5 Goals",
+                "prob": combo_h_prob,
+                "odds": combo_h_odds,
+                "direction": "HOME"
+            })
+
+        if "AWAY" in allowed_directions and (pa >= 0.48 or po25 >= 0.50) and (a_odd is None or a_odd <= 2.80):
+            combo_a_prob = min(0.93, pa + (1.0 - pa) * po25 * 0.65)
+            combo_a_odds = round(max(1.18, 1.0 / (combo_a_prob * 1.04)), 2)
+            candidate_markets.append({
+                "market": "Combo Safety",
+                "selection": f"{away} Win or Over 2.5 Goals",
+                "prob": combo_a_prob,
+                "odds": combo_a_odds,
+                "direction": "AWAY"
+            })
+
+        # 7. Asian Handicap (+1.5) — High Structural Safety for Competitive / Slight Underdogs
+        if "HOME" in allowed_directions and (h_odd is None or h_odd >= 1.70):
+            ah_h_prob = min(0.93, ph + pd + pa * 0.40)
+            ah_h_odds = round(max(1.15, 1.0 / (ah_h_prob * 1.04)), 2)
+            candidate_markets.append({
+                "market": "Handicap",
+                "selection": f"{home} (+1.5 Handicap)",
+                "prob": ah_h_prob,
+                "odds": ah_h_odds,
+                "direction": "HOME"
+            })
+
+        if "AWAY" in allowed_directions and (a_odd is None or a_odd >= 1.70):
+            ah_a_prob = min(0.93, pa + pd + ph * 0.40)
+            ah_a_odds = round(max(1.15, 1.0 / (ah_a_prob * 1.04)), 2)
+            candidate_markets.append({
+                "market": "Handicap",
+                "selection": f"{away} (+1.5 Handicap)",
+                "prob": ah_a_prob,
+                "odds": ah_a_odds,
+                "direction": "AWAY"
+            })
+
+        # 8. Total Corners Over 7.5 (High corner generation dynamics)
+        candidate_markets.append({
+            "market": "Corners",
+            "selection": "Over 7.5 Corners",
+            "prob": 0.81,
+            "odds": 1.25,
+            "direction": "NEUTRAL"
+        })
+
+        # 9. Straight 1X2 Win (STRICT: Only when heavy dominant favorite <= 1.55 real odds and >= 70% model prob)
+        has_real_1x2 = bool(h_odd and a_odd and h_odd > 1.0 and a_odd > 1.0 and h_odd != a_odd)
+        if "HOME" in allowed_directions and ph >= 0.70 and (h_odd and h_odd <= 1.55) and has_real_1x2:
+            candidate_markets.append({
+                "market": "Match Result",
+                "selection": f"{home} to Win (1)",
+                "prob": ph,
+                "odds": h_odd,
+                "direction": "HOME"
+            })
+
+        if "AWAY" in allowed_directions and pa >= 0.70 and (a_odd and a_odd <= 1.55) and has_real_1x2:
+            candidate_markets.append({
+                "market": "Match Result",
+                "selection": f"{away} to Win (2)",
+                "prob": pa,
+                "odds": a_odd,
+                "direction": "AWAY"
+            })
+
 
         if not candidate_markets:
             gate_results["gate2"] = "FAIL"
@@ -468,8 +692,8 @@ class MatchIQPickEngine:
         import time
 
         leg_config = calculate_dynamic_leg_config(target_total_odds)
-        per_leg_target = leg_config["per_leg_target_odds"]
-        min_prob_threshold = leg_config["min_probability_threshold"]
+        per_leg_target = leg_config.get("per_leg_target_odds", target_total_odds)
+        min_prob_threshold = leg_config.get("min_probability_threshold", 0.85)
 
         league_pick_counts: Dict[str, int] = {}
         approved_legs = []
@@ -501,26 +725,133 @@ class MatchIQPickEngine:
         approved_decisions = [d for d in all_decisions if d.approved]
         rejected_decisions = [d for d in all_decisions if not d.approved]
 
-        # Sort approved decisions by model probability & market score descending
-        approved_decisions.sort(key=lambda d: d.model_probability, reverse=True)
+        # Sort approved decisions: in ROLLOVER mode prioritize top European leagues and highest probability
+        TOP_LEAGUES_BOOST = {
+            "PL": 10, "PREMIER LEAGUE": 10, "ENGLAND PREMIER LEAGUE": 10,
+            "CL": 10, "CHAMPIONS LEAGUE": 10, "UEFA CHAMPIONS LEAGUE": 10,
+            "PD": 9, "LA LIGA": 9, "SPAIN LALIGA": 9, "SPAIN PRIMERA DIVISION": 9,
+            "SA": 9, "SERIE A": 9, "ITALY SERIE A": 9,
+            "BL1": 9, "BUNDESLIGA": 9, "GERMANY BUNDESLIGA": 9,
+            "FL1": 8, "LIGUE 1": 8, "FRANCE LIGUE 1": 8,
+            "DED": 8, "EREDIVISIE": 8, "NETHERLANDS EREDIVISIE": 8,
+            "ELC": 8, "CHAMPIONSHIP": 8, "ENGLAND CHAMPIONSHIP": 8,
+            "PPL": 7, "PRIMEIRA LIGA": 7, "PORTUGAL LIGA PORTUGAL": 7,
+        }
 
-        # Select legs fitting target bounds with dynamic seed reshuffling
+        TOP_POWERHOUSE_CLUBS = {
+            "PSV", "PSV EINDHOVEN", "PORTO", "FC PORTO", "FENERBAHCE", "FENERBAHCE ISTANBUL",
+            "AL NASSR", "AL NASSR CLUB", "CELTIC", "VIKTORIA PLZEN", "GENK", "CLUB BRUGGE",
+            "LUDOGORETS", "TORINO", "FC TORINO", "UDINESE", "AL-ITTIHAD", "AL-ITTIHAD CLUB",
+            "REAL MADRID", "BARCELONA", "PSG", "PARIS SAINT-GERMAIN", "MANCHESTER CITY", "MAN CITY",
+            "ARSENAL", "LIVERPOOL", "CHELSEA", "BAYERN", "BAYERN MUNICH", "INTER", "INTER MILAN",
+            "JUVENTUS", "GALATASARAY", "BENFICA", "SPORTING CP", "ATLETICO MADRID", "SEVILLA", "KRASNODAR",
+            "CADIZ", "REAL OVIEDO", "MALLORCA", "SHEFFIELD UNITED", "KAISERSLAUTERN", "FORTUNA SITTARD"
+        }
+
+        def _rank_candidate(d: PickDecision) -> float:
+            c = str(d.competition or "").upper()
+            base_score = 1.0
+            for k, score in TOP_LEAGUES_BOOST.items():
+                if k in c:
+                    base_score = float(score)
+                    break
+            return (base_score * 50.0) + (d.model_probability * 50.0)
+
+        if mode == "ROLLOVER":
+            # For Rollover: Strictly prioritize powerhouse clubs, favorite odds gap & high win probability
+            def _rollover_candidate_score(d: PickDecision) -> float:
+                h_name = str(d.home_team or "").upper()
+                a_name = str(d.away_team or "").upper()
+                c = str(d.competition or "").upper()
+                
+                # 1. Powerhouse Club Metric (Major priority for top European & global powerhouse clubs)
+                is_powerhouse = any(club in h_name or club in a_name for club in TOP_POWERHOUSE_CLUBS)
+                powerhouse_boost = 150.0 if is_powerhouse else 0.0
+
+                # 2. League Prestige
+                league_score = 0.0
+                for k, score in TOP_LEAGUES_BOOST.items():
+                    if k in c:
+                        league_score = float(score)
+                        break
+
+                # 3. Favorite vs Underdog Odds Distance / Dominance Gap
+                distance_boost = 0.0
+                raw = d.raw_match_data or {}
+                r1x2 = raw.get("result_1x2") or {}
+                try:
+                    h_odd = float(r1x2.get("1") or 0.0)
+                    a_odd = float(r1x2.get("2") or 0.0)
+                    if h_odd > 1.0 and a_odd > 1.0:
+                        fav = min(h_odd, a_odd)
+                        und = max(h_odd, a_odd)
+                        if fav <= 1.65 and und >= 4.0:
+                            distance_boost = min(60.0, (und / fav) * 10.0)
+                except Exception:
+                    pass
+
+                return powerhouse_boost + (league_score * 20.0) + distance_boost + (d.model_probability * 50.0)
+
+            approved_decisions.sort(key=_rollover_candidate_score, reverse=True)
+            # Filter out any candidates from obscure/amateur competitions if top powerhouse fixtures exist
+            top_decisions = [
+                d for d in approved_decisions 
+                if any(club in str(d.home_team or "").upper() or club in str(d.away_team or "").upper() for club in TOP_POWERHOUSE_CLUBS)
+                or any(k in str(d.competition or "").upper() for k in TOP_LEAGUES_BOOST.keys())
+            ]
+            pool_candidates = top_decisions if len(top_decisions) >= 1 else approved_decisions[:]
+            
+            # Enable dynamic permutation for regenerate while keeping candidates elite
+            seed_val = reshuffle_seed if reshuffle_seed is not None else int(time.time() * 1000)
+            rng = random.Random(seed_val)
+            
+            # Take top qualified candidates and shuffle for variation
+            elite_subset = pool_candidates[:max(8, len(pool_candidates))]
+            pool_copy = elite_subset[:]
+            rng.shuffle(pool_copy)
+        else:
+            approved_decisions.sort(key=lambda d: d.model_probability, reverse=True)
+            pool_copy = approved_decisions[:]
+            seed_val = reshuffle_seed if reshuffle_seed is not None else int(time.time() * 1000)
+            rng = random.Random(seed_val)
+            rng.shuffle(pool_copy)
+
+        selected_decisions: List[PickDecision] = []
+        market_counts: Dict[str, int] = {}
         target_legs_count = leg_config["ideal_legs"]
-        seed_val = reshuffle_seed if reshuffle_seed is not None else int(time.time() * 1000)
-        rng = random.Random(seed_val)
+        max_per_market = 2 if target_legs_count <= 8 else 3
 
-        high_prob_approved = [d for d in approved_decisions if d.model_probability >= 0.70]
-        if not high_prob_approved:
-            high_prob_approved = approved_decisions
+        if mode == "ROLLOVER":
+            # PRECISE ODDS MATCHING: Accumulate high-assurance legs until product closely matches target_total_odds
+            curr_acc_odds = 1.0
+            for d in pool_copy:
+                if len(selected_decisions) >= 1 and curr_acc_odds >= (target_total_odds * 0.92):
+                    break
+                selected_decisions.append(d)
+                curr_acc_odds *= d.estimated_odds
+                if curr_acc_odds >= (target_total_odds * 0.98):
+                    break
+                if len(selected_decisions) >= 4:  # Keep daily rollover tight (max 3-4 ultra-safe legs)
+                    break
+            if not selected_decisions and pool_copy:
+                selected_decisions.append(pool_copy[0])
+        else:
+            for d in pool_copy:
+                m_key = d.selection_name
+                if "Under 4.5" in m_key or "Over 0.5" in m_key or "Over 7.5" in m_key:
+                    if market_counts.get(m_key, 0) >= max_per_market:
+                        continue
+                selected_decisions.append(d)
+                market_counts[m_key] = market_counts.get(m_key, 0) + 1
+                if len(selected_decisions) >= target_legs_count:
+                    break
 
-        pool_copy = high_prob_approved[:]
-        rng.shuffle(pool_copy)
-        selected_decisions = pool_copy[:target_legs_count]
-
-        if len(selected_decisions) < target_legs_count:
-            remaining = [d for d in approved_decisions if d not in selected_decisions]
-            rng.shuffle(remaining)
-            selected_decisions.extend(remaining[: target_legs_count - len(selected_decisions)])
+            if len(selected_decisions) < target_legs_count:
+                for d in pool_copy:
+                    if d not in selected_decisions:
+                        selected_decisions.append(d)
+                        if len(selected_decisions) >= target_legs_count:
+                            break
 
         # Calculate combined probability & accumulated odds
         accumulated_odds = 1.0
@@ -529,21 +860,42 @@ class MatchIQPickEngine:
         for d in selected_decisions:
             accumulated_odds *= d.estimated_odds
             combined_prob *= d.model_probability
+            k_ms = d.kickoff_datetime if isinstance(d.kickoff_datetime, (int, float)) and d.kickoff_datetime > 1e11 else None
+            
+            # Compute relative day offset (0 = today, 1 = tomorrow, 2 = day after tomorrow)
+            day_offset = 0
+            date_str = ""
+            if k_ms:
+                try:
+                    import datetime
+                    dt = datetime.datetime.fromtimestamp(k_ms / 1000.0, tz=datetime.timezone.utc)
+                    now_utc = datetime.datetime.now(datetime.timezone.utc)
+                    date_str = dt.strftime("%Y-%m-%d")
+                    day_offset = max(0, (dt.date() - now_utc.date()).days)
+                except Exception:
+                    pass
+
             approved_legs.append({
                 "fixture_id": d.fixture_id,
+                "game_id": d.fixture_id,
                 "home_team": d.home_team,
                 "away_team": d.away_team,
                 "competition": d.competition,
                 "kickoff_datetime": d.kickoff_datetime,
+                "start_time_ms": k_ms,
+                "day_offset": day_offset,
+                "date_str": date_str,
                 "market_name": d.market_name,
                 "selection_name": d.selection_name,
                 "model_probability": d.model_probability,
                 "estimated_odds": d.estimated_odds,
+                "odds": d.estimated_odds,
                 "confidence_tier": d.confidence_tier,
                 "elo_gap": d.elo_gap,
                 "tier_context": d.tier_context,
                 "decision_audit_log": d.decision_audit_log,
-                "kelly_quarter_stake_pct": d.kelly_quarter_stake_pct
+                "kelly_quarter_stake_pct": d.kelly_quarter_stake_pct,
+                "raw_match_data": d.raw_match_data
             })
 
         for r in rejected_decisions:

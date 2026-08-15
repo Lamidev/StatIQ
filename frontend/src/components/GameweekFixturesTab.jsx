@@ -96,32 +96,32 @@ export default function GameweekFixturesTab() {
   );
 
   return (
-    <div className="space-y-6 max-w-7xl mx-auto">
+    <div className="space-y-4 sm:space-y-6 max-w-7xl mx-auto">
       {/* Top Banner */}
-      <div className="bg-slate-900 text-white p-6 rounded-2xl shadow-md flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+      <div className="bg-slate-900 text-white p-4 sm:p-6 rounded-xl sm:rounded-2xl shadow-md flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 sm:gap-4">
         <div>
           <div className="flex items-center gap-2 mb-1">
-            <Trophy className="w-5 h-5 text-emerald-400" />
-            <h1 className="text-xl font-extrabold tracking-tight">Match Fixtures & Live AI Analytics</h1>
+            <Trophy className="w-4 h-4 sm:w-5 sm:h-5 text-emerald-400" />
+            <h1 className="text-base sm:text-xl font-extrabold tracking-tight">Match Fixtures & Live AI Analytics</h1>
           </div>
-          <p className="text-xs text-slate-400">
-            Real-time fixtures across top European and International leagues with StatIQ Elo rating probabilities.
+          <p className="text-[11px] sm:text-xs text-slate-400">
+            Real-time fixtures across top leagues with StatIQ Elo rating probability meters.
           </p>
         </div>
 
         <button
           onClick={loadFixtures}
           disabled={isLoading}
-          className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 text-white px-4 py-2 rounded-xl text-xs font-bold transition-all border border-slate-700 shadow-sm disabled:opacity-40"
+          className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 text-white px-3 py-1.5 sm:px-4 sm:py-2 rounded-xl text-xs font-bold transition-all border border-slate-700 shadow-sm disabled:opacity-40 self-end sm:self-auto"
         >
           <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? "animate-spin" : ""}`} />
           <span>Sync Fixtures</span>
         </button>
       </div>
 
-      {/* Main Grid: Sidebar Left + Fixture List Right */}
-      <div className="flex flex-col lg:flex-row items-start gap-6">
-        {/* Vertical Grouped Sidebar */}
+      {/* Main Layout: Sidebar (Chips on mobile / Sidebar on desktop) + Fixtures */}
+      <div className="flex flex-col lg:flex-row items-start gap-4 sm:gap-6">
+        {/* League & Gameweek Selector */}
         <LeagueGameweekSidebar
           selectedLeague={selectedLeague}
           onSelectLeague={(code) => {
@@ -134,12 +134,12 @@ export default function GameweekFixturesTab() {
         />
 
         {/* Fixture Content Panel */}
-        <div className="flex-1 w-full space-y-4">
+        <div className="flex-1 w-full space-y-3 sm:space-y-4">
           {/* Search & Filter Header Bar */}
-          <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4">
+          <div className="bg-white p-3 sm:p-4 rounded-xl sm:rounded-2xl border border-slate-200 shadow-sm flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2.5 sm:gap-4">
             <div className="flex items-center gap-2">
               <span className="text-xs font-extrabold text-slate-900 uppercase tracking-wider">
-                {leagueInfo.competition_name || "StatIQ"} — Gameweek {selectedGameweek}
+                {leagueInfo.competition_name || "StatIQ"} — GW {selectedGameweek}
               </span>
               <span className="bg-slate-100 text-slate-700 text-[10px] font-mono font-extrabold px-2 py-0.5 rounded-full">
                 {filteredFixtures.length} Matches
@@ -150,17 +150,17 @@ export default function GameweekFixturesTab() {
               <Search className="w-3.5 h-3.5 absolute left-3 top-2.5 text-slate-400" />
               <input
                 type="text"
-                placeholder="Search team name..."
+                placeholder="Search team..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-9 pr-4 py-2 text-xs font-bold text-slate-900 focus:outline-none focus:ring-1 focus:ring-slate-900"
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-9 pr-4 py-1.5 sm:py-2 text-xs font-bold text-slate-900 focus:outline-none focus:ring-1 focus:ring-slate-900"
               />
             </div>
           </div>
 
           {/* Loading Indicator */}
           {isLoading && (
-            <div className="bg-white rounded-2xl border border-slate-200 p-12 text-center space-y-3">
+            <div className="bg-white rounded-xl sm:rounded-2xl border border-slate-200 p-8 sm:p-12 text-center space-y-3">
               <RefreshCw className="w-6 h-6 text-slate-400 animate-spin mx-auto" />
               <p className="text-xs font-bold text-slate-500">Fetching live fixtures from football-data.org...</p>
             </div>
@@ -168,7 +168,7 @@ export default function GameweekFixturesTab() {
 
           {/* Error Indicator */}
           {!isLoading && dataSource === "error" && (
-            <div className="bg-rose-50 border border-rose-200 rounded-2xl p-6 text-rose-900 space-y-2">
+            <div className="bg-rose-50 border border-rose-200 rounded-xl sm:rounded-2xl p-4 sm:p-6 text-rose-900 space-y-2">
               <div className="flex items-center gap-2 font-extrabold text-sm">
                 <WifiOff className="w-4 h-4 text-rose-600" />
                 <span>Could not load fixtures</span>
@@ -179,7 +179,7 @@ export default function GameweekFixturesTab() {
 
           {/* Empty Search Result */}
           {!isLoading && dataSource !== "error" && filteredFixtures.length === 0 && (
-            <div className="bg-white rounded-2xl border border-slate-200 p-12 text-center text-slate-400 space-y-2">
+            <div className="bg-white rounded-xl sm:rounded-2xl border border-slate-200 p-8 sm:p-12 text-center text-slate-400 space-y-2">
               <p className="text-xs font-extrabold text-slate-600">No matches found for GW{selectedGameweek}</p>
               <p className="text-[11px]">Try selecting another Gameweek or clearing your search term.</p>
             </div>
@@ -187,7 +187,7 @@ export default function GameweekFixturesTab() {
 
           {/* Fixture Cards List */}
           {!isLoading && filteredFixtures.length > 0 && (
-            <div className="space-y-3">
+            <div className="space-y-2.5 sm:space-y-3">
               {filteredFixtures.map((f) => {
                 const homeProb = formatProb(f.ai_prob_home, 45);
                 const drawProb = formatProb(f.ai_prob_draw, 25);
@@ -197,31 +197,96 @@ export default function GameweekFixturesTab() {
                 return (
                   <div
                     key={f.fixture_id || f.external_id}
-                    className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm hover:border-slate-300 transition-all space-y-3"
+                    className="bg-white border border-slate-200/90 rounded-xl sm:rounded-2xl p-3.5 sm:p-4 shadow-sm hover:border-slate-300 transition-all space-y-2.5 sm:space-y-3"
                   >
-                    {/* Fixture Header: Kickoff Date & Status */}
-                    <div className="flex items-center justify-between border-b border-slate-100 pb-2.5">
-                      <div className="flex items-center gap-2">
+                    {/* Header: Date & Status */}
+                    <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+                      <div className="flex items-center gap-1.5">
                         <Calendar className="w-3.5 h-3.5 text-slate-400" />
-                        <span className="text-xs font-semibold text-slate-600">
+                        <span className="text-[11px] sm:text-xs font-semibold text-slate-600">
                           {formatKickoff(f.kickoff_datetime)}
                         </span>
                       </div>
 
                       {isFinished ? (
-                        <span className="bg-slate-100 text-slate-700 text-[10px] font-extrabold uppercase px-2.5 py-0.5 rounded-full">
+                        <span className="bg-slate-100 text-slate-700 text-[9px] sm:text-[10px] font-extrabold uppercase px-2 py-0.5 rounded-full">
                           Finished
                         </span>
                       ) : (
-                        <span className="bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px] font-extrabold uppercase px-2.5 py-0.5 rounded-full flex items-center gap-1">
+                        <span className="bg-emerald-50 text-emerald-700 border border-emerald-200 text-[9px] sm:text-[10px] font-extrabold uppercase px-2 py-0.5 rounded-full flex items-center gap-1">
                           <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
                           Upcoming
                         </span>
                       )}
                     </div>
 
-                    {/* Teams & Score / Odds Grid */}
-                    <div className="grid grid-cols-12 items-center gap-4 py-1">
+                    {/* ── MOBILE TEAMS VIEW (< sm) ── */}
+                    <div className="sm:hidden space-y-2">
+                      {/* Home Team Row */}
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2.5 min-w-0 pr-2">
+                          {f.home_crest ? (
+                            <img src={f.home_crest} alt={f.home_team} className="w-6 h-6 object-contain flex-shrink-0" />
+                          ) : (
+                            <div className="w-6 h-6 rounded-full bg-slate-100 flex items-center justify-center text-[10px] font-extrabold text-slate-600 flex-shrink-0">
+                              {f.home_team?.slice(0, 2).toUpperCase()}
+                            </div>
+                          )}
+                          <div className="truncate">
+                            <span className="text-xs font-black text-slate-900 truncate block">
+                              {f.home_team}
+                            </span>
+                            <span className="text-[9px] text-slate-400 font-semibold block -mt-0.5">
+                              Elo {f.home_elo || 1670}
+                            </span>
+                          </div>
+                        </div>
+
+                        {isFinished ? (
+                          <span className="text-xs font-black font-mono bg-slate-900 text-white px-2 py-0.5 rounded-lg flex-shrink-0">
+                            {f.home_score ?? "-"}
+                          </span>
+                        ) : (
+                          <span className="text-[10px] font-extrabold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md flex-shrink-0">
+                            {homeProb}%
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Away Team Row */}
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2.5 min-w-0 pr-2">
+                          {f.away_crest ? (
+                            <img src={f.away_crest} alt={f.away_team} className="w-6 h-6 object-contain flex-shrink-0" />
+                          ) : (
+                            <div className="w-6 h-6 rounded-full bg-slate-100 flex items-center justify-center text-[10px] font-extrabold text-slate-600 flex-shrink-0">
+                              {f.away_team?.slice(0, 2).toUpperCase()}
+                            </div>
+                          )}
+                          <div className="truncate">
+                            <span className="text-xs font-black text-slate-900 truncate block">
+                              {f.away_team}
+                            </span>
+                            <span className="text-[9px] text-slate-400 font-semibold block -mt-0.5">
+                              Elo {f.away_elo || 1670}
+                            </span>
+                          </div>
+                        </div>
+
+                        {isFinished ? (
+                          <span className="text-xs font-black font-mono bg-slate-900 text-white px-2 py-0.5 rounded-lg flex-shrink-0">
+                            {f.away_score ?? "-"}
+                          </span>
+                        ) : (
+                          <span className="text-[10px] font-extrabold text-blue-700 bg-blue-50 px-2 py-0.5 rounded-md flex-shrink-0">
+                            {awayProb}%
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* ── DESKTOP TEAMS VIEW (sm and above) ── */}
+                    <div className="hidden sm:grid grid-cols-12 items-center gap-4 py-1">
                       {/* Home Team */}
                       <div className="col-span-4 flex items-center justify-end gap-3 text-right">
                         <div>
@@ -275,14 +340,14 @@ export default function GameweekFixturesTab() {
                     </div>
 
                     {/* StatIQ Probability Meter */}
-                    <div className="bg-slate-50 border border-slate-200/80 rounded-xl p-2.5 space-y-1.5">
-                      <div className="flex items-center justify-between text-[11px] font-extrabold">
+                    <div className="bg-slate-50 border border-slate-200/70 rounded-lg sm:rounded-xl p-2 sm:p-2.5 space-y-1.5">
+                      <div className="flex items-center justify-between text-[10px] sm:text-[11px] font-extrabold">
                         <span className="text-emerald-700">1 ({homeProb}%)</span>
-                        <span className="text-slate-500">X ({drawProb}%)</span>
+                        <span className="text-slate-500">Draw ({drawProb}%)</span>
                         <span className="text-blue-700">2 ({awayProb}%)</span>
                       </div>
 
-                      <div className="h-2 w-full bg-slate-200 rounded-full overflow-hidden flex">
+                      <div className="h-1.5 sm:h-2 w-full bg-slate-200 rounded-full overflow-hidden flex">
                         <div style={{ width: `${homeProb}%` }} className="bg-emerald-500 h-full" />
                         <div style={{ width: `${drawProb}%` }} className="bg-slate-400 h-full" />
                         <div style={{ width: `${awayProb}%` }} className="bg-blue-500 h-full" />
@@ -296,5 +361,6 @@ export default function GameweekFixturesTab() {
         </div>
       </div>
     </div>
+
   );
 }

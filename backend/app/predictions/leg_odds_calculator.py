@@ -30,6 +30,7 @@ def calculate_dynamic_leg_config(target_total_odds: float) -> Dict[str, Any]:
             "max_legs": 2,
             "ideal_legs": 1,
             "per_leg_target_odds": target_total_odds,
+            "min_probability_threshold": 0.85,
             "description": "Single / Low Multi"
         }
     

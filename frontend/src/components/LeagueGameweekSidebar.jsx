@@ -1,5 +1,5 @@
 import React from "react";
-import { Trophy, Calendar, Check, AlertCircle, Sparkles, Globe } from "lucide-react";
+import { Trophy, Calendar, Check, AlertCircle, Globe, ChevronLeft, ChevronRight } from "lucide-react";
 
 export const LEAGUE_GROUPS = [
   {
@@ -76,6 +76,11 @@ export const LEAGUE_GROUPS = [
   }
 ];
 
+const ALL_FLAT_LEAGUES = [
+  { code: "ALL_TOP", name: "All Matches", tag: "ALL", icon: "⚽" },
+  ...LEAGUE_GROUPS.flatMap(g => g.leagues)
+];
+
 export default function LeagueGameweekSidebar({
   selectedLeague,
   onSelectLeague,
@@ -84,132 +89,194 @@ export default function LeagueGameweekSidebar({
   totalGws = 38
 }) {
   return (
-    <div className="w-full lg:w-72 bg-white rounded-2xl border border-slate-200 shadow-sm p-4 space-y-6 flex-shrink-0">
-      {/* Sidebar Header */}
-      <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-        <div className="flex items-center gap-2">
-          <Globe className="w-4 h-4 text-emerald-600" />
-          <h2 className="text-sm font-extrabold text-slate-900 tracking-tight">
-            League Selector
-          </h2>
-        </div>
-        <span className="text-[10px] font-extrabold bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full">
-          Live API
-        </span>
-      </div>
-
-      {/* Top Option: All Games */}
-      <button
-        onClick={() => onSelectLeague("ALL_TOP")}
-        className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-bold transition-all text-left ${
-          selectedLeague === "ALL_TOP"
-            ? "bg-slate-900 text-white shadow-sm font-extrabold"
-            : "text-slate-700 hover:bg-slate-100 hover:text-slate-900 border border-slate-100"
-        }`}
-      >
-        <div className="flex items-center gap-2 truncate">
-          <span>⚽</span>
-          <span className="truncate">All Games</span>
-        </div>
-
-        <div className="flex items-center gap-1.5 flex-shrink-0">
-          <span
-            className={`text-[9px] px-1.5 py-0.5 rounded font-mono font-extrabold uppercase ${
-              selectedLeague === "ALL_TOP" ? "bg-slate-800 text-emerald-400" : "bg-slate-100 text-slate-500"
-            }`}
-          >
-            ALL
-          </span>
-          {selectedLeague === "ALL_TOP" && <Check className="w-3.5 h-3.5 text-emerald-400" />}
-        </div>
-      </button>
-
-      {/* Vertical Grouped Leagues */}
-      <div className="space-y-4 max-h-[460px] overflow-y-auto pr-1 text-xs">
-        {LEAGUE_GROUPS.map((group) => (
-          <div key={group.region} className="space-y-1">
-            <div className="flex items-center gap-1.5 px-2 py-1 text-[11px] font-extrabold text-slate-400 uppercase tracking-wider">
-              <span>{group.flag}</span>
-              <span>{group.region}</span>
-            </div>
-
-            <div className="space-y-1 pl-1">
-              {group.leagues.map((league) => {
-                const isSelected = selectedLeague === league.code;
-                return (
-                  <button
-                    key={league.code}
-                    onClick={() => onSelectLeague(league.code)}
-                    className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-bold transition-all text-left ${
-                      isSelected
-                        ? "bg-slate-900 text-white shadow-sm font-extrabold"
-                        : "text-slate-700 hover:bg-slate-100 hover:text-slate-900"
-                    }`}
-                  >
-                    <div className="flex items-center gap-2 truncate">
-                      <span>{league.icon}</span>
-                      <span className="truncate">{league.name}</span>
-                    </div>
-
-                    <div className="flex items-center gap-1.5 flex-shrink-0">
-                      <span
-                        className={`text-[9px] px-1.5 py-0.5 rounded font-mono font-extrabold uppercase ${
-                          isSelected ? "bg-slate-800 text-emerald-400" : "bg-slate-100 text-slate-500"
-                        }`}
-                      >
-                        {league.tag}
-                      </span>
-                      {isSelected && <Check className="w-3.5 h-3.5 text-emerald-400" />}
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        ))}
-      </div>
-
-      {/* Subscription Tier Info Box */}
-      <div className="bg-amber-50 border border-amber-200/80 rounded-xl p-3 text-[11px] text-amber-900 space-y-1">
-        <div className="flex items-center gap-1.5 font-extrabold text-amber-800">
-          <AlertCircle className="w-3.5 h-3.5 flex-shrink-0" />
-          <span>API Subscription Tier Note</span>
-        </div>
-        <p className="text-[10px] text-amber-700 leading-tight">
-          Not available: Turkish Süper Lig, Scottish Premiership, Europa League — not on this API subscription tier.
-        </p>
-      </div>
-
-      {/* Gameweek Selector */}
-      <div className="border-t border-slate-100 pt-4 space-y-3">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-1.5">
-            <Calendar className="w-3.5 h-3.5 text-slate-500" />
-            <span className="text-xs font-extrabold text-slate-900">Select Gameweek</span>
-          </div>
-          <span className="text-[10px] font-bold text-slate-400">Current: GW{selectedGw}</span>
-        </div>
-
-        {/* Dynamic GW Grid Pills */}
-        <div className="grid grid-cols-5 gap-1.5 max-h-36 overflow-y-auto p-1 bg-slate-50 rounded-xl border border-slate-100">
-          {Array.from({ length: totalGws }, (_, i) => i + 1).map((gw) => {
-            const isGwSelected = selectedGw === gw;
+    <>
+      {/* ── MOBILE VIEW: Sleek horizontal scrolling league chips & compact GW stepper ── */}
+      <div className="lg:hidden w-full space-y-2.5 bg-white p-3 rounded-xl border border-slate-200/90 shadow-sm">
+        {/* League Chips Bar */}
+        <div className="flex items-center space-x-1.5 overflow-x-auto no-scrollbar touch-pan-x pb-0.5">
+          {ALL_FLAT_LEAGUES.map((league) => {
+            const isSelected = selectedLeague === league.code;
             return (
               <button
-                key={gw}
-                onClick={() => onSelectGw(gw)}
-                className={`py-1 text-[11px] font-extrabold rounded-lg transition-all text-center ${
-                  isGwSelected
-                    ? "bg-emerald-600 text-white shadow-sm scale-105"
-                    : "bg-white text-slate-700 hover:bg-slate-200 border border-slate-200/60"
+                key={league.code}
+                onClick={() => onSelectLeague(league.code)}
+                className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-bold whitespace-nowrap transition-all flex-shrink-0 ${
+                  isSelected
+                    ? "bg-slate-900 text-white shadow-sm font-extrabold"
+                    : "bg-slate-50 text-slate-700 hover:bg-slate-100 border border-slate-200/70"
                 }`}
               >
-                GW{gw}
+                <span>{league.icon}</span>
+                <span>{league.name}</span>
               </button>
             );
           })}
         </div>
+
+        {/* Compact Gameweek Stepper Bar */}
+        <div className="flex items-center justify-between pt-2 border-t border-slate-100">
+          <span className="text-[11px] font-bold text-slate-500">Gameweek</span>
+
+          <div className="flex items-center space-x-1">
+            <button
+              onClick={() => onSelectGw(Math.max(1, selectedGw - 1))}
+              disabled={selectedGw <= 1}
+              className="w-7 h-7 flex items-center justify-center rounded-lg bg-slate-100 hover:bg-slate-200 disabled:opacity-30 text-slate-700"
+            >
+              <ChevronLeft className="w-4 h-4" />
+            </button>
+
+            <select
+              value={selectedGw}
+              onChange={(e) => onSelectGw(Number(e.target.value))}
+              className="bg-slate-900 text-white font-extrabold text-xs px-2.5 py-1 rounded-lg outline-none cursor-pointer"
+            >
+              {Array.from({ length: totalGws }, (_, i) => i + 1).map((gw) => (
+                <option key={gw} value={gw}>
+                  GW {gw}
+                </option>
+              ))}
+            </select>
+
+            <button
+              onClick={() => onSelectGw(Math.min(totalGws, selectedGw + 1))}
+              disabled={selectedGw >= totalGws}
+              className="w-7 h-7 flex items-center justify-center rounded-lg bg-slate-100 hover:bg-slate-200 disabled:opacity-30 text-slate-700"
+            >
+              <ChevronRight className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
       </div>
-    </div>
+
+      {/* ── DESKTOP VIEW: Full Structured Sidebar (lg and above) ── */}
+      <div className="hidden lg:block w-72 bg-white rounded-2xl border border-slate-200 shadow-sm p-4 space-y-6 flex-shrink-0">
+        {/* Sidebar Header */}
+        <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+          <div className="flex items-center gap-2">
+            <Globe className="w-4 h-4 text-emerald-600" />
+            <h2 className="text-sm font-extrabold text-slate-900 tracking-tight">
+              League Selector
+            </h2>
+          </div>
+          <span className="text-[10px] font-extrabold bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full">
+            Live API
+          </span>
+        </div>
+
+        {/* Top Option: All Games */}
+        <button
+          onClick={() => onSelectLeague("ALL_TOP")}
+          className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-bold transition-all text-left ${
+            selectedLeague === "ALL_TOP"
+              ? "bg-slate-900 text-white shadow-sm font-extrabold"
+              : "text-slate-700 hover:bg-slate-100 hover:text-slate-900 border border-slate-100"
+          }`}
+        >
+          <div className="flex items-center gap-2 truncate">
+            <span>⚽</span>
+            <span className="truncate">All Games</span>
+          </div>
+
+          <div className="flex items-center gap-1.5 flex-shrink-0">
+            <span
+              className={`text-[9px] px-1.5 py-0.5 rounded font-mono font-extrabold uppercase ${
+                selectedLeague === "ALL_TOP" ? "bg-slate-800 text-emerald-400" : "bg-slate-100 text-slate-500"
+              }`}
+            >
+              ALL
+            </span>
+            {selectedLeague === "ALL_TOP" && <Check className="w-3.5 h-3.5 text-emerald-400" />}
+          </div>
+        </button>
+
+        {/* Vertical Grouped Leagues */}
+        <div className="space-y-4 max-h-[460px] overflow-y-auto pr-1 text-xs no-scrollbar">
+          {LEAGUE_GROUPS.map((group) => (
+            <div key={group.region} className="space-y-1">
+              <div className="flex items-center gap-1.5 px-2 py-1 text-[11px] font-extrabold text-slate-400 uppercase tracking-wider">
+                <span>{group.flag}</span>
+                <span>{group.region}</span>
+              </div>
+
+              <div className="space-y-1 pl-1">
+                {group.leagues.map((league) => {
+                  const isSelected = selectedLeague === league.code;
+                  return (
+                    <button
+                      key={league.code}
+                      onClick={() => onSelectLeague(league.code)}
+                      className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-bold transition-all text-left ${
+                        isSelected
+                          ? "bg-slate-900 text-white shadow-sm font-extrabold"
+                          : "text-slate-700 hover:bg-slate-100 hover:text-slate-900"
+                      }`}
+                    >
+                      <div className="flex items-center gap-2 truncate">
+                        <span>{league.icon}</span>
+                        <span className="truncate">{league.name}</span>
+                      </div>
+
+                      <div className="flex items-center gap-1.5 flex-shrink-0">
+                        <span
+                          className={`text-[9px] px-1.5 py-0.5 rounded font-mono font-extrabold uppercase ${
+                            isSelected ? "bg-slate-800 text-emerald-400" : "bg-slate-100 text-slate-500"
+                          }`}
+                        >
+                          {league.tag}
+                        </span>
+                        {isSelected && <Check className="w-3.5 h-3.5 text-emerald-400" />}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* Subscription Tier Info Box */}
+        <div className="bg-amber-50 border border-amber-200/80 rounded-xl p-3 text-[11px] text-amber-900 space-y-1">
+          <div className="flex items-center gap-1.5 font-extrabold text-amber-800">
+            <AlertCircle className="w-3.5 h-3.5 flex-shrink-0" />
+            <span>API Subscription Note</span>
+          </div>
+          <p className="text-[10px] text-amber-700 leading-tight">
+            Top 10 domestic & European leagues loaded with full real-time data.
+          </p>
+        </div>
+
+        {/* Gameweek Selector */}
+        <div className="border-t border-slate-100 pt-4 space-y-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-1.5">
+              <Calendar className="w-3.5 h-3.5 text-slate-500" />
+              <span className="text-xs font-extrabold text-slate-900">Select Gameweek</span>
+            </div>
+            <span className="text-[10px] font-bold text-slate-400">GW{selectedGw} of {totalGws}</span>
+          </div>
+
+          {/* Dynamic GW Grid Pills */}
+          <div className="grid grid-cols-5 gap-1.5 max-h-36 overflow-y-auto p-1 bg-slate-50 rounded-xl border border-slate-100">
+            {Array.from({ length: totalGws }, (_, i) => i + 1).map((gw) => {
+              const isGwSelected = selectedGw === gw;
+              return (
+                <button
+                  key={gw}
+                  onClick={() => onSelectGw(gw)}
+                  className={`py-1 text-[11px] font-extrabold rounded-lg transition-all text-center ${
+                    isGwSelected
+                      ? "bg-emerald-600 text-white shadow-sm scale-105"
+                      : "bg-white text-slate-700 hover:bg-slate-200 border border-slate-200/60"
+                  }`}
+                >
+                  GW{gw}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+    </>
   );
 }
