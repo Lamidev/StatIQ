@@ -1,5 +1,19 @@
-const rawBase = (import.meta.env.VITE_API_BASE_URL || "http://localhost:8000").trim().replace(/\/+$/, "");
-const API_BASE_URL = rawBase.endsWith("/api/v1") ? rawBase : `${rawBase}/api/v1`;
+const resolveApiBase = () => {
+  if (import.meta.env.VITE_API_BASE_URL) {
+    const custom = import.meta.env.VITE_API_BASE_URL.trim().replace(/\/+$/, "");
+    return custom.endsWith("/api/v1") ? custom : `${custom}/api/v1`;
+  }
+  if (typeof window !== "undefined") {
+    const host = window.location.hostname;
+    const protocol = window.location.protocol || "http:";
+    if (host && host !== "localhost" && host !== "127.0.0.1") {
+      return `${protocol}//${host}:8000/api/v1`;
+    }
+  }
+  return "http://localhost:8000/api/v1";
+};
+
+const API_BASE_URL = resolveApiBase();
 
 
 

@@ -493,12 +493,28 @@ export default function BetHistoryTab({ externalSelectedTicketId, onClearExterna
               </button>
             </div>
           ) : filteredTickets.length === 0 ? (
-            <div className="bg-white p-12 rounded-2xl border border-slate-200 text-center space-y-3">
+            <div className="bg-white p-8 sm:p-12 rounded-2xl border border-slate-200 text-center space-y-3">
               <Receipt className="w-10 h-10 text-slate-300 mx-auto" />
-              <h3 className="text-sm font-extrabold text-slate-900">No Tickets Found</h3>
+              <h3 className="text-sm font-extrabold text-slate-900">
+                {statusFilter === "ACTIVE" && tickets.length > 0 ? "No Active / Running Tickets" : "No Tickets Found"}
+              </h3>
               <p className="text-xs text-slate-500 max-w-sm mx-auto">
-                No staked or audited tickets match your selected filters. Re-edit a ticket in the Ticket Auditor and click "📌 Lock & Track Staked Ticket" to start tracking!
+                {statusFilter === "ACTIVE" && tickets.length > 0
+                  ? `All your ${tickets.length} tracked ticket(s) have finished and been settled.`
+                  : "No staked or audited tickets match your selected filters. Re-edit a ticket in the Ticket Auditor and click '📌 Lock & Track Staked Ticket' to start tracking!"}
               </p>
+              {statusFilter !== "ALL" && tickets.length > 0 && (
+                <button
+                  onClick={() => {
+                    setStatusFilter("ALL");
+                    setDateFilter("ALL");
+                    setSearchQuery("");
+                  }}
+                  className="bg-slate-900 hover:bg-slate-800 text-white text-xs font-extrabold px-4 py-2 rounded-xl mt-2 transition-all shadow-sm cursor-pointer"
+                >
+                  View All {tickets.length} Saved Tickets
+                </button>
+              )}
             </div>
           ) : (
             /* Ticket Cards List */
