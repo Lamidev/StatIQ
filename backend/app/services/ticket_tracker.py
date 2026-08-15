@@ -1035,6 +1035,8 @@ def evaluate_tracked_tickets(db: Optional[Session] = None) -> List[Dict[str, Any
                 if elapsed_ms > 110 * 60 * 1000:
                     is_conc = True
                     sel["match_status"] = "CONCLUDED"
+                    # Clear stale LIVE flag if game ended
+                    sel["is_live"] = False
                 elif elapsed_ms >= 0:
                     # Match has kicked off and is currently active
                     sel["match_status"] = "LIVE"
@@ -1043,6 +1045,16 @@ def evaluate_tracked_tickets(db: Optional[Session] = None) -> List[Dict[str, Any
                 else:
                     # Future match
                     sel["match_status"] = "UPCOMING"
+                    sel["is_live"] = False
+            elif is_conc:
+                # Already marked concluded — clear any stale live flag
+                sel["is_live"] = False
+            elif st in ("LIVE", "ONGOING", "IN_PLAY") and kickoff_ms and kickoff_ms > 0:
+                # Double-check: if the game was marked LIVE but 110+ min have passed, auto-conclude
+                elapsed_ms = (now * 1000) - kickoff_ms
+                if elapsed_ms > 110 * 60 * 1000:
+                    is_conc = True
+                    sel["match_status"] = "CONCLUDED"
                     sel["is_live"] = False
 
             score_str = sel.get("score", "")
@@ -1207,88 +1219,91 @@ def sync_tracked_tickets_with_live_apis(db: Optional[Session] = None) -> List[Di
     _last_sync_time = now_ts
     tickets = get_tracked_tickets(db=db)
 
-    # Process all tickets with valid SportyBet booking codes against live API data
-    running_tickets = [
+    # Process ALL tickets with any valid SportyBet booking codes (including AI Builder codes).
+    # AI Builder tickets with STATIQ-ACC or real 6-char booking codes contain real SportyBet game IDs
+    # and MUST be synced via the booking code API to pick up concluded match statuses & final scores.
+    tickets_with_codes = [
         t for t in tickets
         if t.get("code")
-        and t.get("code") not in ("CUSTOM", "AI-BUILDER-TICKET", "")
+        and t.get("code") not in ("CUSTOM", "", "AI-BUILDER-INTERNAL", "ROLLOVER-INTERNAL")
+        and not str(t.get("code")).startswith("STATIQ-ACC-INT")  # only skip pure-internal synthetic codes
     ]
-
-    if not running_tickets:
-        return evaluate_tracked_tickets(db=db)
 
     try:
         from app.adapters.bookmaker_adapter import SportyBetAdapter
         adapter = SportyBetAdapter(db)
 
-        for t in running_tickets:
+        for t in tickets_with_codes:
             code = t.get("code")
-            res = adapter.fetch_booking_code_details(code, "ng")
-            if res and res.get("status") == "SUCCESS":
-                sb_selections = res.get("selections", [])
-                sb_map = {}
-                for item in sb_selections:
-                    gid = str(item.get("game_id") or item.get("external_fixture_id") or "")
-                    mkey = f"{(item.get('home_team') or '').strip()}_{(item.get('away_team') or '').strip()}".lower()
-                    if gid:
-                        sb_map[gid] = item
-                    if mkey:
-                        sb_map[mkey] = item
+            try:
+                res = adapter.fetch_booking_code_details(code, "ng")
+                if res and res.get("status") == "SUCCESS":
+                    sb_selections = res.get("selections", [])
+                    sb_map = {}
+                    for item in sb_selections:
+                        gid = str(item.get("game_id") or item.get("external_fixture_id") or "")
+                        mkey = f"{(item.get('home_team') or '').strip()}_{(item.get('away_team') or '').strip()}".lower()
+                        if gid:
+                            sb_map[gid] = item
+                        if mkey:
+                            sb_map[mkey] = item
 
-                for sel in t.get("selections", []):
-                    gid = str(sel.get("game_id") or sel.get("fixture_id") or "")
-                    mkey = f"{(sel.get('home_team') or '').strip()}_{(sel.get('away_team') or '').strip()}".lower()
-                    sb_item = sb_map.get(gid) or sb_map.get(mkey)
-                    if sb_item:
-                        score_raw = sb_item.get("score") or ""
-                        if score_raw:
-                            sel["score"] = score_raw
-                            h, a = _parse_score(score_raw)
-                            if h is not None:
-                                sel["home_score"] = h
-                                sel["away_score"] = a
-                        if sb_item.get("home_score") is not None and sb_item.get("away_score") is not None:
-                            sel["home_score"] = sb_item["home_score"]
-                            sel["away_score"] = sb_item["away_score"]
-                            sel["score"] = f"{sel['home_score']} - {sel['away_score']}"
+                    for sel in t.get("selections", []):
+                        gid = str(sel.get("game_id") or sel.get("fixture_id") or "")
+                        mkey = f"{(sel.get('home_team') or '').strip()}_{(sel.get('away_team') or '').strip()}".lower()
+                        sb_item = sb_map.get(gid) or sb_map.get(mkey)
+                        if sb_item:
+                            score_raw = sb_item.get("score") or ""
+                            if score_raw and score_raw != "--":
+                                sel["score"] = score_raw
+                                h, a = _parse_score(score_raw)
+                                if h is not None:
+                                    sel["home_score"] = h
+                                    sel["away_score"] = a
+                            if sb_item.get("home_score") is not None and sb_item.get("away_score") is not None:
+                                sel["home_score"] = sb_item["home_score"]
+                                sel["away_score"] = sb_item["away_score"]
+                                sel["score"] = f"{sel['home_score']} - {sel['away_score']}"
 
-                        if sb_item.get("leg_result"):
-                            sel["leg_result"] = sb_item["leg_result"]
-                            sel["leg_status"] = sb_item["leg_result"]
+                            if sb_item.get("leg_result"):
+                                sel["leg_result"] = sb_item["leg_result"]
+                                sel["leg_status"] = sb_item["leg_result"]
 
-                        st_raw = str(sb_item.get("match_status") or "").upper()
-                        code_raw = str(sb_item.get("match_status_code") or "").upper()
+                            st_raw = str(sb_item.get("match_status") or "").upper()
+                            code_raw = str(sb_item.get("match_status_code") or "").upper()
 
-                        if st_raw in ("IN_PROGRESS", "LIVE", "ONGOING", "H1", "H2", "HT") or code_raw in ("LIVE", "H1", "H2", "HT"):
-                            sel["match_status"] = "LIVE"
-                        elif st_raw in ("CONCLUDED", "FT", "FINISHED", "NULLED_EXPIRED", "ENDED") or code_raw in ("ENDED", "FT", "FINISHED", "CONCLUDED"):
-                            sel["match_status"] = "CONCLUDED"
-                        elif st_raw:
-                            sel["match_status"] = st_raw
+                            if st_raw in ("IN_PROGRESS", "LIVE", "ONGOING", "H1", "H2", "HT") or code_raw in ("LIVE", "H1", "H2", "HT"):
+                                sel["match_status"] = "LIVE"
+                            elif st_raw in ("CONCLUDED", "FT", "FINISHED", "NULLED_EXPIRED", "ENDED") or code_raw in ("ENDED", "FT", "FINISHED", "CONCLUDED"):
+                                sel["match_status"] = "CONCLUDED"
+                            elif st_raw:
+                                sel["match_status"] = st_raw
 
-                        clock_raw = str(sb_item.get("clock") or "")
-                        if code_raw == "HT":
-                            sel["match_time"] = "HT"
-                        elif sb_item.get("status_label") and "Live" in sb_item.get("status_label"):
-                            label = sb_item.get("status_label")
-                            if "(" in label and ")" in label:
-                                sel["match_time"] = label.split("(")[1].split(")")[0].strip()
-                            else:
-                                sel["match_time"] = sb_item.get("match_time") or "In Progress"
-                        elif sb_item.get("match_time"):
-                            sel["match_time"] = sb_item.get("match_time")
-                        elif clock_raw and ":" in clock_raw:
-                            try:
-                                mins = int(clock_raw.split(":")[0])
-                                half = "H1" if mins <= 45 else "H2"
-                                sel["match_time"] = f"{mins}' {half}"
-                            except Exception:
-                                sel["match_time"] = clock_raw
+                            clock_raw = str(sb_item.get("clock") or "")
+                            if code_raw == "HT":
+                                sel["match_time"] = "HT"
+                            elif sb_item.get("status_label") and "Live" in sb_item.get("status_label"):
+                                label = sb_item.get("status_label")
+                                if "(" in label and ")" in label:
+                                    sel["match_time"] = label.split("(")[1].split(")")[0].strip()
+                                else:
+                                    sel["match_time"] = sb_item.get("match_time") or "In Progress"
+                            elif sb_item.get("match_time"):
+                                sel["match_time"] = sb_item.get("match_time")
+                            elif clock_raw and ":" in clock_raw:
+                                try:
+                                    mins = int(clock_raw.split(":")[0])
+                                    half = "H1" if mins <= 45 else "H2"
+                                    sel["match_time"] = f"{mins}' {half}"
+                                except Exception:
+                                    sel["match_time"] = clock_raw
 
-                        if sb_item.get("start_time_ms"):
-                            sel["start_time_ms"] = sb_item["start_time_ms"]
+                            if sb_item.get("start_time_ms"):
+                                sel["start_time_ms"] = sb_item["start_time_ms"]
+            except Exception as code_err:
+                print(f"[TicketTracker] Sync booking code {code} warning:", code_err)
 
-        # Additionally query SportyBet Live Facts Center feed for real-time goal scores
+        # Additionally query SportyBet Live Facts Center feed for real-time in-play scores
         try:
             import httpx
             live_headers = {
@@ -1297,8 +1312,8 @@ def sync_tracked_tickets_with_live_apis(db: Optional[Session] = None) -> List[Di
                 'Referer': 'https://www.sportybet.com/ng/',
                 'Origin': 'https://www.sportybet.com'
             }
-            live_url = "https://www.sportybet.com/api/ng/factsCenter/wapLiveEvents?sportId=sr:sport:1&pageSize=100"
-            with httpx.Client(timeout=4.0, headers=live_headers, verify=False) as client:
+            live_url = "https://www.sportybet.com/api/ng/factsCenter/wapLiveEvents?sportId=sr:sport:1&pageSize=200"
+            with httpx.Client(timeout=5.0, headers=live_headers, verify=False) as client:
                 resp = client.get(live_url)
                 if resp.status_code == 200:
                     l_data = resp.json()
@@ -1315,15 +1330,12 @@ def sync_tracked_tickets_with_live_apis(db: Optional[Session] = None) -> List[Di
                             ev_clock = ev.get("playedSeconds") or ev.get("clock") or ""
                             ev_status = (ev.get("matchStatus") or "LIVE").upper()
 
-                            # Match across all active/running tickets
-                            active_slips = [t for t in tickets if (t.get("status") or "RUNNING").upper() in ("RUNNING", "PENDING", "LIVE", "")]
-                            for t in active_slips:
+                            for t in tickets:
                                 for sel in t.get("selections", []):
                                     sel_h = (sel.get("home_team") or "").strip().lower()
                                     sel_a = (sel.get("away_team") or "").strip().lower()
                                     sel_gid = str(sel.get("game_id") or sel.get("fixture_id") or "")
 
-                                    # Match by ID or team token keywords
                                     is_match = False
                                     if ev_gid and sel_gid and ev_gid == sel_gid:
                                         is_match = True
@@ -1363,6 +1375,96 @@ def sync_tracked_tickets_with_live_apis(db: Optional[Session] = None) -> List[Di
                                                 pass
         except Exception as live_err:
             print("[TicketTracker] Live factsCenter sync warning:", live_err)
+
+        # ── PASS 2: Concluded Results Sweep ──────────────────────────────────────
+        # For any selection that is still marked LIVE or UPCOMING but whose kickoff was
+        # >110 minutes ago (i.e. the match is over), force a fresh booking code lookup
+        # to pull the concluded score/result before saving. This catches matches that
+        # disappeared from the live feed without being settled.
+        try:
+            now_ts2 = time.time()
+            stale_tickets = [
+                t for t in tickets
+                if t.get("status") == "RUNNING"
+                and t.get("code")
+                and t.get("code") not in ("CUSTOM", "", "AI-BUILDER-INTERNAL", "ROLLOVER-INTERNAL")
+                and any(
+                    (
+                        s.get("match_status") in ("LIVE", "ONGOING", "IN_PLAY", "UPCOMING", None, "")
+                        or not s.get("match_status")
+                    )
+                    and s.get("start_time_ms")
+                    and ((now_ts2 * 1000) - s["start_time_ms"]) > 110 * 60 * 1000
+                    for s in t.get("selections", [])
+                )
+            ]
+
+            if stale_tickets:
+                print(f"[TicketTracker] Concluded sweep: {len(stale_tickets)} tickets have stale unresolved games")
+                from app.adapters.bookmaker_adapter import SportyBetAdapter as _SBA
+                _adapter2 = _SBA(db)
+                for t in stale_tickets:
+                    code = t.get("code")
+                    try:
+                        res2 = _adapter2.fetch_booking_code_details(code, "ng")
+                        if res2 and res2.get("status") == "SUCCESS":
+                            sb_sels = res2.get("selections", [])
+                            sb_map2 = {}
+                            for item in sb_sels:
+                                gid = str(item.get("game_id") or item.get("external_fixture_id") or "")
+                                mkey = f"{(item.get('home_team') or '').strip()}_{(item.get('away_team') or '').strip()}".lower()
+                                if gid:
+                                    sb_map2[gid] = item
+                                if mkey:
+                                    sb_map2[mkey] = item
+
+                            for sel in t.get("selections", []):
+                                sel_st = (sel.get("match_status") or "").upper()
+                                sel_ms = sel.get("start_time_ms")
+                                is_stale = (
+                                    sel_st in ("LIVE", "ONGOING", "IN_PLAY", "UPCOMING", "", None)
+                                    and sel_ms
+                                    and ((now_ts2 * 1000) - sel_ms) > 110 * 60 * 1000
+                                )
+                                if not is_stale:
+                                    continue
+
+                                gid = str(sel.get("game_id") or sel.get("fixture_id") or "")
+                                mkey = f"{(sel.get('home_team') or '').strip()}_{(sel.get('away_team') or '').strip()}".lower()
+                                sb_item = sb_map2.get(gid) or sb_map2.get(mkey)
+                                if sb_item:
+                                    # Pull score
+                                    sc = sb_item.get("score") or ""
+                                    if sc and sc != "--":
+                                        sel["score"] = sc
+                                        h2, a2 = _parse_score(sc)
+                                        if h2 is not None:
+                                            sel["home_score"] = h2
+                                            sel["away_score"] = a2
+                                    if sb_item.get("home_score") is not None:
+                                        sel["home_score"] = sb_item["home_score"]
+                                        sel["away_score"] = sb_item["away_score"]
+                                        sel["score"] = f"{sel['home_score']} - {sel['away_score']}"
+                                    # Pull leg result from bookmaker
+                                    if sb_item.get("leg_result") in ("WON", "LOST", "VOID"):
+                                        sel["leg_result"] = sb_item["leg_result"]
+                                        sel["leg_status"] = sb_item["leg_result"]
+                                    # Mark concluded
+                                    bk_st = str(sb_item.get("match_status") or "").upper()
+                                    if bk_st in ("CONCLUDED", "FT", "FINISHED", "ENDED", "NULLED_EXPIRED") or not bk_st:
+                                        sel["match_status"] = "CONCLUDED"
+                                        sel["is_live"] = False
+                                    elif bk_st in ("IN_PROGRESS", "LIVE", "H1", "H2", "HT"):
+                                        sel["match_status"] = "LIVE"
+                                        sel["is_live"] = True
+                                else:
+                                    # Not found in booking code anymore — assume concluded (match over)
+                                    sel["match_status"] = "CONCLUDED"
+                                    sel["is_live"] = False
+                    except Exception as stale_err:
+                        print(f"[TicketTracker] Concluded sweep error for {code}:", stale_err)
+        except Exception as sweep_err:
+            print("[TicketTracker] Concluded results sweep exception:", sweep_err)
 
         # Persist full tickets list to DB
         save_tracked_tickets(tickets, db=db)

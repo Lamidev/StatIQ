@@ -50,15 +50,50 @@ export function parseScore(sel) {
 function resolveKickoffMs(sel) {
   if (!sel) return null;
 
-  // 1. Explicit start_time_ms provided by SportyBet API
-  if (sel.start_time_ms && !isNaN(sel.start_time_ms) && sel.start_time_ms > 1e11) {
-    return sel.start_time_ms;
+  // 1. Explicit start_time_ms or timestamp numbers
+  const numCandidate = sel.start_time_ms || sel.kickoff_ms || sel.timestamp || sel.start_time_unix;
+  if (numCandidate && !isNaN(numCandidate)) {
+    const n = Number(numCandidate);
+    if (n > 1e11) return n;
+    if (n > 1e8) return n * 1000;
   }
 
-  // 2. Parsed kickoff_datetime from SportyBet API
-  if (sel.kickoff_datetime) {
-    const parsed = new Date(sel.kickoff_datetime).getTime();
+  // 2. ISO or standard date strings
+  const dateCandidates = [
+    sel.kickoff_datetime,
+    sel.kickoff_time,
+    sel.match_date,
+    sel.utc_date,
+    sel.date,
+    sel.start_time,
+    sel.kickoff
+  ];
+
+  for (const raw of dateCandidates) {
+    if (!raw || typeof raw !== "string") continue;
+    const str = raw.trim();
+    if (!str || str === "--") continue;
+
+    // Direct JS Date parse
+    const parsed = new Date(str).getTime();
     if (!isNaN(parsed) && parsed > 1e11) return parsed;
+
+    // Format: "MM/DD HH:MM AM/PM" or "MM/DD HH:MM" (e.g. "08/15 05:00 PM", "08/15 20:30")
+    const m1 = str.match(/(\d{1,2})[\/\-](\d{1,2})\s+(\d{1,2}):(\d{2})(?:\s*([APap][Mm]))?/);
+    if (m1) {
+      const currentYear = new Date().getFullYear();
+      let month = parseInt(m1[1], 10) - 1;
+      let day = parseInt(m1[2], 10);
+      let hour = parseInt(m1[3], 10);
+      let min = parseInt(m1[4], 10);
+      const meridiem = m1[5] ? m1[5].toUpperCase() : null;
+
+      if (meridiem === "PM" && hour < 12) hour += 12;
+      if (meridiem === "AM" && hour === 12) hour = 0;
+
+      const d = new Date(currentYear, month, day, hour, min, 0);
+      if (!isNaN(d.getTime())) return d.getTime();
+    }
   }
 
   return null;

@@ -7,7 +7,6 @@ import BetHistoryTab from "./components/BetHistoryTab";
 import BacktesterTab from "./components/BacktesterTab";
 import AccessControlTab from "./components/AccessControlTab";
 import PasskeyAuthGate from "./components/PasskeyAuthGate";
-import PWAInstallPrompt from "./components/PWAInstallPrompt";
 
 import { fetchTrackedTickets } from "./api/client";
 
@@ -81,9 +80,6 @@ export default function App() {
         {activeTab === "backtester" && <BacktesterTab />}
         {activeTab === "access" && <AccessControlTab currentUser={authenticatedUser} />}
       </main>
-
-      {/* PWA Mobile Installation Prompt Banner */}
-      <PWAInstallPrompt />
 
       {/* Footer */}
       <footer className="border-t border-slate-200 py-6 bg-white">

@@ -291,9 +291,17 @@ export default function TicketBuilderTab() {
     if (!lockTargetData) return;
     setLockingTicket(true);
     try {
+      // Map UI builder modes to canonical tracker mode strings that BetHistoryTab classifier understands
+      const modeMap = {
+        "ACCUMULATOR": "AI_BUILDER",
+        "TODAY_GAMES": "AI_BUILDER",
+        "ROLLOVER": "ROLLOVER"
+      };
+      const canonicalMode = lockTargetData.mode || modeMap[builderMode] || "AI_BUILDER";
+
       const payload = {
         code: lockTargetData.code || "AI-BUILDER-TICKET",
-        mode: builderMode,
+        mode: canonicalMode,
         target_odds: lockTargetData.targetOdds || targetOdds,
         total_odds: lockTargetData.totalOdds || 2.0,
         stake: parseFloat(stakeInput) || 1000,

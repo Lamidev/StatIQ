@@ -21,6 +21,8 @@ import {
   Activity,
   PlayCircle,
   Target,
+  Sparkles,
+  TrendingUp,
 } from "lucide-react";
 import { fetchTrackedTickets, deleteTrackedTicket, syncLiveTrackedTickets } from "../api/client";
 import { isTicketLive, isLegLive, evaluatePickLive, evaluateTicketStatus, getDynamicMatchInfo, parseScore } from "../utils/ticketEvaluator";
@@ -97,17 +99,29 @@ export default function BetHistoryTab({ externalSelectedTicketId, onClearExterna
     }
   }, [externalSelectedTicketId]);
 
-  // Periodic live clock ticker and real-time live score sync (every 10s)
+  // Fast local data refresh every 10s — just re-reads from backend DB cache, cheap
   useEffect(() => {
-    const timer = setInterval(() => {
-      setLiveTick((prev) => {
-        const next = prev + 1;
-        loadData(true);
-        syncLiveTrackedTickets().then(() => loadData(true));
-        return next;
-      });
+    const fastTimer = setInterval(() => {
+      loadData(true); // silent, no spinner
     }, 10000);
-    return () => clearInterval(timer);
+    return () => clearInterval(fastTimer);
+  }, []);
+
+  // Slower SportyBet live API sync every 30s — only fires when there are active/live tickets
+  useEffect(() => {
+    const syncTimer = setInterval(() => {
+      setTickets(prev => {
+        const hasActive = prev.some(t =>
+          t.status === "RUNNING" || t.status === "PENDING" ||
+          isTicketLive(t)
+        );
+        if (hasActive) {
+          syncLiveTrackedTickets().then(() => loadData(true)).catch(() => {});
+        }
+        return prev; // no state change, just side-effect
+      });
+    }, 30000);
+    return () => clearInterval(syncTimer);
   }, []);
 
   // Selected Ticket for Delete Modal
@@ -305,95 +319,177 @@ export default function BetHistoryTab({ externalSelectedTicketId, onClearExterna
       )}
 
       {/* Feature Performance Analytics Comparison Dashboard */}
-      {!selectedTicket && tickets.length > 0 && (
-        <div className="bg-white p-5 rounded-2xl border border-slate-200 space-y-3 shadow-sm">
+      {!selectedTicket && evaluatedTickets.length > 0 && (
+        <div className="bg-white p-4 sm:p-5 rounded-2xl border border-slate-200 space-y-3 shadow-sm">
           <div className="flex items-center justify-between border-b border-slate-100 pb-2.5">
             <div>
-              <h3 className="text-xs font-black text-slate-900 uppercase tracking-wider">
-                📊 Re-Editor Feature Performance Analytics (Auditor vs Swap vs Remove)
+              <h3 className="text-xs font-black text-slate-900 uppercase tracking-wider flex items-center gap-1.5">
+                <span>📊 Re-Editor & AI Builder Performance Analytics</span>
+                {dateFilter !== "ALL" && (
+                  <span className="text-[10px] bg-slate-100 text-slate-700 px-2 py-0.5 rounded-full font-bold">
+                    {dateFilter}
+                  </span>
+                )}
               </h3>
               <p className="text-[11px] text-slate-500">
-                Compare win rates and effective performance across ticket re-editing strategies.
+                Mutually exclusive win rates and settlement outcomes across AI Ticket Builder, Rollover, and Re-Editor strategies.
               </p>
             </div>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
-            {/* SWAP Mode */}
-            {(() => {
-              const swapTickets = tickets.filter(t => (t.mode || "").toUpperCase() === "SWAP");
-              const total = swapTickets.length;
-              const won = swapTickets.filter(t => t.status === "WON").length;
+          {(() => {
+            // Apply current date filter to analytics tickets
+            const targetTickets = evaluatedTickets.filter((t) => {
+              if (dateFilter !== "ALL" && t.created_at) {
+                const ticketDateStr = t.created_at.split(" ")[0];
+                const now = new Date();
+                const todayStr = now.toISOString().split("T")[0];
+                const yesterday = new Date(now);
+                yesterday.setDate(yesterday.getDate() - 1);
+                const yesterdayStr = yesterday.toISOString().split("T")[0];
+                if (dateFilter === "TODAY" && ticketDateStr !== todayStr) return false;
+                if (dateFilter === "YESTERDAY" && ticketDateStr !== yesterdayStr) return false;
+              }
+              return true;
+            });
+
+            const classifyTicket = (t) => {
+              const mode = String(t.mode || "").toUpperCase();
+              const code = String(t.code || "").toUpperCase();
+              const feat = String(t.feature_used || t.feature || "").toUpperCase();
+              const strat = String(t.strategy || "").toUpperCase();
+              const source = String(t.source || "").toUpperCase();
+
+              // ROLLOVER check first — must come before AI_BUILDER to prevent mode=ROLLOVER being caught by TODAY_GAMES fallback
+              if (mode === "ROLLOVER" || strat.includes("ROLLOVER") || feat.includes("ROLLOVER") || feat.includes("1.50") || code.startsWith("ROLLOVER")) {
+                return "ROLLOVER";
+              }
+              // AI Builder: covers new canonical AI_BUILDER + legacy ACCUMULATOR / TODAY_GAMES modes
+              if (
+                mode === "BUILDER" || mode === "AI_BUILDER" || mode === "ACCUMULATOR" || mode === "TODAY_GAMES" ||
+                source === "AI_BUILDER" ||
+                code.startsWith("STATIQ-ACC") || code.startsWith("AI-BUILDER") ||
+                feat.includes("AI BUILDER") || feat.includes("AI TICKET")
+              ) {
+                return "AI_BUILDER";
+              }
+              if (mode === "SWAP" || feat.includes("SWAP")) {
+                return "SWAP";
+              }
+              if (mode === "REMOVE" || feat.includes("REMOVE")) {
+                return "REMOVE";
+              }
+              return "AUDITOR";
+            };
+
+            const aiTickets = targetTickets.filter(t => classifyTicket(t) === "AI_BUILDER");
+            const rollTickets = targetTickets.filter(t => classifyTicket(t) === "ROLLOVER");
+            const auditorTickets = targetTickets.filter(t => classifyTicket(t) === "AUDITOR");
+            const removeTickets = targetTickets.filter(t => classifyTicket(t) === "REMOVE");
+            const swapTickets = targetTickets.filter(t => classifyTicket(t) === "SWAP");
+
+            const getStats = (list) => {
+              const total = list.length;
+              const won = list.filter(t => t.status === "WON").length;
               const rate = total > 0 ? ((won / total) * 100).toFixed(1) : "0.0";
-              return (
-                <div className="bg-indigo-50/70 border border-indigo-200 p-3.5 rounded-xl space-y-1">
+              return { total, won, rate };
+            };
+
+            const aiStats = getStats(aiTickets);
+            const rollStats = getStats(rollTickets);
+            const audStats = getStats(auditorTickets);
+            const remStats = getStats(removeTickets);
+            const swapStats = getStats(swapTickets);
+
+            return (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2.5 sm:gap-3 text-xs">
+                {/* 1. AI TICKET BUILDER */}
+                <div className="bg-purple-50/70 border border-purple-200 p-3 rounded-xl space-y-1">
                   <div className="flex items-center justify-between">
-                    <span className="font-extrabold text-indigo-900 flex items-center gap-1">
-                      <RefreshCw className="w-3.5 h-3.5 text-indigo-600" />
-                      <span>SWAP MODE (Hybrid)</span>
+                    <span className="font-extrabold text-purple-900 flex items-center gap-1">
+                      <Sparkles className="w-3.5 h-3.5 text-purple-600" />
+                      <span>AI BUILDER</span>
                     </span>
-                    <span className="bg-indigo-600 text-white text-[10px] font-black px-2 py-0.5 rounded-full">
-                      {rate}% Win Rate
+                    <span className="bg-purple-600 text-white text-[10px] font-black px-2 py-0.5 rounded-full">
+                      {aiStats.rate}% Win
                     </span>
                   </div>
                   <p className="text-slate-700 font-extrabold text-sm mt-1">
-                    {won} Won <span className="text-slate-400 text-xs font-normal">/ {total} Tickets</span>
+                    {aiStats.won} Won <span className="text-slate-400 text-xs font-normal">/ {aiStats.total} Slips</span>
                   </p>
-                  <p className="text-[10px] text-slate-500">Swaps risky games with top European picks.</p>
+                  <p className="text-[10px] text-slate-500">5-Gate target odds accumulator slip engine.</p>
                 </div>
-              );
-            })()}
 
-            {/* REMOVE Mode */}
-            {(() => {
-              const removeTickets = tickets.filter(t => (t.mode || "").toUpperCase() === "REMOVE");
-              const total = removeTickets.length;
-              const won = removeTickets.filter(t => t.status === "WON").length;
-              const rate = total > 0 ? ((won / total) * 100).toFixed(1) : "0.0";
-              return (
-                <div className="bg-rose-50/70 border border-rose-200 p-3.5 rounded-xl space-y-1">
+                {/* 2. ROLLOVER STRATEGY */}
+                <div className="bg-amber-50/70 border border-amber-200 p-3 rounded-xl space-y-1">
                   <div className="flex items-center justify-between">
-                    <span className="font-extrabold text-rose-900 flex items-center gap-1">
-                      <Trash2 className="w-3.5 h-3.5 text-rose-600" />
-                      <span>REMOVE MODE</span>
+                    <span className="font-extrabold text-amber-900 flex items-center gap-1">
+                      <TrendingUp className="w-3.5 h-3.5 text-amber-600" />
+                      <span>ROLLOVER MODE</span>
                     </span>
-                    <span className="bg-rose-600 text-white text-[10px] font-black px-2 py-0.5 rounded-full">
-                      {rate}% Win Rate
+                    <span className="bg-amber-600 text-white text-[10px] font-black px-2 py-0.5 rounded-full">
+                      {rollStats.rate}% Win
                     </span>
                   </div>
                   <p className="text-slate-700 font-extrabold text-sm mt-1">
-                    {won} Won <span className="text-slate-400 text-xs font-normal">/ {total} Tickets</span>
+                    {rollStats.won} Won <span className="text-slate-400 text-xs font-normal">/ {rollStats.total} Slips</span>
                   </p>
-                  <p className="text-[10px] text-slate-500">Drops risky games without adding replacements.</p>
+                  <p className="text-[10px] text-slate-500">Ultra-safe 1.50x daily compound banker legs.</p>
                 </div>
-              );
-            })()}
 
-            {/* AUDITOR Mode */}
-            {(() => {
-              const auditorTickets = tickets.filter(t => (t.mode || "AUDITOR").toUpperCase() === "AUDITOR");
-              const total = auditorTickets.length;
-              const won = auditorTickets.filter(t => t.status === "WON").length;
-              const rate = total > 0 ? ((won / total) * 100).toFixed(1) : "0.0";
-              return (
-                <div className="bg-emerald-50/70 border border-emerald-200 p-3.5 rounded-xl space-y-1">
+                {/* 3. AUDITOR MODE */}
+                <div className="bg-emerald-50/70 border border-emerald-200 p-3 rounded-xl space-y-1">
                   <div className="flex items-center justify-between">
                     <span className="font-extrabold text-emerald-900 flex items-center gap-1">
                       <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
                       <span>AUDITOR MODE</span>
                     </span>
                     <span className="bg-emerald-600 text-white text-[10px] font-black px-2 py-0.5 rounded-full">
-                      {rate}% Win Rate
+                      {audStats.rate}% Win
                     </span>
                   </div>
                   <p className="text-slate-700 font-extrabold text-sm mt-1">
-                    {won} Won <span className="text-slate-400 text-xs font-normal">/ {total} Tickets</span>
+                    {audStats.won} Won <span className="text-slate-400 text-xs font-normal">/ {audStats.total} Slips</span>
                   </p>
-                  <p className="text-[10px] text-slate-500">Strictly upgrades original ticket picks.</p>
+                  <p className="text-[10px] text-slate-500">Strictly upgrades original booking code picks.</p>
                 </div>
-              );
-            })()}
-          </div>
+
+                {/* 4. REMOVE MODE */}
+                <div className="bg-rose-50/70 border border-rose-200 p-3 rounded-xl space-y-1">
+                  <div className="flex items-center justify-between">
+                    <span className="font-extrabold text-rose-900 flex items-center gap-1">
+                      <Trash2 className="w-3.5 h-3.5 text-rose-600" />
+                      <span>REMOVE MODE</span>
+                    </span>
+                    <span className="bg-rose-600 text-white text-[10px] font-black px-2 py-0.5 rounded-full">
+                      {remStats.rate}% Win
+                    </span>
+                  </div>
+                  <p className="text-slate-700 font-extrabold text-sm mt-1">
+                    {remStats.won} Won <span className="text-slate-400 text-xs font-normal">/ {remStats.total} Slips</span>
+                  </p>
+                  <p className="text-[10px] text-slate-500">Drops high-risk legs without adding substitutes.</p>
+                </div>
+
+                {/* 5. SWAP MODE */}
+                <div className="bg-indigo-50/70 border border-indigo-200 p-3 rounded-xl space-y-1">
+                  <div className="flex items-center justify-between">
+                    <span className="font-extrabold text-indigo-900 flex items-center gap-1">
+                      <RefreshCw className="w-3.5 h-3.5 text-indigo-600" />
+                      <span>SWAP MODE</span>
+                    </span>
+                    <span className="bg-indigo-600 text-white text-[10px] font-black px-2 py-0.5 rounded-full">
+                      {swapStats.rate}% Win
+                    </span>
+                  </div>
+                  <p className="text-slate-700 font-extrabold text-sm mt-1">
+                    {swapStats.won} Won <span className="text-slate-400 text-xs font-normal">/ {swapStats.total} Slips</span>
+                  </p>
+                  <p className="text-[10px] text-slate-500">Swaps risky games with high-probability European picks.</p>
+                </div>
+              </div>
+            );
+          })()}
         </div>
       )}
 
@@ -739,7 +835,15 @@ function TicketCard({ ticket, onClick, onDelete }) {
                 </span>
               );
             }
-            if (m === "BUILDER" || m === "ACCUMULATOR" || m === "ROLLOVER") {
+            if (m === "ROLLOVER") {
+              return (
+                <span className="text-xs font-black bg-blue-100 text-blue-900 border border-blue-300 px-3 py-1 rounded-lg uppercase tracking-wider flex items-center gap-1.5 shadow-xs">
+                  <TrendingUp className="w-3.5 h-3.5 text-blue-700" />
+                  <span>Feature: ROLLOVER MODE</span>
+                </span>
+              );
+            }
+            if (m === "BUILDER" || m === "AI_BUILDER" || m === "ACCUMULATOR" || m === "TODAY_GAMES") {
               return (
                 <span className="text-xs font-black bg-amber-100 text-amber-900 border border-amber-300 px-3 py-1 rounded-lg uppercase tracking-wider flex items-center gap-1.5 shadow-xs">
                   <Target className="w-3.5 h-3.5 text-amber-700" />
@@ -1043,13 +1147,15 @@ function TicketDetailView({ ticket, onBack, onDelete }) {
                 <h4 className="font-extrabold text-slate-900 text-sm">
                   {m === "SWAP" || m === "HYBRID" ? "SWAP MODE (Hybrid Re-Edit)" :
                    m === "REMOVE" ? "REMOVE MODE (Dropped Risky Picks)" :
-                   m === "BUILDER" || m === "ACCUMULATOR" ? "AI TICKET BUILDER" :
+                   m === "ROLLOVER" ? "ROLLOVER MODE (Daily Compound Banker)" :
+                   m === "BUILDER" || m === "AI_BUILDER" || m === "ACCUMULATOR" || m === "TODAY_GAMES" ? "AI TICKET BUILDER" :
                    "AUDITOR MODE (Structural Pick Upgrades)"}
                 </h4>
                 <p className="text-[11px] text-slate-500 mt-0.5">
                   {m === "SWAP" || m === "HYBRID" ? "Kept safe original ticket games, and swapped risky games with high-confidence picks from top European leagues." :
                    m === "REMOVE" ? "Dropped risky games from original slip without adding external replacements." :
-                   m === "BUILDER" || m === "ACCUMULATOR" ? "Generated using StatIQ's AI Ticket Engine with 5-Gate Probability Audit." :
+                   m === "ROLLOVER" ? "Ultra-safe 1.50x daily compound banker legs generated by StatIQ AI engine." :
+                   m === "BUILDER" || m === "AI_BUILDER" || m === "ACCUMULATOR" || m === "TODAY_GAMES" ? "Generated using StatIQ's AI Ticket Engine with 5-Gate Probability Audit." :
                    "Audited original ticket selections directly and upgraded market picks to safest structural options."}
                 </p>
               </div>
@@ -1064,7 +1170,11 @@ function TicketDetailView({ ticket, onBack, onDelete }) {
                 <span className="text-xs font-black bg-rose-100 text-rose-900 border border-rose-300 px-3 py-1.5 rounded-xl uppercase tracking-wider">
                   Feature: REMOVE Mode
                 </span>
-              ) : m === "BUILDER" || m === "ACCUMULATOR" ? (
+              ) : m === "ROLLOVER" ? (
+                <span className="text-xs font-black bg-blue-100 text-blue-900 border border-blue-300 px-3 py-1.5 rounded-xl uppercase tracking-wider">
+                  Feature: ROLLOVER MODE
+                </span>
+              ) : m === "BUILDER" || m === "AI_BUILDER" || m === "ACCUMULATOR" || m === "TODAY_GAMES" ? (
                 <span className="text-xs font-black bg-amber-100 text-amber-900 border border-amber-300 px-3 py-1.5 rounded-xl uppercase tracking-wider">
                   Feature: AI BUILDER
                 </span>
