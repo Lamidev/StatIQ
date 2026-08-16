@@ -4,7 +4,7 @@ import string
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 import httpx
 from sqlalchemy import select, and_
 
@@ -164,7 +164,14 @@ class SportyBetAdapter(BookmakerAdapter):
             status="ACTIVE_WEB_API_ADAPTER"
         )
 
+    def read_code(self, code: str, country_code: str = "ng") -> Dict[str, Any]:
+        return self.fetch_booking_code_details(code=code, country_code=country_code)
+
+    def generate_code(self, selections: List[Dict[str, Any]], country_code: str = "ng") -> Dict[str, Any]:
+        return self.generate_booking_code(selections=selections, country_code=country_code)
+
     def fetch_booking_code_details(self, code: str, country_code: str = "ng") -> Dict[str, Any]:
+
         """
         Fetches and decodes SportyBet share code via public endpoint.
         Uses multi-region fallback (ng, gh, ke, ug, tz, zm) for 100% universal decoding.
@@ -423,99 +430,97 @@ class SportyBetAdapter(BookmakerAdapter):
         "no":        ["no", "ng"],
     }
 
-    def _find_best_market_outcome(
+    def _resolve_market_payload(
         self,
-        sporty_markets: List[Dict[str, Any]],
-        matchiq_market: str,
-        matchiq_selection: str,
-    ) -> tuple:
-        """
-        Given a list of SportyBet markets for a matched event, find the market
-        and outcome that best corresponds to the MatchIQ market_name and selection_name.
+        ev_markets: List[Dict[str, Any]],
+        mkt_text: str,
+        sel_text: str,
+        home_target: str,
+        away_target: str
+    ) -> Tuple[str, str, Optional[str]]:
+        m_lower = (mkt_text or "").lower().strip()
+        s_lower = (sel_text or "").lower().strip()
+        h_lower = (home_target or "").lower().strip()
+        a_lower = (away_target or "").lower().strip()
 
-        Returns (market_dict, outcome_dict) or (fallback_market, fallback_outcome).
-        """
-        mkt_lower = (matchiq_market or "").lower().strip()
-        sel_lower = (matchiq_selection or "").lower().strip()
+        m_list = list(ev_markets.values()) if isinstance(ev_markets, dict) else (ev_markets or [])
 
-        # Step 1: Score each SportyBet market against the MatchIQ market name
-        best_market = None
-        best_market_score = 0
+        # 1. Double Chance (Market ID: 10)
+        if "double chance" in m_lower or "dc" in m_lower or "1x" in s_lower or "x2" in s_lower or "12" in s_lower or "or draw" in s_lower or "home/draw" in s_lower or "home or away" in s_lower:
+            for mkt in m_list:
+                m_desc = (mkt.get("desc") or mkt.get("name") or mkt.get("market_name") or "").lower().strip()
+                m_id = str(mkt.get("id") or mkt.get("market_id") or "")
+                if (m_id == "10" or m_desc == "double chance") and not any(k in m_desc for k in ["&", "over", "under", "gg", "corner"]):
+                    outcomes = mkt.get("outcomes", [])
+                    if isinstance(outcomes, dict): outcomes = list(outcomes.values())
+                    target_code = "12" if ("12" in s_lower or "home or away" in s_lower) else ("x2" if ("x2" in s_lower or "draw or away" in s_lower) else "1x")
+                    for oc in outcomes:
+                        o_desc = (oc.get("desc") or oc.get("name") or oc.get("selection_name") or "").lower().strip()
+                        o_id = str(oc.get("id") or oc.get("outcome_id") or "")
+                        if target_code in o_desc or (target_code == "1x" and o_id == "9") or (target_code == "12" and o_id == "10") or (target_code == "x2" and o_id == "11"):
+                            return m_id or "10", o_id, None
+            if "12" in s_lower or "home or away" in s_lower:
+                return "10", "10", None
+            elif "x2" in s_lower or "draw or away" in s_lower:
+                return "10", "11", None
+            else:
+                return "10", "9", None
 
-        for sm in sporty_markets:
-            sm_name = (sm.get("name") or sm.get("desc") or "").lower()
-            score = 0
+        # 2. Win Either Half (Home: 73, Away: 74)
+        if "either half" in m_lower or "either half" in s_lower or "win either half" in s_lower:
+            is_away = "away" in s_lower or (a_lower and a_lower in s_lower and h_lower not in s_lower) or "(2)" in s_lower
+            target_m_id = "74" if is_away else "73"
+            for mkt in m_list:
+                m_id = str(mkt.get("id") or mkt.get("market_id") or "")
+                if m_id == target_m_id:
+                    outcomes = mkt.get("outcomes", [])
+                    if isinstance(outcomes, dict): outcomes = list(outcomes.values())
+                    if outcomes:
+                        return target_m_id, str(outcomes[0].get("id") or outcomes[0].get("outcome_id") or "75"), None
+            return target_m_id, "75", None
 
-            # Check keyword groups
-            for _group, keywords in self._MARKET_KEYWORDS.items():
-                mkt_has = any(kw in mkt_lower for kw in keywords)
-                sm_has = any(kw in sm_name for kw in keywords)
-                if mkt_has and sm_has:
-                    score += 10
-                    break
+        # 3. Over / Under Goals (Market ID: 18)
+        if "over" in m_lower or "under" in m_lower or "over" in s_lower or "under" in s_lower or "goal" in m_lower:
+            line_match = re.search(r"(\d+\.5|\d+)", s_lower + " " + m_lower)
+            line_val = line_match.group(1) if line_match else "1.5"
+            is_over = "over" in s_lower or "over" in m_lower
+            target_spec = f"total={line_val}"
+            for mkt in m_list:
+                m_desc = (mkt.get("desc") or mkt.get("name") or mkt.get("market_name") or "").lower().strip()
+                m_id = str(mkt.get("id") or mkt.get("market_id") or "")
+                spec = str(mkt.get("specifier") or mkt.get("handicap") or "")
+                if (m_id == "18" or "over/under" in m_desc or "total goals" in m_desc) and (line_val in spec or line_val in m_desc):
+                    outcomes = mkt.get("outcomes", [])
+                    if isinstance(outcomes, dict): outcomes = list(outcomes.values())
+                    for oc in outcomes:
+                        o_desc = (oc.get("desc") or oc.get("name") or oc.get("selection_name") or "").lower().strip()
+                        o_id = str(oc.get("id") or oc.get("outcome_id") or "")
+                        if (is_over and ("over" in o_desc or o_id == "12")) or (not is_over and ("under" in o_desc or o_id == "13")):
+                            return m_id or "18", o_id, target_spec
+            return "18", "12" if is_over else "13", target_spec
 
-            # Exact substring bonus
-            if mkt_lower and mkt_lower in sm_name:
-                score += 5
-            if sm_name and sm_name in mkt_lower:
-                score += 5
+        # 4. BTTS / GG / NG (Market ID: 29)
+        if "btts" in m_lower or "gg" in m_lower or "both teams" in m_lower or "gg" in s_lower or "ng" in s_lower:
+            is_yes = "yes" in s_lower or "gg" in s_lower
+            for mkt in m_list:
+                m_id = str(mkt.get("id") or mkt.get("market_id") or "")
+                if m_id == "29":
+                    outcomes = mkt.get("outcomes", [])
+                    if isinstance(outcomes, dict): outcomes = list(outcomes.values())
+                    for oc in outcomes:
+                        o_desc = (oc.get("desc") or oc.get("name") or "").lower().strip()
+                        o_id = str(oc.get("id") or oc.get("outcome_id") or "")
+                        if (is_yes and ("yes" in o_desc or o_id == "24")) or (not is_yes and ("no" in o_desc or o_id == "25")):
+                            return "29", o_id, None
+            return "29", "24" if is_yes else "25", None
 
-            # Line/handicap value matching (e.g. "2.5" in both)
-            mkt_nums = set(re.findall(r"\d+\.?\d*", mkt_lower))
-            sm_nums = set(re.findall(r"\d+\.?\d*", sm_name))
-            if mkt_nums and mkt_nums & sm_nums:
-                score += 3
+        # 5. 1X2 Match Result
+        if "draw" in s_lower or s_lower == "x":
+            return "1", "2", None
+        elif "away" in s_lower or "(2)" in s_lower or (a_lower and a_lower in s_lower and h_lower not in s_lower):
+            return "1", "3", None
+        return "1", "1", None
 
-            if score > best_market_score:
-                best_market_score = score
-                best_market = sm
-
-        # Step 2: Within the best market, find the outcome matching the selection
-        target_market = best_market if best_market and best_market_score >= 3 else None
-
-        if target_market and target_market.get("outcomes"):
-            best_outcome = None
-            best_out_score = 0
-
-            for oc in target_market["outcomes"]:
-                oc_name = (oc.get("name") or oc.get("desc") or "").lower()
-                oscore = 0
-
-                # Keyword group match
-                for _group, keywords in self._OUTCOME_KEYWORDS.items():
-                    sel_has = any(kw in sel_lower for kw in keywords)
-                    oc_has = any(kw in oc_name for kw in keywords)
-                    if sel_has and oc_has:
-                        oscore += 10
-                        break
-
-                # Exact substring
-                if sel_lower and sel_lower in oc_name:
-                    oscore += 5
-                if oc_name and oc_name in sel_lower:
-                    oscore += 5
-
-                # Number matching (e.g. "2.5")
-                sel_nums = set(re.findall(r"\d+\.?\d*", sel_lower))
-                oc_nums = set(re.findall(r"\d+\.?\d*", oc_name))
-                if sel_nums and sel_nums & oc_nums:
-                    oscore += 3
-
-                if oscore > best_out_score:
-                    best_out_score = oscore
-                    best_outcome = oc
-
-            if best_outcome and best_out_score >= 3:
-                return target_market, best_outcome
-
-            # Fallback: return first outcome of the matched market
-            return target_market, target_market["outcomes"][0]
-
-        # Step 3: Ultimate fallback — first market, first outcome
-        if sporty_markets and sporty_markets[0].get("outcomes"):
-            return sporty_markets[0], sporty_markets[0]["outcomes"][0]
-
-        return None, None
 
     def _fetch_event_markets(self, event_id: str, country_code: str = "ng") -> Optional[List[Dict[str, Any]]]:
         """
@@ -609,45 +614,45 @@ class SportyBetAdapter(BookmakerAdapter):
         Maps selections to SportyBet canonical marketId, outcomeId, and specifier.
         """
         url_share = f"{self.BASE_URL}/{country_code.lower()}/orders/share"
-        url_events = f"{self.BASE_URL}/{country_code.lower()}/factsCenter/wapUpcomingEvents?sportId=sr%3Asport%3A1&pageSize=100"
         
-        live_sporty_events = []
-        try:
-            with httpx.Client(timeout=6.0, headers=self.HEADERS) as client:
-                r = client.get(url_events)
-                if r.status_code == 200:
-                    live_sporty_events = r.json().get("data", [])
-        except Exception as e:
-            logger.warning(f"Failed to fetch live SportyBet matches: {e}")
+        from app.services.sportybet_ingestion import SportyBetIngestionService
+        live_sporty_events = SportyBetIngestionService.fetch_upcoming_fixtures(limit=250)
 
         # Build lookup maps from live events
         events_by_id = {}
         for ev in live_sporty_events:
             if ev.get("eventId"):
                 events_by_id[str(ev["eventId"])] = ev
+            if ev.get("event_id"):
+                events_by_id[str(ev["event_id"])] = ev
             if ev.get("gameId"):
                 events_by_id[str(ev["gameId"])] = ev
+            if ev.get("game_id"):
+                events_by_id[str(ev["game_id"])] = ev
 
         selections_payload = []
         STOP_WORDS = {"fc", "sc", "cd", "ud", "ca", "rc", "ac", "fk", "bk", "sk", "ff", "sad", "club", "team"}
 
+
         for s in selections:
-            raw_event_id = str(s.get("game_id") or s.get("external_fixture_id") or s.get("fixture_id") or "").strip()
+            raw_event_id = str(s.get("provider_event_id") or s.get("event_id") or s.get("eventId") or s.get("game_id") or s.get("external_fixture_id") or s.get("fixture_id") or "").strip()
             home_target = (s.get("home_team") or s.get("fixture") or "").lower().strip()
+
             away_target = (s.get("away_team") or "").lower().strip()
             sel_text = (s.get("selection_name") or s.get("selection") or s.get("prediction") or "").lower()
 
+            # 1. Direct verified ID preservation (Canonical First)
             target_event_id = None
             if raw_event_id:
-                if raw_event_id in events_by_id:
-                    target_event_id = events_by_id[raw_event_id].get("eventId")
-                elif raw_event_id.startswith("sr:match:"):
+                if str(raw_event_id).startswith("sr:match:"):
                     target_event_id = raw_event_id
-                elif raw_event_id.isdigit() and len(raw_event_id) >= 7:
+                elif raw_event_id in events_by_id:
+                    target_event_id = events_by_id[raw_event_id].get("eventId")
+                elif str(raw_event_id).isdigit() and len(str(raw_event_id)) >= 7:
                     target_event_id = f"sr:match:{raw_event_id}"
 
-            # Team name fuzzy match if no direct valid event ID
-            if (not target_event_id or not target_event_id.startswith("sr:match:")) and live_sporty_events:
+            # 2. Team name lookup only if direct event ID was not attached
+            if not target_event_id and live_sporty_events:
                 h_words = [w for w in home_target.split() if len(w) >= 3 and w not in STOP_WORDS]
                 a_words = [w for w in away_target.split() if len(w) >= 3 and w not in STOP_WORDS]
                 for ev in live_sporty_events:
@@ -657,107 +662,52 @@ class SportyBetAdapter(BookmakerAdapter):
                         target_event_id = ev.get("eventId")
                         break
 
-            # Fallback to active live event from batch to guarantee loadable code
-            if (not target_event_id or not str(target_event_id).startswith("sr:match:")) and live_sporty_events:
-                fallback_idx = len(selections_payload) % len(live_sporty_events)
-                target_event_id = live_sporty_events[fallback_idx].get("eventId")
-
+            # STRICT RULE: NEVER substitute an arbitrary random match!
             if not target_event_id:
+                logger.warning(f"[SportyBetAdapter] Could not find exact event ID for {home_target} vs {away_target}. Skipping.")
                 continue
 
-            # Match against event's actual open markets if available
-            event_obj = events_by_id.get(target_event_id)
-            ev_markets = event_obj.get("markets", []) if event_obj else []
+            # Check for direct pre-locked market and outcome IDs
+            direct_mkt_id = s.get("provider_market_id") or s.get("marketId") or s.get("_sportybet_market_id") or s.get("market_id")
+            direct_oc_id = s.get("provider_outcome_id") or s.get("outcomeId") or s.get("_sportybet_outcome_id") or s.get("outcome_id")
+            direct_spec = s.get("provider_specifier") or s.get("specifier") or s.get("_sportybet_specifier")
+
+            mkt_text = (s.get("market_name") or s.get("market") or "").strip()
 
             item_payload = None
+            if direct_mkt_id and direct_oc_id:
+                item_payload = {
+                    "eventId": target_event_id,
+                    "marketId": str(direct_mkt_id),
+                    "outcomeId": str(direct_oc_id)
+                }
+                if direct_spec:
+                    item_payload["specifier"] = str(direct_spec)
+            else:
+                event_obj = events_by_id.get(target_event_id)
+                ev_markets = event_obj.get("markets", []) if event_obj else []
+                if isinstance(ev_markets, dict):
+                    ev_markets = list(ev_markets.values())
 
-            if ev_markets:
-                mkt, outcome = self._find_best_market_outcome(ev_markets, "All", sel_text)
-                if mkt and outcome:
-                    item_payload = {
-                        "eventId": target_event_id,
-                        "marketId": str(mkt["id"]),
-                        "outcomeId": str(outcome["id"]),
-                    }
-                    if mkt.get("specifier"):
-                        item_payload["specifier"] = mkt["specifier"]
-
-            if not item_payload:
-                # Determine Market ID, Specifier, and Outcome ID
-                m_id = "1"
-                o_id = "1"
-                spec = None
-
-                if "win either half" in sel_text:
-                    if away_target in sel_text or "away" in sel_text or "(2)" in sel_text:
-                        m_id, spec, o_id = "74", None, "75"
-                    else:
-                        m_id, spec, o_id = "73", None, "75"
-                elif "or over 2.5" in sel_text or "win or over 2.5" in sel_text:
-                    if away_target in sel_text or "away" in sel_text or "(2)" in sel_text:
-                        m_id, spec, o_id = "133", None, "12"
-                    else:
-                        m_id, spec, o_id = "132", None, "12"
-                elif "corner" in sel_text:
-                    m_id, spec, o_id = "166", "total=7.5", "12"
-                elif "handicap" in sel_text or "+1.5" in sel_text:
-                    if away_target in sel_text or "away" in sel_text or "(2)" in sel_text:
-                        m_id, spec, o_id = "16", "handicap=1.5", "2"
-                    else:
-                        m_id, spec, o_id = "16", "handicap=1.5", "1"
-                elif "over 1.5" in sel_text:
-                    m_id, spec, o_id = "18", "total=1.5", "12"
-                elif "under 1.5" in sel_text:
-                    m_id, spec, o_id = "18", "total=1.5", "13"
-                elif "over 2.5" in sel_text:
-                    m_id, spec, o_id = "18", "total=2.5", "12"
-                elif "under 2.5" in sel_text:
-                    m_id, spec, o_id = "18", "total=2.5", "13"
-                elif "over 0.5" in sel_text:
-                    m_id, spec, o_id = "18", "total=0.5", "12"
-                elif "under 0.5" in sel_text:
-                    m_id, spec, o_id = "18", "total=0.5", "13"
-                elif "over 3.5" in sel_text:
-                    m_id, spec, o_id = "18", "total=3.5", "12"
-                elif "under 3.5" in sel_text:
-                    m_id, spec, o_id = "18", "total=3.5", "13"
-                elif "over 4.5" in sel_text:
-                    m_id, spec, o_id = "18", "total=4.5", "12"
-                elif "under 4.5" in sel_text:
-                    m_id, spec, o_id = "18", "total=4.5", "13"
-                elif "1x" in sel_text or ("or draw" in sel_text and (home_target in sel_text or "home" in sel_text)):
-                    m_id, spec, o_id = "10", None, "9"
-                elif "x2" in sel_text or "draw or" in sel_text:
-                    m_id, spec, o_id = "10", None, "11"
-                elif "12" in sel_text or ("home or away" in sel_text):
-                    m_id, spec, o_id = "10", None, "10"
-                elif "draw" in sel_text and not ("no bet" in sel_text):
-                    m_id, spec, o_id = "1", None, "2"
-                elif "away" in sel_text or away_target in sel_text and ("win" in sel_text or "(2)" in sel_text):
-                    m_id, spec, o_id = "1", None, "3"
-                elif "home" in sel_text or home_target in sel_text and ("win" in sel_text or "(1)" in sel_text):
-                    m_id, spec, o_id = "1", None, "1"
-                elif "btts" in sel_text or "gg" in sel_text:
-                    m_id, spec, o_id = "29", None, "24"
-                else:
-                    m_id, spec, o_id = "18", "total=1.5", "12"
-
+                m_id, o_id, spec = self._resolve_market_payload(ev_markets, mkt_text, sel_text, home_target, away_target)
                 item_payload = {
                     "eventId": target_event_id,
                     "marketId": m_id,
-                    "outcomeId": o_id,
+                    "outcomeId": o_id
                 }
                 if spec:
                     item_payload["specifier"] = spec
 
             selections_payload.append(item_payload)
 
+
+
         if not selections_payload:
             return {
                 "status": "MATCH_NOT_FOUND",
                 "provider": "SPORTYBET",
                 "booking_code": None,
-                "message": "Could not map selected fixtures to active SportyBet pre-match events."
+                "message": "Could not map selected fixtures to active SportyBet pre-match events. Please refresh."
             }
 
         # Request shareCode from SportyBet API
@@ -774,19 +724,49 @@ class SportyBetAdapter(BookmakerAdapter):
                                 "status": "SUCCESS",
                                 "provider": "SPORTYBET",
                                 "booking_code": share_code,
+                                "verification_status": "BOOKING_VERIFIED",
                                 "country": country_code.upper(),
                                 "load_url": share_url or f"https://www.sportybet.com/{country_code.lower()}/?shareCode={share_code}",
-                                "matched_count": len(selections_payload)
+                                "matched_count": len(selections_payload),
+                                "verified": True
+                            }
+
+                # Resilient Fallback: If 1 leg had expired market, isolate and submit valid selections
+                valid_items = []
+                for item in selections_payload:
+                    try:
+                        r_single = client.post(url_share, json={"selections": [item]})
+                        if r_single.status_code == 200 and r_single.json().get("bizCode") == 10000:
+                            valid_items.append(item)
+                    except Exception:
+                        pass
+
+                if valid_items and len(valid_items) >= 1:
+                    resp2 = client.post(url_share, json={"selections": valid_items})
+                    if resp2.status_code == 200 and resp2.json().get("bizCode") == 10000:
+                        share_code = resp2.json().get("data", {}).get("shareCode")
+                        if share_code:
+                            return {
+                                "status": "SUCCESS",
+                                "provider": "SPORTYBET",
+                                "booking_code": share_code,
+                                "verification_status": "BOOKING_VERIFIED",
+                                "country": country_code.upper(),
+                                "load_url": f"https://www.sportybet.com/{country_code.lower()}/?shareCode={share_code}",
+                                "matched_count": len(valid_items),
+                                "verified": True
                             }
         except Exception as e:
             logger.warning(f"SportyBet booking code generation error: {e}")
+
 
         return {
             "status": "CODE_GENERATION_FAILED",
             "provider": "SPORTYBET",
             "booking_code": None,
-            "message": "SportyBet rejected booking code request."
+            "message": "SportyBet rejected booking code request. Please ensure all selections are still open."
         }
+
 
     def fetch_live_sportybet_markets(self, country_code: str = "ng") -> List[Dict[str, Any]]:
         """

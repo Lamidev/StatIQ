@@ -17,8 +17,10 @@ Also provides Fractional Kelly Criterion bankroll stake sizing.
 import math
 import random
 import time
+import re
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass, field
+
 
 from app.predictions.live_calculator import calculate_matchiq_probabilities, get_team_rating
 from app.predictions.leg_odds_calculator import calculate_dynamic_leg_config
@@ -43,6 +45,10 @@ class PickDecision:
     decision_audit_log: List[str]
     kelly_quarter_stake_pct: float
     raw_match_data: Optional[Dict[str, Any]] = None
+    market_id: Optional[str] = None
+    outcome_id: Optional[str] = None
+    specifier: Optional[str] = None
+
 
 @dataclass
 class BuiltTicket:
@@ -192,8 +198,14 @@ class MatchIQPickEngine:
             r1x2["2"] = r1x2["away"]
 
         if not r1x2 and fixture.get("markets"):
-            for m in fixture.get("markets", []):
+            mkts = fixture.get("markets", [])
+            if isinstance(mkts, dict):
+                mkts = list(mkts.values())
+            for m in mkts:
+                if not isinstance(m, dict):
+                    continue
                 m_desc = (m.get("desc") or m.get("name") or "").lower()
+
                 if "1x2" in m_desc or "match result" in m_desc:
                     for o in m.get("outcomes", []):
                         o_desc = (o.get("desc") or o.get("name") or "").lower()
@@ -475,14 +487,16 @@ class MatchIQPickEngine:
                 "direction": "AWAY"
             })
 
-        # 8. Total Corners Over 7.5 (High corner generation dynamics)
+        # 8. Over 1.5 Goals (High reliability goal line)
         candidate_markets.append({
-            "market": "Corners",
-            "selection": "Over 7.5 Corners",
-            "prob": 0.81,
-            "odds": 1.25,
+            "market": "Over/Under Goals",
+            "selection": "Over 1.5 Goals",
+            "prob": min(0.92, max(0.68, (1.0 / (o15_odds or 1.25)))),
+            "odds": o15_odds or 1.25,
             "direction": "NEUTRAL"
         })
+
+
 
         # 9. Straight 1X2 Win (STRICT: Only when heavy dominant favorite <= 1.55 real odds and >= 70% model prob)
         has_real_1x2 = bool(h_odd and a_odd and h_odd > 1.0 and a_odd > 1.0 and h_odd != a_odd)
@@ -518,24 +532,119 @@ class MatchIQPickEngine:
                 decision_audit_log=audit_log, kelly_quarter_stake_pct=0.0
             )
 
-        # If raw SportyBet markets are present on fixture, override estimated odds with real live SportyBet odds
+        # If raw SportyBet markets are present on fixture, match candidates strictly against open markets
         raw_markets = fixture.get("markets") or []
+        if isinstance(raw_markets, dict):
+            raw_markets = list(raw_markets.values())
+
         if raw_markets:
+            matched_candidates = []
             for cand in candidate_markets:
                 m_kw = cand["market"].lower()
                 s_kw = cand["selection"].lower()
+                cand_matched = False
+
                 for m in raw_markets:
-                    m_desc = (m.get("desc") or m.get("name") or "").lower()
-                    if m_kw in m_desc or ("double chance" in m_kw and "double chance" in m_desc):
-                        for o in m.get("outcomes", []):
-                            o_desc = (o.get("desc") or o.get("name") or "").lower()
-                            if ("1x" in s_kw and "1x" in o_desc) or ("x2" in s_kw and "x2" in o_desc) or ("12" in s_kw and "12" in o_desc) or ("over 1.5" in s_kw and "over 1.5" in o_desc) or ("over 7.5" in s_kw and "over 7.5" in o_desc):
+                    if not isinstance(m, dict) or cand_matched:
+                        continue
+                    m_desc = (m.get("desc") or m.get("name") or m.get("market_name") or "").lower()
+                    m_id = str(m.get("market_id") or m.get("id") or "")
+                    spec = m.get("specifier")
+
+                    outcomes = m.get("outcomes", [])
+                    if isinstance(outcomes, dict):
+                        outcomes = list(outcomes.values())
+
+                    # Match 1: Double Chance
+                    if ("double chance" in m_kw or "dc" in m_kw) and (m_id == "10" or "double chance" in m_desc) and not any(x in m_desc for x in ["&", "over", "under", "gg"]):
+                        for o in outcomes:
+                            if not isinstance(o, dict): continue
+                            o_desc = (o.get("desc") or o.get("name") or o.get("selection_name") or "").lower()
+                            o_id = str(o.get("outcome_id") or o.get("id") or "")
+                            if ("1x" in s_kw and ("1x" in o_desc or o_id == "9")) or ("x2" in s_kw and ("x2" in o_desc or o_id == "11")) or ("12" in s_kw and ("12" in o_desc or o_id == "10")):
                                 try:
                                     real_o = float(o.get("odds"))
                                     if real_o >= 1.05:
                                         cand["odds"] = real_o
+                                        cand["market_id"] = m_id or "10"
+                                        cand["outcome_id"] = o_id
+                                        cand["specifier"] = None
+                                        matched_candidates.append(cand)
+                                        cand_matched = True
+                                        break
                                 except (ValueError, TypeError):
                                     pass
+
+                    # Match 2: Over/Under Goals (Over 1.5, Under 3.5, Over 2.5, Over 0.5)
+                    elif ("over" in m_kw or "under" in m_kw or "over" in s_kw or "under" in s_kw) and (m_id == "18" or "over/under" in m_desc) and not any(x in m_desc for x in ["&", "1x2", "dc"]):
+                        line_match = re.search(r"(\d+\.5|\d+)", s_kw)
+                        line_val = line_match.group(1) if line_match else "1.5"
+                        spec_str = str(spec or m_desc)
+                        if line_val in spec_str or f"total={line_val}" in spec_str:
+                            is_over = "over" in s_kw
+                            for o in outcomes:
+                                if not isinstance(o, dict): continue
+                                o_desc = (o.get("desc") or o.get("name") or o.get("selection_name") or "").lower()
+                                o_id = str(o.get("outcome_id") or o.get("id") or "")
+                                if (is_over and ("over" in o_desc or o_id == "12")) or (not is_over and ("under" in o_desc or o_id == "13")):
+                                    try:
+                                        real_o = float(o.get("odds"))
+                                        if real_o >= 1.05:
+                                            cand["odds"] = real_o
+                                            cand["market_id"] = m_id or "18"
+                                            cand["outcome_id"] = o_id
+                                            cand["specifier"] = f"total={line_val}"
+                                            matched_candidates.append(cand)
+                                            cand_matched = True
+                                            break
+                                    except (ValueError, TypeError):
+                                        pass
+
+                    # Match 3: 1X2 Match Result
+                    elif ("match result" in m_kw or "1x2" in m_kw) and (m_id == "1" or m_desc == "1x2" or m_desc == "match result"):
+                        for o in outcomes:
+                            if not isinstance(o, dict): continue
+                            o_desc = (o.get("desc") or o.get("name") or o.get("selection_name") or "").lower()
+                            o_id = str(o.get("outcome_id") or o.get("id") or "")
+                            if ("(1)" in s_kw and (o_id == "1" or "home" in o_desc or "1" == o_desc)) or ("(2)" in s_kw and (o_id == "3" or "away" in o_desc or "2" == o_desc)):
+                                try:
+                                    real_o = float(o.get("odds"))
+                                    if real_o >= 1.05:
+                                        cand["odds"] = real_o
+                                        cand["market_id"] = m_id or "1"
+                                        cand["outcome_id"] = o_id
+                                        cand["specifier"] = None
+                                        matched_candidates.append(cand)
+                                        cand_matched = True
+                                        break
+                                except (ValueError, TypeError):
+                                    pass
+
+                    # Match 4: Win Either Half
+                    elif "either half" in m_kw or "either half" in s_kw:
+                        is_away = "(2)" in s_kw or away.lower() in s_kw
+                        target_m_id = "74" if is_away else "73"
+                        if m_id == target_m_id:
+                            for o in outcomes:
+                                if not isinstance(o, dict): continue
+                                o_id = str(o.get("outcome_id") or o.get("id") or "75")
+                                try:
+                                    real_o = float(o.get("odds"))
+                                    if real_o >= 1.05:
+                                        cand["odds"] = real_o
+                                        cand["market_id"] = target_m_id
+                                        cand["outcome_id"] = o_id
+                                        cand["specifier"] = None
+                                        matched_candidates.append(cand)
+                                        cand_matched = True
+                                        break
+                                except (ValueError, TypeError):
+                                    pass
+
+            if matched_candidates:
+                candidate_markets = matched_candidates
+
+
 
         # -------------------------------------------------------------
         # GATE 2: Calibrated Probability Threshold (Dynamic Adaptability)
@@ -672,15 +781,22 @@ class MatchIQPickEngine:
             estimated_odds=pick_odds, elo_gap=elo_gap, tier_context=tier_context,
             approved=True, confidence_tier=confidence_tier, gate_results=gate_results,
             rejection_reason=None, decision_audit_log=audit_log,
-            kelly_quarter_stake_pct=kelly_pct
+            kelly_quarter_stake_pct=kelly_pct,
+            raw_match_data=fixture,
+            market_id=best_cand.get("market_id"),
+            outcome_id=best_cand.get("outcome_id"),
+            specifier=best_cand.get("specifier")
         )
+
 
     def build_ticket(
         self,
         fixture_pool: List[Dict[str, Any]],
         target_total_odds: float,
         mode: str = "ACCUMULATOR",
-        max_league_picks: int = 2,
+        target_mode: str = "ODDS",
+        target_games: Optional[int] = None,
+        max_league_picks: int = 4,
         rollover_days: Optional[int] = None,
         reshuffle_seed: Optional[int] = None,
     ) -> BuiltTicket:
@@ -691,18 +807,31 @@ class MatchIQPickEngine:
         import random
         import time
 
-        leg_config = calculate_dynamic_leg_config(target_total_odds)
-        per_leg_target = leg_config.get("per_leg_target_odds", target_total_odds)
-        min_prob_threshold = leg_config.get("min_probability_threshold", 0.85)
+        if target_mode == "GAMES" and target_games:
+            target_legs_count = max(1, min(50, target_games))
+            per_leg_target = 1.30
+            min_prob_threshold = 0.65
+            max_league_picks = max(max_league_picks, (target_games // 2) + 2)
+            leg_config = {
+                "ideal_legs": target_legs_count,
+                "per_leg_target_odds": per_leg_target,
+                "min_probability_threshold": min_prob_threshold
+            }
+        else:
+            leg_config = calculate_dynamic_leg_config(target_total_odds)
+            target_legs_count = leg_config["ideal_legs"]
+            per_leg_target = leg_config.get("per_leg_target_odds", target_total_odds)
+            min_prob_threshold = leg_config.get("min_probability_threshold", 0.85)
 
         league_pick_counts: Dict[str, int] = {}
         approved_legs = []
         rejected_picks = []
         summary_logs = [
-            f"MatchIQ Pick Engine Execution ({mode} Mode)",
-            f"Target Total Odds: {target_total_odds:.2f}x | Ideal Legs: {leg_config['ideal_legs']}",
+            f"MatchIQ Pick Engine Execution ({mode} Mode - {target_mode})",
+            f"Target: {target_games if target_mode == 'GAMES' else f'{target_total_odds:.2f}x'} | Legs: {target_legs_count}",
             f"Min Probability Gate: {int(min_prob_threshold*100)}% | Per-Leg Target: {per_leg_target:.2f}x"
         ]
+
 
         total_evaluated = len(fixture_pool)
 
@@ -875,8 +1004,11 @@ class MatchIQPickEngine:
                 except Exception:
                     pass
 
+            ev_id = str((d.raw_match_data or {}).get("event_id") or d.fixture_id)
             approved_legs.append({
                 "fixture_id": d.fixture_id,
+                "event_id": ev_id,
+                "provider_event_id": ev_id,
                 "game_id": d.fixture_id,
                 "home_team": d.home_team,
                 "away_team": d.away_team,
@@ -895,8 +1027,12 @@ class MatchIQPickEngine:
                 "tier_context": d.tier_context,
                 "decision_audit_log": d.decision_audit_log,
                 "kelly_quarter_stake_pct": d.kelly_quarter_stake_pct,
-                "raw_match_data": d.raw_match_data
+                "raw_match_data": d.raw_match_data,
+                "market_id": d.market_id,
+                "outcome_id": d.outcome_id,
+                "specifier": d.specifier
             })
+
 
         for r in rejected_decisions:
             rejected_picks.append({

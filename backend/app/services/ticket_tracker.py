@@ -2,8 +2,12 @@ import os
 import json
 import time
 import re
+import logging
 from typing import List, Dict, Any, Optional
 from sqlalchemy.orm import Session
+
+logger = logging.getLogger("matchiq.ticket_tracker")
+
 
 from app.db.session import SessionLocal, Base, engine
 from app.db.models import TrackedTicket
@@ -1484,7 +1488,8 @@ def sync_tracked_tickets_with_live_apis(db: Optional[Session] = None) -> List[Di
                             f_list = af_resp.json().get("response", []) or []
                             all_fixtures.extend(f_list)
                     except Exception as d_err:
-                        print(f"[TicketTracker] API-Football date {d_str} warning:", d_err)
+                        logger.debug(f"[TicketTracker] API-Football date {d_str} check: {d_err}")
+
 
                 if all_fixtures:
                     for fix in all_fixtures:
@@ -1642,7 +1647,8 @@ def sync_tracked_tickets_with_live_apis(db: Optional[Session] = None) -> List[Di
                                         sel["match_status"] = "LIVE"
                                         sel["is_live"] = True
     except Exception as fd_err:
-        print("[TicketTracker] football-data.org sync warning:", fd_err)
+        logger.debug(f"[TicketTracker] football-data.org sync: {fd_err}")
+
 
         # ── PASS 1C: SportyBet Live & Upcoming Events Feed Sweep ─────────────────
         try:

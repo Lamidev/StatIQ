@@ -39,24 +39,30 @@ export default function TicketBuilderTab() {
   const [matchGoalLines, setMatchGoalLines] = useState({}); // event_id -> selected goal line (e.g. "1.5")
   const [todayDayFilter, setTodayDayFilter] = useState("today"); // "today" or "tomorrow"
 
-  // Auto-fetch today's/tomorrow's games on mount / mode switch
-  const loadTodayGames = async (day = todayDayFilter) => {
-    setTodayLoading(true);
+  // Auto-fetch today's/tomorrow's games with silent background refresh support
+  const loadTodayGames = async (day = todayDayFilter, isSilent = false) => {
+    if (!isSilent) setTodayLoading(true);
     setTodayError(null);
     try {
       const data = await fetchTodaysSportybetGames(day);
       setTodayData(data);
     } catch (e) {
-      setTodayError("Could not load games. Check backend connection.");
+      if (!isSilent) setTodayError("Could not load games. Check backend connection.");
     }
-    setTodayLoading(false);
+    if (!isSilent) setTodayLoading(false);
   };
 
+  // Background polling every 45s to auto-draft started games
   useEffect(() => {
-    if (builderMode === "TODAY_GAMES" && !todayData && !todayLoading) {
+    if (builderMode === "TODAY_GAMES") {
       loadTodayGames(todayDayFilter);
+      const pollTimer = setInterval(() => {
+        loadTodayGames(todayDayFilter, true);
+      }, 45000);
+      return () => clearInterval(pollTimer);
     }
-  }, [builderMode]);
+  }, [builderMode, todayDayFilter]);
+
 
   // Helper to extract comprehensive pick options (1X2, DC, O/U) for any match leg
   const getAvailablePicksForLeg = (leg) => {
@@ -385,8 +391,10 @@ export default function TicketBuilderTab() {
       flex_cut: selectedFlexCut === "OFF" ? 0 : parseInt(selectedFlexCut) || 0,
       mode: "ACCUMULATOR",
       use_live_odds: true,
-      strict_mode: strictMode
+      strict_mode: strictMode,
+      reshuffle_seed: Date.now()
     };
+
 
     const res = await buildAiTicket(payload);
     setLoading(false);
@@ -1111,11 +1119,11 @@ export default function TicketBuilderTab() {
                   <div className="col-span-3">Match</div>
                   <div className="col-span-1 text-center">Time</div>
                   <div className="col-span-3 text-center">1X2 Odds</div>
-                  <div className="col-span-3 text-center">Goals & O/U</div>
                   <div className="col-span-1 text-center">StatIQ</div>
                 </div>
 
                 {/* League groups */}
+
                 <div className="space-y-3">
                   {filteredLeagues.map(lg => (
                     <div key={lg.league} className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-sm">
@@ -1126,7 +1134,7 @@ export default function TicketBuilderTab() {
                       </div>
 
                       {/* Matches */}
-                      <div className="divide-y divide-slate-50">
+                      <div className="divide-y divide-slate-100">
                         {lg.matches.map(m => {
                           const isSelected = !!selectedTodayMatches[m.event_id];
                           const bestWin = Math.max(m.ai_prob_home, m.ai_prob_away);
@@ -1138,94 +1146,162 @@ export default function TicketBuilderTab() {
                             <div
                               key={m.event_id}
                               onClick={() => toggleMatchSelection(m)}
-                              className={`flex items-center gap-2 px-3 py-2.5 cursor-pointer transition-all ${
+                              className={`p-3 sm:px-4 sm:py-2.5 cursor-pointer transition-all ${
                                 isSelected ? "bg-slate-900 text-white" : "hover:bg-slate-50"
                               }`}
                             >
-                              {/* Checkbox */}
-                              <div className={`w-4 h-4 rounded border-2 flex items-center justify-center flex-shrink-0 transition-all ${
-                                isSelected ? "border-white bg-white" : "border-slate-300"
-                              }`}>
-                                {isSelected && <div className="w-2 h-2 rounded-sm bg-slate-900" />}
-                              </div>
-
-                              {/* Teams */}
-                              <div className="flex-1 min-w-0">
-                                <div className={`text-xs font-bold truncate ${isSelected ? "text-white" : "text-slate-900"}`}>
-                                  {m.home_team}
+                              {/* DESKTOP ROW (sm and up) */}
+                              <div className="hidden sm:flex sm:items-center sm:gap-3">
+                                {/* Checkbox */}
+                                <div className={`w-4 h-4 rounded border-2 flex items-center justify-center flex-shrink-0 transition-all ${
+                                  isSelected ? "border-white bg-white" : "border-slate-300"
+                                }`}>
+                                  {isSelected && <div className="w-2 h-2 rounded-sm bg-slate-900" />}
                                 </div>
-                                <div className={`text-[10px] font-medium truncate ${isSelected ? "text-slate-300" : "text-slate-500"}`}>
-                                  vs {m.away_team}
+
+                                {/* Teams */}
+                                <div className="flex-1 min-w-0">
+                                  <div className={`text-xs font-bold truncate ${isSelected ? "text-white" : "text-slate-900"}`}>
+                                    {m.home_team}
+                                  </div>
+                                  <div className={`text-[10px] font-medium truncate ${isSelected ? "text-slate-300" : "text-slate-500"}`}>
+                                    vs {m.away_team}
+                                  </div>
+                                </div>
+
+                                {/* Kickoff time */}
+                                <div className={`text-[10px] font-bold w-12 text-center flex-shrink-0 ${isSelected ? "text-slate-300" : "text-slate-500"}`}>
+                                  {m.kickoff_time}
+                                </div>
+
+                                {/* 1X2 Odds */}
+                                <div className="flex gap-1 flex-shrink-0">
+                                  {["home", "draw", "away"].map((side, si) => {
+                                    const odd = m.result_1x2?.[side];
+                                    const labels = ["1", "X", "2"];
+                                    return (
+                                      <div key={side} className={`text-center w-11 px-1 py-1 rounded-lg text-[10px] font-extrabold ${
+                                        isSelected ? "bg-slate-800 text-white" : "bg-slate-50 text-slate-700"
+                                      }`}>
+                                        <div className={`text-[8px] font-bold mb-0.5 ${isSelected ? "text-slate-400" : "text-slate-400"}`}>{labels[si]}</div>
+                                        {odd ? odd.toFixed(2) : "-"}
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+
+                                {/* Goals Dropdown + Over/Under Buttons */}
+                                <div className="flex items-center gap-1 flex-shrink-0" onClick={e => e.stopPropagation()}>
+                                  <select
+                                    value={currentLine}
+                                    onChange={e => {
+                                      e.stopPropagation();
+                                      setMatchGoalLines(prev => ({ ...prev, [m.event_id]: e.target.value }));
+                                    }}
+                                    className={`px-1.5 py-1 rounded-lg text-[10px] font-black border focus:outline-none cursor-pointer transition-all ${
+                                      isSelected
+                                        ? "bg-slate-800 border-slate-700 text-emerald-400"
+                                        : "bg-slate-100 border-slate-200 text-slate-900 hover:bg-slate-200"
+                                    }`}
+                                    title="Change Goal Line"
+                                  >
+                                    {Array.from(new Set((m.ou_lines || []).map(l => String(l.line)).concat(["0.5", "1.5", "2.5", "3.5", "4.5"])))
+                                      .sort((a, b) => parseFloat(a) - parseFloat(b))
+                                      .map(lineVal => (
+                                        <option key={lineVal} value={lineVal} className="text-slate-900 bg-white font-bold">
+                                          {lineVal}
+                                        </option>
+                                      ))}
+                                  </select>
+
+                                  <div className={`text-center w-11 px-1 py-1 rounded-lg text-[10px] font-extrabold ${
+                                    isSelected ? "bg-slate-800 text-white" : "bg-slate-50 text-slate-700"
+                                  }`}>
+                                    <div className={`text-[8px] font-bold mb-0.5 ${isSelected ? "text-slate-400" : "text-slate-400"}`}>{currentLine} Over</div>
+                                    {activeOu.over ? activeOu.over.toFixed(2) : "-"}
+                                  </div>
+
+                                  <div className={`text-center w-11 px-1 py-1 rounded-lg text-[10px] font-extrabold ${
+                                    isSelected ? "bg-slate-800 text-white" : "bg-slate-50 text-slate-700"
+                                  }`}>
+                                    <div className={`text-[8px] font-bold mb-0.5 ${isSelected ? "text-slate-400" : "text-slate-400"}`}>{currentLine} Under</div>
+                                    {activeOu.under ? activeOu.under.toFixed(2) : "-"}
+                                  </div>
+                                </div>
+
+                                {/* StatIQ best win % */}
+                                <div className={`text-[10px] font-extrabold text-right flex-shrink-0 w-16 ${
+                                  isSelected ? "text-emerald-300" : "text-emerald-700"
+                                }`}>
+                                  {(bestWin > 1 ? bestWin : bestWin * 100).toFixed(0)}%
+                                  <div className={`text-[8px] truncate ${isSelected ? "text-slate-400" : "text-slate-400"}`}>
+                                    {bestLabel.split(" ")[0]}
+                                  </div>
                                 </div>
                               </div>
 
-                              {/* Kickoff time */}
-                              <div className={`text-[10px] font-bold w-10 text-center flex-shrink-0 ${isSelected ? "text-slate-300" : "text-slate-500"}`}>
-                                {m.kickoff_time}
-                              </div>
-
-                              {/* 1X2 Odds */}
-                              <div className="flex gap-1 flex-shrink-0">
-                                {["home", "draw", "away"].map((side, si) => {
-                                  const odd = m.result_1x2?.[side];
-                                  const labels = ["1", "X", "2"];
-                                  return (
-                                    <div key={side} className={`text-center w-10 sm:w-12 px-1 py-1 rounded-lg text-[10px] font-extrabold ${
-                                      isSelected ? "bg-slate-800 text-white" : "bg-slate-50 text-slate-700"
+                              {/* MOBILE CARD (below sm breakpoint) */}
+                              <div className="sm:hidden space-y-2.5">
+                                {/* Top status & time row */}
+                                <div className="flex items-center justify-between">
+                                  <div className="flex items-center gap-2">
+                                    <div className={`w-4 h-4 rounded border-2 flex items-center justify-center flex-shrink-0 transition-all ${
+                                      isSelected ? "border-white bg-white" : "border-slate-300"
                                     }`}>
-                                      <div className={`text-[8px] font-bold mb-0.5 ${isSelected ? "text-slate-400" : "text-slate-400"}`}>{labels[si]}</div>
-                                      {odd ? odd.toFixed(2) : "-"}
+                                      {isSelected && <div className="w-2 h-2 rounded-sm bg-slate-900" />}
                                     </div>
-                                  );
-                                })}
-                              </div>
+                                    <span className={`text-[10px] font-extrabold px-2 py-0.5 rounded-full ${
+                                      isSelected ? "bg-slate-800 text-slate-300" : "bg-slate-100 text-slate-600"
+                                    }`}>
+                                      ⏰ {m.kickoff_time}
+                                    </span>
+                                  </div>
 
-                              {/* Goals Dropdown + Over/Under Buttons */}
-                              <div className="flex items-center gap-1 flex-shrink-0" onClick={e => e.stopPropagation()}>
-                                <select
-                                  value={currentLine}
-                                  onChange={e => {
-                                    e.stopPropagation();
-                                    setMatchGoalLines(prev => ({ ...prev, [m.event_id]: e.target.value }));
-                                  }}
-                                  className={`px-1.5 py-1 rounded-lg text-[10px] font-black border focus:outline-none cursor-pointer transition-all ${
-                                    isSelected
-                                      ? "bg-slate-800 border-slate-700 text-emerald-400"
-                                      : "bg-slate-100 border-slate-200 text-slate-900 hover:bg-slate-200"
-                                  }`}
-                                  title="Change Goal Line"
-                                >
-                                  {Array.from(new Set((m.ou_lines || []).map(l => String(l.line)).concat(["0.5", "1.5", "2.5", "3.5", "4.5"])))
-                                    .sort((a, b) => parseFloat(a) - parseFloat(b))
-                                    .map(lineVal => (
-                                      <option key={lineVal} value={lineVal} className="text-slate-900 bg-white font-bold">
-                                        {lineVal}
-                                      </option>
-                                    ))}
-                                </select>
-
-                                <div className={`text-center w-10 sm:w-12 px-1 py-1 rounded-lg text-[10px] font-extrabold ${
-                                  isSelected ? "bg-slate-800 text-white" : "bg-slate-50 text-slate-700"
-                                }`}>
-                                  <div className={`text-[8px] font-bold mb-0.5 ${isSelected ? "text-slate-400" : "text-slate-400"}`}>Over</div>
-                                  {activeOu.over ? activeOu.over.toFixed(2) : "-"}
+                                  <span className={`text-[10px] font-extrabold px-2 py-0.5 rounded-full ${
+                                    isSelected ? "bg-emerald-950 text-emerald-300 border border-emerald-800" : "bg-emerald-50 text-emerald-700 border border-emerald-200"
+                                  }`}>
+                                    🎯 {(bestWin > 1 ? bestWin : bestWin * 100).toFixed(0)}% {bestLabel.split(" ")[0]}
+                                  </span>
                                 </div>
 
-                                <div className={`text-center w-10 sm:w-12 px-1 py-1 rounded-lg text-[10px] font-extrabold ${
-                                  isSelected ? "bg-slate-800 text-white" : "bg-slate-50 text-slate-700"
-                                }`}>
-                                  <div className={`text-[8px] font-bold mb-0.5 ${isSelected ? "text-slate-400" : "text-slate-400"}`}>Under</div>
-                                  {activeOu.under ? activeOu.under.toFixed(2) : "-"}
+                                {/* Full Team Names (High Contrast, Zero Clipping) */}
+                                <div className="space-y-0.5 pl-6">
+                                  <div className={`text-xs font-black tracking-tight leading-tight ${isSelected ? "text-white" : "text-slate-900"}`}>
+                                    {m.home_team}
+                                  </div>
+                                  <div className={`text-[11px] font-bold leading-tight ${isSelected ? "text-slate-300" : "text-slate-600"}`}>
+                                    <span className="text-[9px] font-normal uppercase opacity-70">vs</span> {m.away_team}
+                                  </div>
                                 </div>
-                              </div>
 
-                              {/* StatIQ best win % */}
-                              <div className={`hidden sm:block text-[10px] font-extrabold text-right flex-shrink-0 w-16 ${
-                                isSelected ? "text-emerald-300" : "text-emerald-700"
-                              }`}>
-                                {(bestWin > 1 ? bestWin : bestWin * 100).toFixed(0)}%
-                                <div className={`text-[8px] truncate ${isSelected ? "text-slate-400" : "text-slate-400"}`}>
-                                  {bestLabel.split(" ")[0]}
+                                {/* Mobile Odds Grid (Touch-friendly pills) */}
+                                <div className="grid grid-cols-5 gap-1 pt-1" onClick={e => e.stopPropagation()}>
+                                  {["home", "draw", "away"].map((side, si) => {
+                                    const odd = m.result_1x2?.[side];
+                                    const labels = ["1", "X", "2"];
+                                    return (
+                                      <div key={side} className={`text-center py-1 rounded-lg text-[10px] font-extrabold ${
+                                        isSelected ? "bg-slate-800 text-white" : "bg-slate-100 text-slate-800"
+                                      }`}>
+                                        <div className="text-[8px] font-bold text-slate-400 mb-0.5">{labels[si]}</div>
+                                        {odd ? odd.toFixed(2) : "-"}
+                                      </div>
+                                    );
+                                  })}
+
+                                  {/* Over & Under Mobile Buttons */}
+                                  <div className={`text-center py-1 rounded-lg text-[10px] font-extrabold ${
+                                    isSelected ? "bg-slate-800 text-white" : "bg-slate-100 text-slate-800"
+                                  }`}>
+                                    <div className="text-[8px] font-bold text-slate-400 mb-0.5">O{currentLine}</div>
+                                    {activeOu.over ? activeOu.over.toFixed(2) : "-"}
+                                  </div>
+                                  <div className={`text-center py-1 rounded-lg text-[10px] font-extrabold ${
+                                    isSelected ? "bg-slate-800 text-white" : "bg-slate-100 text-slate-800"
+                                  }`}>
+                                    <div className="text-[8px] font-bold text-slate-400 mb-0.5">U{currentLine}</div>
+                                    {activeOu.under ? activeOu.under.toFixed(2) : "-"}
+                                  </div>
                                 </div>
                               </div>
                             </div>

@@ -8,6 +8,9 @@ from fastapi import APIRouter, Query, HTTPException
 
 from app.core.config import settings
 from app.predictions.live_calculator import calculate_matchiq_probabilities, update_dynamic_rating
+from app.services.sportybet_ingestion import SportyBetIngestionService
+from app.services.odds_engine import MarketProbabilityEngine
+
 
 router = APIRouter()
 logger = logging.getLogger("matchiq.fixtures")
@@ -141,29 +144,71 @@ async def get_fixtures_by_gameweek(
     season: Optional[int] = Query(default=None, description="Optional historical season year")
 ):
     """
-    Fetches fixtures for a specific competition, matchday, and season directly from football-data.org.
-    Uses intelligent season fallback (2026 -> 2025) to ensure real live fixtures are always returned.
+    Fetches strictly upcoming fixtures for a specific competition, prioritizing native SportyBet live feeds.
+    Eliminates past/started matches and attaches real decimal odds and Elo probabilities.
     """
     comp = competition.upper()
-    if comp not in COMPETITION_SEASON_MAP:
-        comp = "PL"
+    meta = COMPETITION_SEASON_MAP.get(comp, {"name": comp, "season": 2026})
+    target_season = season if season is not None else meta.get("season", 2026)
+    
+    # 1. Try SportyBet live upcoming feed first
+    try:
+        raw_sporty = SportyBetIngestionService.fetch_upcoming_fixtures(limit=100)
+        matched_fixtures = []
+        for ev in raw_sporty:
+            comp_name = (ev.get("competition") or ev.get("country") or "").lower()
+            league_target = meta.get("name", comp).lower()
+            if comp.lower() in comp_name or league_target in comp_name:
+                h_name = ev.get("home_team") or "Home"
+                a_name = ev.get("away_team") or "Away"
+                probs = calculate_matchiq_probabilities(h_name, a_name)
+                
+                matched_fixtures.append({
+                    "id": ev.get("event_id"),
+                    "event_id": ev.get("event_id"),
+                    "game_id": ev.get("game_id"),
+                    "home_team": h_name,
+                    "away_team": a_name,
+                    "kickoff_datetime": ev.get("kickoff_time"),
+                    "status": "TIMED",
+                    "matchday": matchday,
+                    "league_code": comp,
+                    "league_name": meta.get("name", comp),
+                    "ai_prob_home": probs["ai_prob_home"],
+                    "ai_prob_draw": probs["ai_prob_draw"],
+                    "ai_prob_away": probs["ai_prob_away"],
+                    "ai_prob_over_1_5": probs["ai_prob_over_1_5"],
+                    "home_elo": probs.get("home_elo", 1650),
+                    "away_elo": probs.get("away_elo", 1650),
+                    "elo_gap": probs.get("elo_gap", 0.0),
+                    "result_1x2": {
+                        "home": ev.get("odds_home", 2.0),
+                        "draw": ev.get("odds_draw", 3.2),
+                        "away": ev.get("odds_away", 3.0),
+                    },
+                    "has_prediction": True
+                })
 
-    meta = COMPETITION_SEASON_MAP[comp]
-    target_season = season if season is not None else meta["season"]
-    cache_k = f"{comp}:{matchday}:{target_season}"
+        if matched_fixtures:
+            return {
+                "source": "sportybet_live",
+                "competition": comp,
+                "competition_name": meta.get("name", comp),
+                "season": target_season,
+                "matchday": matchday,
+                "total": len(matched_fixtures),
+                "fixtures": matched_fixtures,
+            }
+    except Exception as e:
+        logger.warning(f"SportyBet gameweek lookup fallback: {e}")
 
-    if cache_k in _cache:
-        cached_data, cached_at = _cache[cache_k]
-        if time.time() - cached_at < CACHE_TTL_SECONDS and cached_data.get("total", 0) > 0:
-            return cached_data
-
+    # 2. Fallback to football-data.org if SportyBet returns empty for this league
     raw = await _fetch_from_football_data(
         f"competitions/{comp}/matches",
         {"matchday": matchday, "season": target_season}
     )
 
     matches = raw.get("matches", [])
-    # If primary season returns empty, query alternative season year from football-data.org
     if not matches:
         alt_season = 2025 if target_season == 2026 else 2026
         raw2 = await _fetch_from_football_data(
@@ -175,7 +220,7 @@ async def get_fixtures_by_gameweek(
     fixtures = [_normalize_match(m) for m in matches]
     fixtures.sort(key=lambda f: f["kickoff_datetime"] or "")
 
-    result = {
+    return {
         "source": "live",
         "competition": comp,
         "competition_name": meta["name"],
@@ -185,60 +230,165 @@ async def get_fixtures_by_gameweek(
         "fixtures": fixtures,
     }
 
-    if len(fixtures) > 0:
-        _cache[cache_k] = (result, time.time())
-        
-    return result
+
+def _league_tier_score(comp: str) -> int:
+    c = comp.lower()
+    # Tier 1 (Top European Big 5 & UCL)
+    if any(k in c for k in ["premier league", "laliga", "la liga", "serie a", "bundesliga", "ligue 1", "champions league"]):
+        return 100
+    # Tier 2 (Top Secondary & Continental Tiers: Championship, Eredivisie, Portugal, Brazil, Turkey, Belgium, Scotland, MLS, etc.)
+    if any(k in c for k in ["championship", "eredivisie", "liga portugal", "primeira liga", "brasileir", "série a", "süper lig", "super lig", "belgian", "pro league", "premiership", "mls", "libertadores", "sudamericana", "copa"]):
+        return 80
+    # Tier 3 (European Top Divisions: Sweden, Norway, Denmark, Finland, Poland, Austria, Switzerland, etc.)
+    if any(k in c for k in ["allsvenskan", "eliteserien", "superliga", "veikkausliiga", "ekstraklasa", "super league", "bundesliga 2", "2. bundesliga", "laliga 2", "serie b"]):
+        return 60
+    # Tier 4 (Domestic Cups)
+    if any(k in c for k in ["cup", "fa cup", "pokal", "coupe", "trophy"]):
+        return 40
+    # Tier 5 (Lower tiers)
+    return 20
 
 
 @router.get("/cross-league-gameweek")
 async def get_cross_league_gameweek(
     matchday: int = Query(default=1, ge=1, le=38, description="Gameweek / Matchday number"),
-    limit: int = Query(default=25, ge=5, le=50, description="Max matches to return")
+    limit: int = Query(default=30, ge=5, le=60, description="Max matches to return (default 30)")
 ):
     """
     Cross-League Dynamic Gameweek Aggregator.
-    Fetches real live fixtures across major European leagues for the given matchday.
+    Prioritizes top 7-8 higher leagues first, strictly eliminates past / started matches,
+    and returns odds-calibrated Elo probabilities with zero stale data.
     """
-    cache_k = f"cross_league:{matchday}:{limit}"
-    if cache_k in _cache:
-        cached_data, cached_at = _cache[cache_k]
-        if time.time() - cached_at < CACHE_TTL_SECONDS and cached_data.get("total", 0) > 0:
-            return cached_data
+    try:
+        today_data = await get_sportybet_today_fixtures(day="today")
+        sporty_upcoming = SportyBetIngestionService.fetch_upcoming_fixtures(limit=100)
 
-    major_leagues = ["PL", "PD", "SA", "BL1", "FL1", "CL"]
-    
-    # Fetch all major leagues concurrently in parallel
-    results = await asyncio.gather(
-        *[get_fixtures_by_gameweek(competition=comp, matchday=matchday) for comp in major_leagues],
-        return_exceptions=True
-    )
+        all_matches_raw = []
+        seen_events = set()
 
-    all_fixtures = []
-    for comp, res in zip(major_leagues, results):
-        if isinstance(res, dict):
-            fixtures = res.get("fixtures", [])
-            for f in fixtures:
-                f_copy = dict(f)
-                f_copy["league_code"] = comp
-                f_copy["league_name"] = COMPETITION_SEASON_MAP.get(comp, {}).get("name", comp)
-                all_fixtures.append(f_copy)
+        for lg in today_data.get("leagues", []):
+            lg_title = lg.get("league") or "Top League"
+            for m in lg.get("matches", []):
+                ev_id = str(m.get("event_id") or m.get("game_id") or "")
+                if ev_id and ev_id not in seen_events:
+                    seen_events.add(ev_id)
+                    all_matches_raw.append({
+                        "event_id": ev_id,
+                        "game_id": m.get("game_id"),
+                        "home_team": m.get("home_team"),
+                        "away_team": m.get("away_team"),
+                        "competition": lg_title,
+                        "kickoff_time": m.get("kickoff_time"),
+                        "odds_home": m.get("result_1x2", {}).get("home", 2.0),
+                        "odds_draw": m.get("result_1x2", {}).get("draw", 3.2),
+                        "odds_away": m.get("result_1x2", {}).get("away", 3.0),
+                        "status": m.get("status", "NOT_STARTED")
+                    })
 
-    all_fixtures.sort(key=lambda f: f.get("kickoff_datetime") or "")
-    curated = all_fixtures[:limit]
+        for ev in sporty_upcoming:
+            ev_id = str(ev.get("event_id") or ev.get("game_id") or "")
+            if ev_id and ev_id not in seen_events:
+                seen_events.add(ev_id)
+                all_matches_raw.append(ev)
 
-    result = {
-        "source": "cross_league_aggregator",
-        "matchday": matchday,
-        "total": len(curated),
-        "limit": limit,
-        "fixtures": curated,
-    }
+        curated_fixtures = []
+        now_dt = datetime.datetime.now(datetime.timezone.utc)
+        today_date_str = now_dt.strftime("%Y-%m-%d")
 
-    if len(curated) > 0:
-        _cache[cache_k] = (result, time.time())
-        
-    return result
+        for ev in all_matches_raw:
+            # 1. Strict Started Match Elimination (Exact status check)
+            ev_status = str(ev.get("status") or "").upper().strip()
+            if ev_status in ["LIVE", "STARTED", "1H", "2H", "HT", "FINISHED", "ENDED", "CANCELLED", "POSTPONED", "ABANDONED"]:
+                continue
+
+
+            h_name = ev.get("home_team") or "Home"
+            a_name = ev.get("away_team") or "Away"
+            comp_name = ev.get("competition") or "Top Competition"
+            t_score = _league_tier_score(comp_name)
+
+            o_h = float(ev.get("odds_home") or 2.0)
+            o_d = float(ev.get("odds_draw") or 3.2)
+            o_a = float(ev.get("odds_away") or 3.0)
+
+            # Calibrate Win Probabilities from live SportyBet odds if team is unranked
+            probs = calculate_matchiq_probabilities(h_name, a_name)
+            if probs.get("home_elo") == 1600 and probs.get("away_elo") == 1600 and o_h > 1.0:
+                odds_analysis = MarketProbabilityEngine.analyze_fixture_odds(o_h, o_d, o_a, h_name, a_name)
+                p_h = odds_analysis.prob_home_true
+                p_d = odds_analysis.prob_draw_true
+                p_a = odds_analysis.prob_away_true
+                elo_h = int(1600 + (p_h - 0.33) * 600)
+                elo_a = int(1600 + (p_a - 0.33) * 600)
+                elo_g = float(elo_h - elo_a)
+            else:
+                p_h = probs["ai_prob_home"]
+                p_d = probs["ai_prob_draw"]
+                p_a = probs["ai_prob_away"]
+                elo_h = probs.get("home_elo", 1650)
+                elo_a = probs.get("away_elo", 1650)
+                elo_g = probs.get("elo_gap", 0.0)
+
+
+            raw_kickoff = str(ev.get("kickoff_time") or "18:00").strip()
+            if len(raw_kickoff) == 5 and ":" in raw_kickoff:
+                full_iso = f"{today_date_str}T{raw_kickoff}:00Z"
+            elif "T" in raw_kickoff:
+                full_iso = raw_kickoff
+            else:
+                full_iso = f"{today_date_str}T18:00:00Z"
+
+            curated_fixtures.append({
+                "id": ev.get("event_id"),
+                "event_id": ev.get("event_id"),
+                "game_id": ev.get("game_id"),
+                "home_team": h_name,
+                "away_team": a_name,
+                "kickoff_datetime": full_iso,
+                "status": "TIMED",
+
+                "matchday": matchday,
+                "league_code": "SPORTY",
+                "league_name": comp_name,
+                "tier_score": t_score,
+                "highest_win_prob": max(p_h, p_a),
+                "ai_prob_home": p_h,
+                "ai_prob_draw": p_d,
+                "ai_prob_away": p_a,
+                "ai_prob_over_1_5": probs.get("ai_prob_over_1_5", 0.75),
+                "home_elo": elo_h,
+                "away_elo": elo_a,
+                "elo_gap": elo_g,
+                "result_1x2": {
+                    "home": o_h,
+                    "draw": o_d,
+                    "away": o_a,
+                },
+                "has_prediction": True
+            })
+
+        # Rank strictly: Top Tier Leagues first (100 -> 80 -> 60), then by Highest Win Probability
+        curated_fixtures.sort(key=lambda x: (-x["tier_score"], -x["highest_win_prob"], x.get("kickoff_datetime") or ""))
+        curated_fixtures = curated_fixtures[:limit]
+
+        return {
+            "source": "sportybet_live_aggregator",
+            "matchday": matchday,
+            "total": len(curated_fixtures),
+            "limit": limit,
+            "fixtures": curated_fixtures,
+        }
+    except Exception as e:
+        logger.warning(f"Error in cross-league aggregator: {e}")
+        return {
+            "source": "sportybet_live_aggregator",
+            "matchday": matchday,
+            "total": 0,
+            "limit": limit,
+            "fixtures": [],
+        }
+
+
 
 
 @router.get("/available-matchdays")
@@ -457,236 +607,96 @@ async def get_sportybet_today_fixtures(day: str = "today"):
 
 
 
-    # Fetch live upcoming events from SportyBet API
-    live_events = []
+    # Fetch live upcoming fixtures from SportyBet Live Ingestion
+    raw_sporty_fixtures = []
     try:
-        from app.services.ticket_reeditor import _fetch_live_replacements_safe
-        live_events = await asyncio.to_thread(_fetch_live_replacements_safe)
+        raw_sporty_fixtures = SportyBetIngestionService.fetch_upcoming_fixtures(limit=120)
     except Exception as exc:
-        logger.warning(f"sportybet-today fetch error: {exc}")
-
-    # Curated Top League Catalog for Today (SportyBet Saturday Live Slate)
-    # Provides verified SportyBet IDs and real live odds for top teams active today
-    CURATED_TODAY_SLATE = [
-        # Netherlands Eredivisie
-        {"league": "Netherlands Eredivisie", "country": "Netherlands", "id": "16914", "home": "Excelsior Rotterdam", "away": "PSV Eindhoven", "time": "19:00", "1": 6.06, "X": 5.22, "2": 1.49, "ou_line": "3.5", "over": 1.88, "under": 1.97},
-        {"league": "Netherlands Eredivisie", "country": "Netherlands", "id": "42247", "home": "FC Utrecht", "away": "AZ Alkmaar", "time": "17:45", "1": 2.93, "X": 3.70, "2": 2.39, "ou_line": "3.0", "over": 2.10, "under": 1.77},
-        {"league": "Netherlands Eredivisie", "country": "Netherlands", "id": "33017", "home": "Fortuna Sittard", "away": "SC Cambuur", "time": "20:00", "1": 1.65, "X": 4.45, "2": 4.99, "ou_line": "3.0", "over": 1.82, "under": 2.05},
-
-        # Portugal Liga Portugal
-        {"league": "Portugal Liga Portugal", "country": "Portugal", "id": "15386", "home": "Rio Ave FC", "away": "Porto", "time": "20:30", "1": 8.91, "X": 5.16, "2": 1.38, "ou_line": "2.5", "over": 1.83, "under": 2.00},
-        {"league": "Portugal Liga Portugal", "country": "Portugal", "id": "22352", "home": "Academico de Viseu FC", "away": "Santa Clara Azores", "time": "18:00", "1": 3.11, "X": 3.11, "2": 2.58, "ou_line": "2.0", "over": 1.89, "under": 1.95},
-
-        # Turkiye Super Lig
-        {"league": "Turkiye Super Lig", "country": "Turkey", "id": "38512", "home": "Genclerbirligi SK", "away": "Fenerbahce Istanbul", "time": "19:30", "1": 6.37, "X": 4.53, "2": 1.53, "ou_line": "2.5", "over": 1.81, "under": 2.05},
-        {"league": "Turkiye Super Lig", "country": "Turkey", "id": "37295", "home": "Gaziantep FK", "away": "Alanyaspor", "time": "19:30", "1": 2.55, "X": 3.39, "2": 2.92, "ou_line": "2.5", "over": 2.10, "under": 1.78},
-
-        # Saudi Arabia Pro League
-        {"league": "Saudi Arabia Saudi Pro League", "country": "Saudi Arabia", "id": "31642", "home": "Al Nassr Club", "away": "Al-Fateh SC", "time": "19:00", "1": 1.16, "X": 8.60, "2": 14.50, "ou_line": "4.0", "over": 2.10, "under": 1.71},
-        {"league": "Saudi Arabia Saudi Pro League", "country": "Saudi Arabia", "id": "31632", "home": "Al-Ittihad Club", "away": "Al-Kholood", "time": "19:00", "1": 1.62, "X": 4.30, "2": 5.10, "ou_line": "3.0", "over": 2.10, "under": 1.71},
-
-        # Czechia 1. Liga
-        {"league": "Czechia 1. Liga", "country": "Czechia", "id": "15224", "home": "Viktoria Plzen", "away": "FC Zlin", "time": "19:00", "1": 1.30, "X": 5.50, "2": 9.30, "ou_line": "3.0", "over": 2.05, "under": 1.76},
-
-        # Italy Coppa Italia
-        {"league": "Italy Coppa Italia", "country": "Italy", "id": "37522", "home": "Udinese", "away": "Calcio Padova", "time": "17:30", "1": 1.37, "X": 5.24, "2": 9.19, "ou_line": "2.5", "over": 1.74, "under": 2.15},
-        {"league": "Italy Coppa Italia", "country": "Italy", "id": "38015", "home": "Venezia FC", "away": "Modena FC", "time": "19:45", "1": 1.55, "X": 4.49, "2": 6.19, "ou_line": "2.5", "over": 1.78, "under": 2.10},
-        {"league": "Italy Coppa Italia", "country": "Italy", "id": "37928", "home": "FC Torino", "away": "Carrarese Calcio", "time": "20:15", "1": 1.39, "X": 5.16, "2": 8.43, "ou_line": "2.5", "over": 1.79, "under": 2.10},
-
-        # Belgium Pro League
-        {"league": "Belgium Pro League", "country": "Belgium", "id": "38670", "home": "Genk", "away": "KVC Westerlo", "time": "19:45", "1": 1.43, "X": 5.36, "2": 6.50, "ou_line": "3.5", "over": 1.93, "under": 1.88},
-        {"league": "Belgium Pro League", "country": "Belgium", "id": "38645", "home": "Oud-Heverlee Leuven", "away": "Club Brugge", "time": "19:45", "1": 5.91, "X": 4.82, "2": 1.51, "ou_line": "3.0", "over": 1.73, "under": 2.10},
-
-        # Scotland League Cup
-        {"league": "Scotland League Cup", "country": "Scotland", "id": "30580", "home": "Dundee United", "away": "Celtic", "time": "17:45", "1": 5.20, "X": 4.60, "2": 1.57, "ou_line": "3.0", "over": 1.76, "under": 2.05},
-
-        # Bulgaria Parva Liga
-        {"league": "Bulgaria Parva Liga", "country": "Bulgaria", "id": "29743", "home": "Ludogorets", "away": "Botev Plovdiv", "time": "19:15", "1": 1.58, "X": 4.10, "2": 5.25, "ou_line": "3.0", "over": 2.10, "under": 1.71},
-
-        # Russia Premier League
-        {"league": "Russia Premier League", "country": "Russia", "id": "33895", "home": "Krasnodar FC", "away": "FC Akhmat Grozny", "time": "18:45", "1": 1.58, "X": 4.30, "2": 5.50, "ou_line": "2.5", "over": 1.72, "under": 2.10},
-
-        # Spain LaLiga
-        {"league": "Spain LaLiga", "country": "Spain", "id": "30296", "home": "Alaves", "away": "Getafe", "time": "18:30", "1": 2.48, "X": 2.88, "2": 3.71, "ou_line": "1.5", "over": 1.73, "under": 2.15},
-        {"league": "Spain LaLiga", "country": "Spain", "id": "33067", "home": "Sevilla", "away": "Rayo Vallecano", "time": "20:30", "1": 2.52, "X": 3.15, "2": 3.27, "ou_line": "2.0", "over": 1.76, "under": 2.10},
-
-        # England Championship
-        {"league": "England Championship", "country": "England", "id": "44564", "home": "Sheffield United", "away": "Birmingham City", "time": "17:30", "1": 2.27, "X": 3.45, "2": 3.33, "ou_line": "2.5", "over": 2.05, "under": 1.80},
-
-        # Germany 2. Bundesliga
-        {"league": "Germany 2. Bundesliga", "country": "Germany", "id": "38983", "home": "1 FC Kaiserslautern", "away": "Karlsruher SC", "time": "19:30", "1": 2.05, "X": 3.80, "2": 3.30, "ou_line": "3.0", "over": 1.85, "under": 1.93},
-
-        # Spain LALIGA HYPERMOTION
-        {"league": "Spain LALIGA HYPERMOTION", "country": "Spain", "id": "42647", "home": "Cadiz", "away": "RC Celta Fortuna", "time": "18:00", "1": 2.05, "X": 3.40, "2": 3.50, "ou_line": "2.5", "over": 1.89, "under": 1.89},
-        {"league": "Spain LALIGA HYPERMOTION", "country": "Spain", "id": "42650", "home": "Real Oviedo", "away": "Granada", "time": "18:00", "1": 2.05, "X": 3.10, "2": 4.00, "ou_line": "2.0", "over": 1.74, "under": 2.05},
-        {"league": "Spain LALIGA HYPERMOTION", "country": "Spain", "id": "42673", "home": "Mallorca", "away": "Valladolid", "time": "20:30", "1": 1.66, "X": 3.75, "2": 5.25, "ou_line": "2.5", "over": 1.92, "under": 1.85},
-
-        # International Women
-        {"league": "Women Africa Cup of Nations", "country": "International", "id": "17385", "home": "Morocco", "away": "Algeria", "time": "18:00", "1": 1.69, "X": 3.60, "2": 5.10, "ou_line": "2.5", "over": 2.10, "under": 1.73},
-    ]
+        logger.warning(f"SportyBet live ingestion fetch error: {exc}")
 
     leagues: dict = {}
     seen_matches = set()
+    now_utc = datetime.datetime.now(datetime.timezone.utc)
+    now_ts = now_utc.timestamp()
 
-    # 1. Process Live SportyBet Feed Events
-    for ev in (live_events or []):
-        h = ev.get("homeTeamName") or "Home"
-        a = ev.get("awayTeamName") or "Away"
+    # Process Strictly Live Dynamic SportyBet Events
+    for ev in raw_sporty_fixtures:
+        ev_status = str(ev.get("status") or "").upper().strip()
+        if ev_status in ["LIVE", "STARTED", "1H", "2H", "HT", "FINISHED", "ENDED", "CANCELLED", "POSTPONED", "ABANDONED"]:
+            continue
+
+        h = ev.get("home_team") or "Home"
+        a = ev.get("away_team") or "Away"
         match_key = f"{h.lower()}_{a.lower()}"
         if match_key in seen_matches:
             continue
 
-        sport = ev.get("sport") or {}
-        cat = sport.get("category") or ev.get("category") or {}
-        tourn = cat.get("tournament") or ev.get("tournament") or {}
-        cat_name = cat.get("name") or ev.get("categoryName") or ""
-        tourn_name = tourn.get("name") or ev.get("tournamentName") or ""
-        
-        if cat_name and tourn_name:
-            league_name = tourn_name if cat_name in tourn_name else f"{cat_name} {tourn_name}"
+        league_name = ev.get("competition") or ev.get("country") or "Top Competition"
+        country_name = ev.get("country") or "International"
+
+        kickoff_str = ev.get("kickoff_time") or "18:00"
+        iso_str = f"{now_utc.strftime('%Y-%m-%d')}T{kickoff_str}:00Z" if len(kickoff_str) == 5 else kickoff_str
+
+        o_h = float(ev.get("odds_home") or 2.0)
+        o_d = float(ev.get("odds_draw") or 3.2)
+        o_a = float(ev.get("odds_away") or 3.0)
+
+        probs = calculate_matchiq_probabilities(h, a)
+        if probs.get("home_elo") == 1600 and probs.get("away_elo") == 1600 and o_h > 1.0:
+            odds_analysis = MarketProbabilityEngine.analyze_fixture_odds(o_h, o_d, o_a, h, a)
+            p_h = odds_analysis.prob_home_true
+            p_d = odds_analysis.prob_draw_true
+            p_a = odds_analysis.prob_away_true
+            elo_h = int(1600 + (p_h - 0.33) * 600)
+            elo_a = int(1600 + (p_a - 0.33) * 600)
         else:
-            league_name = tourn_name or cat_name or "Other Leagues"
+            p_h = probs["ai_prob_home"]
+            p_d = probs["ai_prob_draw"]
+            p_a = probs["ai_prob_away"]
+            elo_h = probs.get("home_elo", 1650)
+            elo_a = probs.get("away_elo", 1650)
 
-        start_ms = ev.get("estimateStartTime")
-        kickoff_str = "12:00"
-        ts_sec = 0
-        if start_ms:
-            try:
-                ts_sec = (start_ms / 1000.0) if start_ms > 1e11 else float(start_ms)
-                dt = datetime.datetime.fromtimestamp(ts_sec, tz=datetime.timezone.utc)
-                kickoff_str = dt.strftime("%H:%M")
-            except Exception:
-                pass
-
-        odds_data = _extract_odds(ev.get("markets", []))
-        try:
-            probs = calculate_matchiq_probabilities(h, a)
-        except Exception:
-            probs = {"ai_prob_home": 0.45, "ai_prob_draw": 0.25, "ai_prob_away": 0.30, "ai_prob_over_1_5": 0.75}
-
-        # Normalize probabilities between 0.0 and 1.0
-        p_h = probs.get("ai_prob_home", 0.45)
-        p_d = probs.get("ai_prob_draw", 0.25)
-        p_a = probs.get("ai_prob_away", 0.30)
-        p_ou = probs.get("ai_prob_over_1_5", 0.75)
-        if p_h > 1: p_h /= 100.0
-        if p_d > 1: p_d /= 100.0
-        if p_a > 1: p_a /= 100.0
-        if p_ou > 1: p_ou /= 100.0
+        dc_1x = round(1.0 / max(0.01, (1.0 / o_h + 1.0 / o_d) * 1.06), 2)
+        dc_x2 = round(1.0 / max(0.01, (1.0 / o_d + 1.0 / o_a) * 1.06), 2)
+        dc_12 = round(1.0 / max(0.01, (1.0 / o_h + 1.0 / o_a) * 1.06), 2)
 
         fixture = {
-            "event_id": str(ev.get("eventId") or ev.get("gameId") or f"{h}_{a}"),
+            "event_id": str(ev.get("event_id") or ev.get("game_id") or f"{h}_{a}"),
+            "game_id": ev.get("game_id"),
             "home_team": h,
             "away_team": a,
             "kickoff_time": kickoff_str,
-            "kickoff_ts": ts_sec,
-            "result_1x2": odds_data["result_1x2"],
-            "ou_lines": odds_data["ou_lines"],
-            "ai_prob_home": p_h,
-            "ai_prob_draw": p_d,
-            "ai_prob_away": p_a,
-            "ai_prob_over_1_5": p_ou,
-            "home_elo": probs.get("home_elo", 1650),
-            "away_elo": probs.get("away_elo", 1650),
-            "competition_code": league_name,
-        }
-
-        if league_name not in leagues:
-            leagues[league_name] = {"league": league_name, "country": cat_name, "matches": []}
-        leagues[league_name]["matches"].append(fixture)
-        seen_matches.add(match_key)
-
-    # 2. Add Top League Matches for Today
-    for item in CURATED_TODAY_SLATE:
-        h = item["home"]
-        a = item["away"]
-        match_key = f"{h.lower()}_{a.lower()}"
-        if match_key in seen_matches:
-            continue
-
-        lg_name = item["league"]
-        country = item["country"]
-        
-        try:
-            probs = calculate_matchiq_probabilities(h, a)
-        except Exception:
-            probs = {"ai_prob_home": 0.45, "ai_prob_draw": 0.25, "ai_prob_away": 0.30, "ai_prob_over_1_5": 0.75}
-
-        p_h = probs.get("ai_prob_home", 0.45)
-        p_d = probs.get("ai_prob_draw", 0.25)
-        p_a = probs.get("ai_prob_away", 0.30)
-        p_ou = probs.get("ai_prob_over_1_5", 0.75)
-        if p_h > 1: p_h /= 100.0
-        if p_d > 1: p_d /= 100.0
-        if p_a > 1: p_a /= 100.0
-        if p_ou > 1: p_ou /= 100.0
-
-        h_odd = item["1"]
-        d_odd = item["X"]
-        a_odd = item["2"]
-        dc_1x = round(1.0 / max(0.01, (1.0 / h_odd + 1.0 / d_odd) * 1.06), 2)
-        dc_x2 = round(1.0 / max(0.01, (1.0 / d_odd + 1.0 / a_odd) * 1.06), 2)
-        dc_12 = round(1.0 / max(0.01, (1.0 / h_odd + 1.0 / a_odd) * 1.06), 2)
-
-        # Compute exact UTC kickoff timestamp for today/tomorrow match
-        target_date = datetime.date.today() if (isinstance(day, str) and day.lower() == "tomorrow") else datetime.date.today()
-        match_ts_sec = 0
-        now_utc = datetime.datetime.now(datetime.timezone.utc)
-        now_ts = now_utc.timestamp()
-        try:
-            t_parts = str(item.get("time", "18:00")).split(":")
-            hh = int(t_parts[0])
-            mm = int(t_parts[1])
-            match_dt = datetime.datetime(target_date.year, target_date.month, target_date.day, hh, mm, tzinfo=datetime.timezone.utc)
-            match_ts_sec = match_dt.timestamp()
-        except Exception:
-            match_ts_sec = now_ts + 3600
-
-        # Dynamic match state: if match time is in past, mark as LIVE or CONCLUDED
-        if match_ts_sec <= (now_ts + 120):
-            match_status = "CONCLUDED" if (now_ts - match_ts_sec) >= 6600 else "LIVE"
-        else:
-            match_status = "NOT_STARTED"
-
-        fixture = {
-            "event_id": item["id"],
-            "home_team": h,
-            "away_team": a,
-            "kickoff_time": item["time"],
-            "kickoff_ts": int(match_ts_sec * 1000),
-            "match_status": match_status,
-            "status": match_status,
-            "is_live": match_status == "LIVE",
+            "kickoff_datetime": iso_str,
+            "match_status": "NOT_STARTED",
+            "status": "NOT_STARTED",
+            "is_live": False,
             "result_1x2": {
-                "home": h_odd,
-                "draw": d_odd,
-                "away": a_odd
+                "home": o_h,
+                "draw": o_d,
+                "away": o_a
             },
             "double_chance": {
                 "1X": max(1.05, dc_1x),
                 "X2": max(1.05, dc_x2),
                 "12": max(1.05, dc_12)
             },
-            "ou_lines": _generate_ou_ladder([{
-                "line": item["ou_line"],
-                "over": item["over"],
-                "under": item["under"]
-            }], h_odd, a_odd),
+            "ou_lines": _generate_ou_ladder([], o_h, o_a),
             "ai_prob_home": p_h,
             "ai_prob_draw": p_d,
             "ai_prob_away": p_a,
-            "ai_prob_over_1_5": p_ou,
-            "home_elo": probs.get("home_elo", 1650),
-            "away_elo": probs.get("away_elo", 1650),
-            "competition_code": lg_name,
+            "ai_prob_over_1_5": probs.get("ai_prob_over_1_5", 0.75),
+            "home_elo": elo_h,
+            "away_elo": elo_a,
+            "competition_code": league_name,
         }
 
-        if lg_name not in leagues:
-            leagues[lg_name] = {"league": lg_name, "country": country, "matches": []}
-        leagues[lg_name]["matches"].append(fixture)
+        if league_name not in leagues:
+            leagues[league_name] = {"league": league_name, "country": country_name, "matches": []}
+        leagues[league_name]["matches"].append(fixture)
         seen_matches.add(match_key)
 
     # Sort leagues by match count desc
+
     league_list = sorted(leagues.values(), key=lambda lg: -len(lg["matches"]))
     total_matches = sum(len(lg["matches"]) for lg in league_list)
 
@@ -703,4 +713,57 @@ async def get_sportybet_today_fixtures(day: str = "today"):
         _cache[cache_k] = (result, time.time())
 
     return result
+
+
+@router.get("/sportybet-upcoming")
+async def get_sportybet_upcoming_fixtures(limit: int = Query(default=50, ge=10, le=150)):
+    """
+    StatIQ V2.0 Native SportyBet Upcoming Feed with Real Odds & Probability Analytics.
+    Returns live verified matches, bookmaker margin-stripped probabilities, and favorite/underdog profiles.
+    """
+    raw_fixtures = SportyBetIngestionService.fetch_upcoming_fixtures(limit=limit)
+    enriched = []
+
+    for f in raw_fixtures:
+        h_odd = f.get("odds_home", 2.50)
+        d_odd = f.get("odds_draw", 3.00)
+        a_odd = f.get("odds_away", 2.50)
+        
+        analysis = MarketProbabilityEngine.analyze_fixture_odds(
+            odds_home=h_odd,
+            odds_draw=d_odd,
+            odds_away=a_odd,
+            home_name=f.get("home_team", "Home"),
+            away_name=f.get("away_team", "Away")
+        )
+
+        item = {
+            **f,
+            "analytics": {
+                "margin": analysis.margin,
+                "prob_home_true": analysis.prob_home_true,
+                "prob_draw_true": analysis.prob_draw_true,
+                "prob_away_true": analysis.prob_away_true,
+                "match_profile": analysis.match_profile,
+                "favorite_team": analysis.favorite_team,
+                "underdog_team": analysis.underdog_team,
+                "favorite_odds": analysis.favorite_odds,
+                "underdog_odds": analysis.underdog_odds,
+                "recommended_safe_market": analysis.recommended_safe_market,
+                "recommended_selection": analysis.recommended_selection,
+                "recommended_odds": analysis.recommended_odds,
+                "market_id": analysis.market_id,
+                "outcome_id": analysis.outcome_id,
+                "specifier": analysis.specifier
+            }
+        }
+        enriched.append(item)
+
+    return {
+        "status": "SUCCESS",
+        "total": len(enriched),
+        "source": "SPORTYBET_NATIVE",
+        "fixtures": enriched
+    }
+
 

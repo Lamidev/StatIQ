@@ -14,7 +14,10 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
 from app.services.pick_engine import MatchIQPickEngine
+from app.services.sportybet_ingestion import SportyBetIngestionService
+from app.services.prediction_gate_service import PredictionGateService
 from app.core.config import settings
+
 
 router = APIRouter()
 logger = logging.getLogger("matchiq.ticket_builder")
@@ -82,134 +85,49 @@ def _normalize_fixture_item(m: Dict[str, Any], default_comp: str) -> Dict[str, A
 @router.post("/build")
 async def build_ai_ticket(req: BuildTicketRequest):
     """
-    Executes MatchIQ 5-Gate Pick Engine on live/historical fixture pool.
-    Returns built ticket with decision audit logs, confidence tiers, and SportyBet booking code.
+    Executes StatIQ V2.0 7-Gate Pick Engine on native SportyBet live fixture pool.
+    Returns built ticket with decision audit logs, confidence tiers, and verified SportyBet booking code.
     """
     now = datetime.datetime.now(datetime.timezone.utc)
     today_str = now.strftime("%Y-%m-%d")
-    current_weekday = now.weekday()  # Monday=0, Sunday=6
 
     fixture_pool = []
 
     if req.custom_fixtures and len(req.custom_fixtures) > 0:
         fixture_pool = [_normalize_fixture_item(f, req.single_league or "PL") for f in req.custom_fixtures]
     else:
-        # 1. Fetch live upcoming fixtures from SportyBet API & today's curated schedule
-        try:
-            from app.services.ticket_reeditor import _fetch_live_replacements_safe
-            live_sporty_events = await asyncio.to_thread(_fetch_live_replacements_safe)
-        except Exception:
-            live_sporty_events = []
+        # 1. Fetch live upcoming fixtures directly from SportyBet API
+        raw_sporty_fixtures = SportyBetIngestionService.fetch_upcoming_fixtures(limit=250)
+        now_utc = datetime.datetime.now(datetime.timezone.utc)
+        today_date = now_utc.date()
 
-        # Curated Weekend & Week Slate across all major accessible leagues
-        from app.api.endpoints.fixtures import get_sportybet_today_fixtures
-        today_fixtures_data = await get_sportybet_today_fixtures()
-        all_today_matches = []
-        for lg in today_fixtures_data.get("leagues", []):
-            for m in lg.get("matches", []):
-                r1x2 = m.get("result_1x2") or {}
-                ou = m.get("ou_lines") or []
-                dc = m.get("double_chance") or {}
-                all_today_matches.append({
-                    "eventId": m.get("event_id"),
-                    "homeTeamName": m.get("home_team"),
-                    "awayTeamName": m.get("away_team"),
-                    "tournamentName": lg.get("league"),
-                    "categoryName": lg.get("country"),
-                    "estimateStartTime": m.get("kickoff_ts") or int(now.timestamp() * 1000),
-                    "result_1x2": r1x2,
-                    "ou_lines": ou,
-                    "double_chance": dc,
-                    "markets": [
-                        {
-                            "desc": "1X2",
-                            "outcomes": [
-                                {"desc": "Home", "odds": r1x2.get("home", 2.0)},
-                                {"desc": "Draw", "odds": r1x2.get("draw", 3.2)},
-                                {"desc": "Away", "odds": r1x2.get("away", 3.0)},
-                            ]
-                        }
-                    ]
-                })
+        for ev in raw_sporty_fixtures:
+            h = ev.get("home_team") or "Home"
+            a = ev.get("away_team") or "Away"
+            comp_name = ev.get("competition") or ev.get("country") or "Football"
+            start_ms = ev.get("start_time_ms") or 0
 
-        # Always load verified SportyBet matches for today (PSV, Porto, Fenerbahce, Al Nassr, Celtic, Udinese, etc.)
-        from app.api.endpoints.fixtures import get_sportybet_today_fixtures
-        today_fixtures_data = await get_sportybet_today_fixtures()
-        real_sporty_matches = []
-        for lg in today_fixtures_data.get("leagues", []):
-            for m in lg.get("matches", []):
-                real_sporty_matches.append({
-                    "eventId": m.get("event_id"),
-                    "homeTeamName": m.get("home_team"),
-                    "awayTeamName": m.get("away_team"),
-                    "tournamentName": lg.get("league"),
-                    "categoryName": lg.get("country"),
-                    "estimateStartTime": m.get("kickoff_ts"),
-                    "result_1x2": m.get("result_1x2") or {},
-                    "ou_lines": m.get("ou_lines") or [],
-                    "double_chance": m.get("double_chance") or {},
-                    "matchStatus": m.get("status", "NOT_STARTED"),
-                    "is_verified_top_match": True
-                })
-
-        combined_feed = real_sporty_matches + (live_sporty_events or [])
-        seen_keys = set()
-        now_ts_ms = int(now.timestamp() * 1000)
-
-        for ev in combined_feed:
-            h = ev.get("homeTeamName") or "Home"
-            a = ev.get("awayTeamName") or "Away"
-            k = f"{h.lower()}_{a.lower()}"
-            if k in seen_keys:
-                continue
-            seen_keys.add(k)
-
-            comp_name = ev.get("tournamentName") or ev.get("categoryName") or "League"
-            start_ms = ev.get("estimateStartTime") or ev.get("kickoff_ts") or ev.get("startTime")
-
-            # Check match status directly from API - Reject any live or finished match
-            ev_status = str(ev.get("matchStatus") or ev.get("status") or "").upper()
-            if any(s in ev_status for s in ("LIVE", "IN_PROGRESS", "ONGOING", "H1", "H2", "HT", "CONCLUDED", "FINISHED", "FT", "ENDED", "CANCELLED", "POSTPONED")):
-                continue
-
-            # STRICT PRE-MATCH: Match MUST start in the future (at least 2 minutes from right now)
-            if not start_ms:
-                continue
-
-            try:
-                ts_sec = (start_ms / 1000.0) if start_ms > 1e11 else float(start_ms)
-                dt = datetime.datetime.fromtimestamp(ts_sec, tz=datetime.timezone.utc)
-                dt_date = dt.strftime("%Y-%m-%d")
-                diff_sec = (dt - now).total_seconds()
-
-                # STRICT: Game MUST NOT have started yet (must be at least 120s in the future)
-                if diff_sec < 120:
-                    continue
-
-                if req.date_window == "TODAY":
-                    if dt_date != today_str and diff_sec > 86400:
+            # 1. Strict Date Window Filter (Default is TODAY - only matches playing today)
+            if start_ms > 0:
+                match_dt = datetime.datetime.fromtimestamp(start_ms / 1000.0, tz=datetime.timezone.utc)
+                win = (req.date_window or "TODAY").upper()
+                if win in ("TODAY", "TODAYS_GAMES", "TODAY_ONLY", "DAILY", ""):
+                    if match_dt.date() != today_date:
                         continue
-                elif req.date_window == "NEXT_24H":
-                    if diff_sec > 86400:
+                elif win == "TOMORROW":
+                    if (match_dt.date() - today_date).days != 1:
                         continue
-                elif req.date_window == "WEEKEND":
-                    if diff_sec > 259200:
+                elif win == "WEEKEND":
+                    if match_dt.weekday() not in (4, 5, 6):
                         continue
-                elif req.date_window == "NEXT_7D":
-                    if diff_sec > 604800:
-                        continue
-            except Exception:
-                continue
 
-            # League Filter
-            if req.selected_leagues and len(req.selected_leagues) > 0 and "ALL" not in req.selected_leagues:
+            # 2. League Filter if user selected specific leagues
+            if req.selected_leagues and len(req.selected_leagues) > 0 and "ALL" not in req.selected_leagues and "ALL TOP LEAGUES" not in [x.upper() for x in req.selected_leagues]:
                 match_league = False
                 for sel_lg in req.selected_leagues:
-                    # check code or name match
                     if sel_lg.lower() in comp_name.lower() or comp_name.lower() in sel_lg.lower():
                         match_league = True
                         break
-                    # Map common short codes
                     CODE_MAP = {
                         "PL": "Premier League",
                         "PD": "LaLiga",
@@ -227,53 +145,67 @@ async def build_ai_ticket(req: BuildTicketRequest):
                 if not match_league:
                     continue
 
-            r1x2_ev = ev.get("result_1x2") or {}
-            ou_ev = ev.get("ou_lines") or []
-            dc_ev = ev.get("double_chance") or {}
-
-            if not r1x2_ev and ev.get("markets"):
-                for mkt in ev.get("markets", []):
-                    m_desc = (mkt.get("desc") or mkt.get("name") or "").lower()
-                    if "1x2" in m_desc or "match result" in m_desc:
-                        for out in mkt.get("outcomes", []):
-                            o_desc = (out.get("desc") or out.get("name") or "").lower()
-                            try:
-                                o_val = float(out.get("odds"))
-                                if o_desc in ["1", "home", h.lower()]:
-                                    r1x2_ev["home"] = o_val
-                                elif o_desc in ["x", "draw"]:
-                                    r1x2_ev["draw"] = o_val
-                                elif o_desc in ["2", "away", a.lower()]:
-                                    r1x2_ev["away"] = o_val
-                            except (ValueError, TypeError):
-                                pass
+            r1x2_ev = {
+                "home": ev.get("odds_home", 2.0),
+                "draw": ev.get("odds_draw", 3.2),
+                "away": ev.get("odds_away", 3.0)
+            }
 
             fixture_pool.append({
-                "fixture_id": str(ev.get("eventId") or ev.get("gameId") or f"{h}_{a}"),
-                "game_id": str(ev.get("eventId") or ev.get("gameId") or ""),
-                "external_fixture_id": str(ev.get("eventId") or ev.get("gameId") or ""),
+                "fixture_id": ev.get("event_id"),
+                "event_id": ev.get("event_id"),
+                "game_id": ev.get("game_id"),
+                "provider_event_id": ev.get("event_id"),
+                "external_fixture_id": ev.get("event_id"),
                 "home_team": h,
                 "away_team": a,
                 "competition_code": comp_name,
-                "kickoff_datetime": ev.get("estimateStartTime"),
-                "markets": ev.get("markets", []),
+                "kickoff_datetime": ev.get("kickoff_time") or (match_dt.strftime("%Y-%m-%d %H:%M:%S") if start_ms > 0 else today_str),
+                "start_time_ms": start_ms,
+                "markets": ev.get("markets", {}),
                 "result_1x2": r1x2_ev,
-                "ou_lines": ou_ev,
-                "double_chance": dc_ev,
+                "ou_lines": [],
+                "double_chance": {},
             })
 
-    # If pool is still empty, fall back to European scheduled fixtures
+
+    # Fallback to general upcoming if league filter was too restrictive
     if not fixture_pool:
-        fallback_leagues = req.selected_leagues if (req.selected_leagues and "ALL" not in req.selected_leagues) else ["PL", "PD", "SA", "BL1", "FL1"]
-        results = await asyncio.gather(*[_fetch_fixtures_for_league(lg) for lg in fallback_leagues], return_exceptions=True)
-        for lg, raw_matches in zip(fallback_leagues, results):
-            if isinstance(raw_matches, list):
-                for m in raw_matches:
-                    fixture_pool.append(_normalize_fixture_item(m, lg))
+        raw_sporty_fixtures = SportyBetIngestionService.fetch_upcoming_fixtures(limit=100)
+        for ev in raw_sporty_fixtures:
+            start_ms = ev.get("start_time_ms") or 0
+            if start_ms > 0:
+                match_dt = datetime.datetime.fromtimestamp(start_ms / 1000.0, tz=datetime.timezone.utc)
+                if (req.date_window or "TODAY").upper() in ("TODAY", "TODAYS_GAMES", "TODAY_ONLY", "DAILY", ""):
+                    if match_dt.date() != today_date:
+                        continue
+
+            fixture_pool.append({
+                "fixture_id": ev.get("event_id"),
+                "event_id": ev.get("event_id"),
+                "game_id": ev.get("game_id"),
+                "provider_event_id": ev.get("event_id"),
+                "external_fixture_id": ev.get("event_id"),
+                "home_team": ev.get("home_team"),
+                "away_team": ev.get("away_team"),
+                "competition_code": ev.get("competition") or "Football",
+                "kickoff_datetime": ev.get("kickoff_time") or today_str,
+                "start_time_ms": start_ms,
+                "markets": ev.get("markets", {}),
+                "result_1x2": {
+                    "home": ev.get("odds_home", 2.0),
+                    "draw": ev.get("odds_draw", 3.2),
+                    "away": ev.get("odds_away", 3.0)
+                },
+                "ou_lines": [],
+                "double_chance": {},
+            })
+
+
 
     # Determine pick limit
     target_games = req.target_games or 5
-    max_picks = target_games if req.target_mode == "GAMES" else 20
+    max_picks = max(4, (target_games // 2) + 2) if req.target_mode == "GAMES" else 20
 
     engine = MatchIQPickEngine(use_live_odds=True)
     target_odds_val = req.target_odds if (req.mode.upper() == "ROLLOVER" or req.target_mode == "ODDS") else 999.0
@@ -281,6 +213,8 @@ async def build_ai_ticket(req: BuildTicketRequest):
         fixture_pool=fixture_pool,
         target_total_odds=target_odds_val,
         mode=req.mode.upper(),
+        target_mode=req.target_mode,
+        target_games=target_games,
         max_league_picks=max_picks,
         reshuffle_seed=req.reshuffle_seed
     )
@@ -293,6 +227,7 @@ async def build_ai_ticket(req: BuildTicketRequest):
         for leg in built_ticket.approved_legs:
             acc *= float(leg.get("odds", 1.5))
         built_ticket.accumulated_odds = round(acc, 2)
+
 
     # Generate genuine SportyBet booking code via SportyBet direct adapter
     booking_code = None

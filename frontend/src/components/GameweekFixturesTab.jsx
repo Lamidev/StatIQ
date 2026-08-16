@@ -4,16 +4,31 @@ import { Search, Calendar, RefreshCw, Wifi, WifiOff, Sparkles, Trophy, CheckCirc
 import LeagueGameweekSidebar from "./LeagueGameweekSidebar";
 
 function formatKickoff(iso) {
-  if (!iso) return "TBC";
+  if (!iso) return "Today";
+
   const d = new Date(iso);
-  const datePart = d.toLocaleDateString("en-GB", {
-    weekday: "short", day: "2-digit", month: "short"
-  });
-  const timePart = d.toLocaleTimeString("en-GB", {
-    hour: "2-digit", minute: "2-digit"
-  });
-  return `${datePart} • ${timePart}`;
+  if (!isNaN(d.getTime())) {
+    const datePart = d.toLocaleDateString("en-GB", {
+      weekday: "short", day: "2-digit", month: "short"
+    });
+    const timePart = d.toLocaleTimeString("en-GB", {
+      hour: "2-digit", minute: "2-digit"
+    });
+    return `${datePart} • ${timePart}`;
+  }
+
+  if (typeof iso === "string" && /^\d{1,2}:\d{2}/.test(iso.trim())) {
+    const today = new Date();
+    const datePart = today.toLocaleDateString("en-GB", {
+      weekday: "short", day: "2-digit", month: "short"
+    });
+    return `${datePart} • ${iso.trim().slice(0, 5)}`;
+  }
+
+  return iso;
 }
+
+
 
 const formatProb = (val, fallback = 33) => {
   if (val === undefined || val === null) return fallback;
@@ -62,7 +77,7 @@ export default function GameweekFixturesTab() {
     try {
       let result;
       if (selectedLeague === "ALL_TOP") {
-        result = await fetchCrossLeagueGameweek(selectedGameweek, 25);
+        result = await fetchCrossLeagueGameweek(selectedGameweek, 30);
       } else {
         result = await fetchFixturesByGameweek(selectedLeague, selectedGameweek);
       }
