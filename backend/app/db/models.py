@@ -427,6 +427,85 @@ class AccessPasskey(Base):
     notes: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
 
 
+# ── STATIQ V2.0: CANONICAL FIXTURE & PROVIDER IDENTITY DOMAIN MODELS ─────────
+
+class CanonicalFixture(Base):
+    """
+    StatIQ V2.0 Canonical Fixture Entity.
+    Permanent, provider-agnostic match record.
+    """
+    __tablename__ = "canonical_fixtures"
+
+    id: Mapped[str] = mapped_column(String(50), primary_key=True)  # e.g. "fx_01JX8K29PQ"
+    home_team: Mapped[str] = mapped_column(String(100), index=True)
+    away_team: Mapped[str] = mapped_column(String(100), index=True)
+    competition: Mapped[str] = mapped_column(String(100), index=True)
+    country: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    kickoff_utc: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), index=True)
+    
+    # State tracking: SCHEDULED, PREMATCH, LIVE, HALFTIME, SECOND_HALF, FINISHED, POSTPONED, CANCELLED, ABANDONED
+    status: Mapped[str] = mapped_column(String(30), default="SCHEDULED", index=True)
+    minute: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    match_clock: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)  # e.g. "73' H2", "HT", "FT"
+    
+    # Scores
+    home_score: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    away_score: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    half_time_home_score: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    half_time_away_score: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    
+    # Statistics
+    total_corners: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    home_corners: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    away_corners: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), default=datetime.datetime.utcnow)
+    updated_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), default=datetime.datetime.utcnow)
+
+
+class FixtureProviderMapping(Base):
+    """
+    StatIQ V2.0 Permanent Provider Identity Bridge.
+    Maps a canonical fixture to external IDs (SportyBet, Sportradar, API-Football, Football-Data).
+    """
+    __tablename__ = "canonical_fixture_provider_ids"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    fixture_id: Mapped[str] = mapped_column(ForeignKey("canonical_fixtures.id"), index=True)
+    provider: Mapped[str] = mapped_column(String(50), index=True)  # API_FOOTBALL, SPORTYBET, SPORTRADAR, FOOTBALL_DATA
+    provider_event_id: Mapped[Optional[str]] = mapped_column(String(100), index=True, nullable=True)
+    provider_game_id: Mapped[Optional[str]] = mapped_column(String(100), index=True, nullable=True)
+    provider_tournament_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    confidence: Mapped[float] = mapped_column(Float, default=1.0)
+    last_verified_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), default=datetime.datetime.utcnow)
+
+
+class TrackedLeg(Base):
+    """
+    StatIQ V2.0 Structured Tracked Leg Entity.
+    Coupled with a Canonical Fixture and a Structured Market Definition.
+    """
+    __tablename__ = "tracked_legs"
+
+    id: Mapped[str] = mapped_column(String(50), primary_key=True)  # e.g. "leg_..."
+    ticket_id: Mapped[str] = mapped_column(ForeignKey("tracked_tickets.id"), index=True)
+    fixture_id: Mapped[str] = mapped_column(ForeignKey("canonical_fixtures.id"), index=True)
+    
+    market_type: Mapped[str] = mapped_column(String(50), index=True)  # MATCH_RESULT, DOUBLE_CHANCE, TOTAL_GOALS, WIN_EITHER_HALF, COMBO_OR, etc.
+    market_definition: Mapped[dict] = mapped_column(JSON)  # Structured condition JSON
+    
+    selection_name: Mapped[str] = mapped_column(String(100))
+    odds: Mapped[float] = mapped_column(Float)
+    
+    leg_status: Mapped[str] = mapped_column(String(20), default="PENDING", index=True)  # PENDING, LIVE, EARLY_WON, WON, LOST, VOID
+    result_text: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    early_won: Mapped[bool] = mapped_column(Boolean, default=False)
+    
+    settled_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), default=datetime.datetime.utcnow)
+
+
+
 
 
 

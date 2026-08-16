@@ -42,6 +42,8 @@ def _ticket_to_dict(t: TrackedTicket) -> Dict[str, Any]:
     }
 
 
+
+
 def _migrate_json_to_db_if_needed(db: Session):
     """
     One-time migration: copies legacy tickets from tracked_tickets.json
@@ -141,6 +143,7 @@ def save_tracked_tickets(tickets: List[Dict[str, Any]], db: Optional[Session] = 
                     stale_reason=data.get("stale_reason"),
                 )
                 db.add(new_t)
+
         db.commit()
     except Exception as e:
         db.rollback()
@@ -454,15 +457,21 @@ def evaluate_pick(pick_name: str, home_score: int, away_score: int,
         return "WON" if home_score != away_score else "LOST"
 
     # ── SportyBet Compound OR Markets (Home/Away Team or Over 2.5) ──
-    if "or over 2.5" in p or "& over 2.5" in p:
-        over25 = total > 2.5
-        if "away" in p or (at and at in p):
-            res = (away_score > home_score) or over25
-        elif "home" in p or (ht and ht in p):
-            res = (home_score > away_score) or over25
+    if "or over" in p or "win or over" in p or "team or over" in p or "& over" in p:
+        m_ov = re.search(r"over\s*(\d+\.?\d*)", p)
+        line = float(m_ov.group(1)) if m_ov else 2.5
+        over_won = total > line
+        is_away_target = "away" in p or (at and at in p and ht not in p)
+        is_home_target = "home" in p or (ht and ht in p and at not in p)
+        if is_away_target:
+            team_won = away_score > home_score
+        elif is_home_target:
+            team_won = home_score > away_score
         else:
-            res = (home_score != away_score) or over25
+            team_won = home_score != away_score
+        res = team_won or over_won
         return "WON" if res else "LOST"
+
 
     # ── Double Chance (Comprehensive — Check Before WEH/1X2) ──
     if "(12)" in p or " 12 " in f" {p} " or "home/away" in p or "home or away" in p or (ht and at and ht in p and at in p and "or" in p and "draw" not in p):
@@ -894,13 +903,35 @@ def evaluate_pick_status(
     ht = home_team.lower().strip()
     at = away_team.lower().strip()
 
-    # 0. TEAM SPECIFIC OVER-UNDER MARKETS (e.g. Fatih Karagumruk Istanbul Over/Under 0.5, Lazio Over 0.5)
+    # ── 0. COMPOUND OR MARKETS (Home/Away Team Win OR Over 2.5 / 1.5 Goals) ──
+    if ("or over" in p or "win or over" in p or "team or over" in p or "& over" in p) and "both halve" not in p and "double chance" not in p:
+        m_ov = re.search(r"over\s*(\d+\.?\d*)", p)
+        line = float(m_ov.group(1)) if m_ov else 2.5
+        if total > line:
+            return "WON"
+
+        is_away_target = "away" in p or (at and at in p and ht not in p)
+        is_home_target = "home" in p or (ht and ht in p and at not in p)
+
+        if is_away_target and away_score > home_score:
+            return "WON"
+        if is_home_target and home_score > away_score:
+            return "WON"
+
+        if is_concluded:
+            team_won = (away_score > home_score) if is_away_target else ((home_score > away_score) if is_home_target else (home_score != away_score))
+            return "WON" if (team_won or total > line) else "LOST"
+
+        return "PENDING"
+
+    # ── 0B. TEAM SPECIFIC OVER-UNDER MARKETS (e.g. Fatih Karagumruk Istanbul Over/Under 0.5, Lazio Over 0.5) ──
     is_team_goals_market = (
-        "team goals" in p or "team over" in p or "team under" in p or
-        "home over" in p or "home under" in p or "away over" in p or "away under" in p or
-        "home team over" in p or "away team over" in p or "home team under" in p or "away team under" in p or
-        (ht and ht in p and ("over/under" in p or "over" in p or "under" in p)) or
-        (at and at in p and ("over/under" in p or "over" in p or "under" in p))
+        ("team goals" in p or "team over" in p or "team under" in p or
+         "home over" in p or "home under" in p or "away over" in p or "away under" in p or
+         "home team over" in p or "away team over" in p or "home team under" in p or "away team under" in p or
+         (ht and ht in p and ("over/under" in p or "over" in p or "under" in p)) or
+         (at and at in p and ("over/under" in p or "over" in p or "under" in p)))
+        and not any(k in p for k in ("or over", "win or", "team or", "win either half", "double chance", "both halve", "draw no bet"))
     )
 
     if is_team_goals_market:
@@ -926,17 +957,6 @@ def evaluate_pick_status(
                 return "WON" if target_score <= line else "LOST"
             return "PENDING"
 
-    # 4. COMPOUND OR MARKETS (Home/Away Team or Over 2.5 / 1.5)
-    if "or over 2.5" in p or "& over 2.5" in p or "or over 1.5" in p or "& over 1.5" in p or "or over" in p or "& over" in p:
-        m_ov = re.search(r"over\s*(\d+\.?\d*)", p)
-        line = float(m_ov.group(1)) if m_ov else 2.5
-        if total > line:
-            return "WON"
-        if is_concluded:
-            return evaluate_pick(full_pick, home_score, away_score, home_team, away_team, ht_home_score, ht_away_score)
-        if evaluate_pick(full_pick, home_score, away_score, home_team, away_team, ht_home_score, ht_away_score) == "WON":
-            return "WON"
-        return "PENDING"
 
     # ── Both Halves Under / Over Markets ──
     if "both halves" in p or "both half" in p or "goals in both halves" in p or "score in both halves" in p or "scores in both halves" in p:

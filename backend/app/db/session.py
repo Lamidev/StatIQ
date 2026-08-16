@@ -2,7 +2,11 @@ from sqlalchemy import create_engine, event
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 from app.core.config import settings
 
-db_url = settings.DATABASE_URL.replace("sqlite+aiosqlite:///", "sqlite:///")
+db_url = settings.DATABASE_URL
+if db_url.startswith("postgres://"):
+    db_url = db_url.replace("postgres://", "postgresql://", 1)
+elif db_url.startswith("sqlite+aiosqlite:///"):
+    db_url = db_url.replace("sqlite+aiosqlite:///", "sqlite:///")
 
 connect_args = {}
 if "sqlite" in db_url:
@@ -10,8 +14,20 @@ if "sqlite" in db_url:
         "check_same_thread": False,
         "timeout": 30.0,
     }
+elif "postgresql" in db_url:
+    connect_args = {
+        "sslmode": "require" if ("render.com" in db_url or "neon.tech" in db_url) else "prefer"
+    }
 
-engine = create_engine(db_url, echo=False, connect_args=connect_args)
+try:
+    engine = create_engine(db_url, echo=False, connect_args=connect_args, pool_pre_ping=True)
+
+except Exception as e:
+    print(f"[Database] Warning: Failed to connect to {db_url} ({e}). Falling back to local SQLite.")
+    fallback_url = "sqlite:///./matchiq.db"
+    engine = create_engine(fallback_url, echo=False, connect_args={"check_same_thread": False})
+
+
 
 if "sqlite" in db_url:
     @event.listens_for(engine, "connect")

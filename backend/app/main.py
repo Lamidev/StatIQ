@@ -47,9 +47,12 @@ app.include_router(fixtures_router, prefix="/api/v1/fixtures", tags=["Match Fixt
 app.include_router(ticket_edit_router, prefix="/api/v1/ticket-edit", tags=["Ticket Re-Editor"])
 app.include_router(ticket_builder_router, prefix="/api/v1/ai-ticket", tags=["AI Ticket Builder Engine"])
 app.include_router(notifications_router, prefix="/api/v1/notifications", tags=["Win Notifications"])
+from app.api.endpoints.reconciliation import router as reconciliation_router
+app.include_router(reconciliation_router, prefix="/api/v1/ticket-tracker", tags=["Tracking Reconciliation & Health"])
 
 from app.db.session import get_db
 from sqlalchemy.orm import Session
+from app.services.live_scheduler import LiveTrackingScheduler
 from app.services.ticket_tracker import (
     lock_ticket,
     get_tracked_tickets,
@@ -66,6 +69,9 @@ from app.services.ticket_tracker import (
 
 @app.on_event("startup")
 def start_background_ticket_sync_worker():
+    # Start V2.0 Autonomous Tracking Scheduler
+    LiveTrackingScheduler.start_scheduler()
+
     import threading
     import time
     import gc
@@ -84,6 +90,7 @@ def start_background_ticket_sync_worker():
 
     worker = threading.Thread(target=_auto_sync_loop, daemon=True)
     worker.start()
+
 
 
 

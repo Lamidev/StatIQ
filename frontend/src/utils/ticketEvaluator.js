@@ -435,18 +435,20 @@ export function evaluatePickLive(sel) {
     }
   }
 
-  // 4. SPORTYBET COMPOUND OR MARKETS (e.g. Home Team or Over 2.5, Away Team or Over 2.5)
-  if (fullText.includes("or over 2.5") || fullText.includes("team or over 2.5") || marketName.toLowerCase().includes("home team or over 2.5")) {
-    if (totalGoals >= 3) {
+  // 4. SPORTYBET COMPOUND OR MARKETS (e.g. Home Team or Over 2.5, Udinese Win or Over 2.5 Goals)
+  if (fullText.includes("or over") || fullText.includes("win or over") || fullText.includes("team or over") || fullText.includes("& over")) {
+    const mOver = fullText.match(/over\s*(\d+\.?\d*)/);
+    const line = mOver ? parseFloat(mOver[1]) : 2.5;
+    if (totalGoals > line) {
       return { status: "WON", resultText: pickName === "Yes" || pickName === "No" ? "Yes" : (pickName || "Yes") };
     }
     if (isConcluded) {
-      const isHomeTarget = fullText.includes("home") || (ht && pickLower.includes(ht));
-      const isAwayTarget = fullText.includes("away") || (at && pickLower.includes(at));
+      const isHomeTarget = fullText.includes("home") || (ht && pickLower.includes(ht) && (!at || !pickLower.includes(at)));
+      const isAwayTarget = fullText.includes("away") || (at && pickLower.includes(at) && (!ht || !pickLower.includes(ht)));
       const teamWon = isHomeTarget ? homeScore > awayScore : (isAwayTarget ? awayScore > homeScore : homeScore !== awayScore);
 
-      return (teamWon || totalGoals >= 3)
-        ? { status: "WON", resultText: "Yes" }
+      return (teamWon || totalGoals > line)
+        ? { status: "WON", resultText: pickName === "Yes" || pickName === "No" ? "Yes" : (pickName || "Yes") }
         : { status: "LOST", resultText: "No" };
     }
     return { status: "PENDING", resultText: "--" };
