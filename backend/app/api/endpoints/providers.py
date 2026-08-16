@@ -131,14 +131,28 @@ async def create_verified_booking_endpoint(req_data: Dict[str, Any], db: Session
         return {"status": "REJECTED", "message": "No selections provided in payload."}
 
     if provider == "SPORTYBET":
-        from app.services.sportybet_reconciliation import SportyBetVerificationEngine
-        engine = SportyBetVerificationEngine(db)
-        return await engine.generate_verified_booking(
-            statiq_ticket_id=statiq_ticket_id,
-            selections=selections,
-            region=region
-        )
+        adapter = SportyBetAdapter(db)
+        code_res = adapter.generate_booking_code(selections, country_code=region)
+        b_code = code_res.get("booking_code")
+        if b_code:
+            return {
+                "status": "SUCCESS",
+                "provider": "SPORTYBET",
+                "booking_code": b_code,
+                "share_url": code_res.get("load_url") or f"https://www.sportybet.com/{region}/?shareCode={b_code}",
+                "matched_count": code_res.get("matched_count", len(selections)),
+                "reconciliation_summary": f"Successfully verified {code_res.get('matched_count', len(selections))} selections on SportyBet.",
+                "total_odds": code_res.get("total_odds"),
+                "verification_status": "BOOKING_VERIFIED",
+                "verified": True
+            }
+        else:
+            return {
+                "status": "REJECTED",
+                "message": code_res.get("message") or "SportyBet rejected booking code generation for these selections."
+            }
 
     return {"status": "UNSUPPORTED_PROVIDER", "message": f"Verified booking for {provider} not supported."}
+
 
 

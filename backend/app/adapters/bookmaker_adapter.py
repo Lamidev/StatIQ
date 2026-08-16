@@ -262,7 +262,9 @@ class SportyBetAdapter(BookmakerAdapter):
                         except (ValueError, TypeError):
                             odds_val = 1.50
 
-                game_id = str(out.get("gameId") or out.get("eventId") or "")
+                event_id = str(out.get("eventId") or "")
+                game_id = str(out.get("gameId") or "")
+                prov_id = event_id if event_id else game_id
                 
                 start_time_ms = out.get("estimateStartTime") or out.get("startTime") or 0
                 kickoff_str = ""
@@ -353,16 +355,17 @@ class SportyBetAdapter(BookmakerAdapter):
                     status_label = "Upcoming / Bettable"
 
                 selections.append({
-                    "external_fixture_id": game_id,
+                    "external_fixture_id": prov_id,
+                    "event_id": event_id or prov_id,
                     "game_id": game_id,
-                    "provider_event_id": game_id,
+                    "provider_event_id": prov_id,
                     "provider_market_id": provider_mkt_id,
                     "provider_outcome_id": provider_oc_id,
                     "provider_specifier": provider_spec,
                     "_sportybet_market_id": provider_mkt_id,
                     "_sportybet_outcome_id": provider_oc_id,
                     "_sportybet_specifier": provider_spec,
-                    "_sportybet_event_id": game_id,
+                    "_sportybet_event_id": prov_id,
                     "home_team": home_team,
                     "away_team": away_team,
                     "market_name": mkt_name,
@@ -379,6 +382,7 @@ class SportyBetAdapter(BookmakerAdapter):
                     "match_status_code": match_status_code_str,
                     "leg_result": leg_result
                 })
+
 
             return {
                 "status": "SUCCESS",
@@ -432,7 +436,7 @@ class SportyBetAdapter(BookmakerAdapter):
 
     def _resolve_market_payload(
         self,
-        ev_markets: List[Dict[str, Any]],
+        ev_markets: Any,
         mkt_text: str,
         sel_text: str,
         home_target: str,
@@ -443,32 +447,41 @@ class SportyBetAdapter(BookmakerAdapter):
         h_lower = (home_target or "").lower().strip()
         a_lower = (away_target or "").lower().strip()
 
+        STOP = {"fc", "sc", "cd", "ud", "ca", "rc", "ac", "fk", "bk", "sk", "ff", "sad", "club", "team", "the", "de", "cf"}
+        h_words = [w for w in h_lower.split() if len(w) >= 3 and w not in STOP]
+        a_words = [w for w in a_lower.split() if len(w) >= 3 and w not in STOP]
+
+        has_home_word = any(w in s_lower for w in h_words)
+        has_away_word = any(w in s_lower for w in a_words)
+
         m_list = list(ev_markets.values()) if isinstance(ev_markets, dict) else (ev_markets or [])
 
         # 1. Double Chance (Market ID: 10)
         if "double chance" in m_lower or "dc" in m_lower or "1x" in s_lower or "x2" in s_lower or "12" in s_lower or "or draw" in s_lower or "home/draw" in s_lower or "home or away" in s_lower:
+            is_12 = "12" in s_lower or "home or away" in s_lower or "1 or 2" in s_lower
+            is_x2 = "x2" in s_lower or "draw or away" in s_lower or "(x2)" in s_lower or (has_away_word and not has_home_word) or "away or draw" in s_lower
+            is_1x = "1x" in s_lower or "home or draw" in s_lower or "(1x)" in s_lower or (has_home_word and not has_away_word)
+
+            target_code = "12" if is_12 else ("x2" if is_x2 else "1x")
+            target_oc_id = "10" if is_12 else ("11" if is_x2 else "9")
+
             for mkt in m_list:
                 m_desc = (mkt.get("desc") or mkt.get("name") or mkt.get("market_name") or "").lower().strip()
                 m_id = str(mkt.get("id") or mkt.get("market_id") or "")
                 if (m_id == "10" or m_desc == "double chance") and not any(k in m_desc for k in ["&", "over", "under", "gg", "corner"]):
                     outcomes = mkt.get("outcomes", [])
                     if isinstance(outcomes, dict): outcomes = list(outcomes.values())
-                    target_code = "12" if ("12" in s_lower or "home or away" in s_lower) else ("x2" if ("x2" in s_lower or "draw or away" in s_lower) else "1x")
                     for oc in outcomes:
                         o_desc = (oc.get("desc") or oc.get("name") or oc.get("selection_name") or "").lower().strip()
                         o_id = str(oc.get("id") or oc.get("outcome_id") or "")
-                        if target_code in o_desc or (target_code == "1x" and o_id == "9") or (target_code == "12" and o_id == "10") or (target_code == "x2" and o_id == "11"):
+                        if o_id == target_oc_id or target_code in o_desc:
                             return m_id or "10", o_id, None
-            if "12" in s_lower or "home or away" in s_lower:
-                return "10", "10", None
-            elif "x2" in s_lower or "draw or away" in s_lower:
-                return "10", "11", None
-            else:
-                return "10", "9", None
+
+            return "10", target_oc_id, None
 
         # 2. Win Either Half (Home: 73, Away: 74)
         if "either half" in m_lower or "either half" in s_lower or "win either half" in s_lower:
-            is_away = "away" in s_lower or (a_lower and a_lower in s_lower and h_lower not in s_lower) or "(2)" in s_lower
+            is_away = "away" in s_lower or "(2)" in s_lower or (has_away_word and not has_home_word)
             target_m_id = "74" if is_away else "73"
             for mkt in m_list:
                 m_id = str(mkt.get("id") or mkt.get("market_id") or "")
@@ -517,7 +530,7 @@ class SportyBetAdapter(BookmakerAdapter):
         # 5. 1X2 Match Result
         if "draw" in s_lower or s_lower == "x":
             return "1", "2", None
-        elif "away" in s_lower or "(2)" in s_lower or (a_lower and a_lower in s_lower and h_lower not in s_lower):
+        elif "away" in s_lower or "(2)" in s_lower or (has_away_word and not has_home_word):
             return "1", "3", None
         return "1", "1", None
 
