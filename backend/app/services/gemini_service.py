@@ -13,10 +13,17 @@ class GeminiAIService:
     2. Universal Ticket Auditor — analyzes any match from ANY league worldwide using Gemini's
        own football knowledge. Not limited to football-data.org API leagues.
     """
-    BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent"
+    BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
 
     def __init__(self, api_key: Optional[str] = None):
-        self.api_key = api_key or os.getenv("GEMINI_API_KEY")
+        if api_key:
+            self.api_key = api_key
+        else:
+            try:
+                from app.core.config import settings
+                self.api_key = os.getenv("GEMINI_API_KEY") or getattr(settings, "GEMINI_API_KEY", "")
+            except Exception:
+                self.api_key = os.getenv("GEMINI_API_KEY")
 
     def _call_gemini_api(self, prompt: str) -> str:
         if not self.api_key:

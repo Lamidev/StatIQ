@@ -404,6 +404,13 @@ export function logoutUser() {
 /**
  * Ticket Tracker API Helpers (with offline/localStorage hybrid persistence)
  */
+function getTicketKey(t) {
+  if (t.code && t.code !== "CUSTOM" && t.code !== "AI-BUILDER-TICKET" && !String(t.code).startsWith("STATIQ-ACC-INT")) {
+    return `CODE_${String(t.code).toUpperCase().trim()}`;
+  }
+  return `ID_${String(t.id || t.code).trim()}`;
+}
+
 export async function fetchTrackedTickets() {
   const getLocalTickets = () => {
     try {
@@ -425,9 +432,10 @@ export async function fetchTrackedTickets() {
       const data = await res.json();
       const serverTickets = Array.isArray(data) ? data : data.tickets || [];
       if (serverTickets.length > 0) {
-        // Merge server and local tickets
+        // Merge server and local tickets by canonical code/id key (server takes precedence)
         const map = new Map();
-        [...serverTickets, ...localList].forEach(t => map.set(t.id || t.code, t));
+        localList.forEach(t => map.set(getTicketKey(t), t));
+        serverTickets.forEach(t => map.set(getTicketKey(t), t)); // server overwrites local draft
         const merged = Array.from(map.values());
         try {
           localStorage.setItem("statiq_local_tracked_tickets", JSON.stringify(merged));
@@ -475,13 +483,6 @@ export async function lockTrackedTicket(payload) {
   };
 
   try {
-    const raw = localStorage.getItem("statiq_local_tracked_tickets");
-    const existing = raw ? JSON.parse(raw) : [];
-    const updated = [localTicket, ...existing.filter(t => (t.id || t.code) !== (localTicket.id || localTicket.code))];
-    localStorage.setItem("statiq_local_tracked_tickets", JSON.stringify(updated));
-  } catch (e) {}
-
-  try {
     const fullPayload = {
       ...payload,
       profile_id: payload.profile_id || pid
@@ -491,28 +492,59 @@ export async function lockTrackedTicket(payload) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(fullPayload)
     });
-    if (res.ok) return await res.json();
+    if (res.ok) {
+      const serverTicket = await res.json();
+      try {
+        const raw = localStorage.getItem("statiq_local_tracked_tickets");
+        const existing = raw ? JSON.parse(raw) : [];
+        const ticketToSave = serverTicket.id ? serverTicket : localTicket;
+        const key = getTicketKey(ticketToSave);
+        const updated = [ticketToSave, ...existing.filter(t => getTicketKey(t) !== key)];
+        localStorage.setItem("statiq_local_tracked_tickets", JSON.stringify(updated));
+      } catch (e) {}
+      return serverTicket;
+    }
   } catch (err) {
     console.warn("Backend lock failed, ticket saved locally:", err);
   }
+
+  try {
+    const raw = localStorage.getItem("statiq_local_tracked_tickets");
+    const existing = raw ? JSON.parse(raw) : [];
+    const key = getTicketKey(localTicket);
+    const updated = [localTicket, ...existing.filter(t => getTicketKey(t) !== key)];
+    localStorage.setItem("statiq_local_tracked_tickets", JSON.stringify(updated));
+  } catch (e) {}
+
   return localTicket;
 }
 
-export async function deleteTrackedTicket(ticketId) {
+export async function deleteTrackedTicket(ticketId, ticketCode = null) {
   try {
     const raw = localStorage.getItem("statiq_local_tracked_tickets");
     if (raw) {
       const list = JSON.parse(raw);
-      const filtered = list.filter(t => t.id !== ticketId && t.code !== ticketId);
+      const filtered = list.filter(t => {
+        if (ticketId && (t.id === ticketId || t.code === ticketId)) return false;
+        if (ticketCode && ticketCode !== "CUSTOM" && (t.code === ticketCode || t.id === ticketCode)) return false;
+        return true;
+      });
       localStorage.setItem("statiq_local_tracked_tickets", JSON.stringify(filtered));
     }
   } catch (e) {}
 
+  const targetId = ticketId || ticketCode;
   try {
-    const res = await fetch(`${API_BASE_URL}/ticket-tracker/${encodeURIComponent(ticketId)}`, {
-      method: "DELETE"
-    });
-    if (res.ok) return await res.json();
+    if (targetId) {
+      await fetch(`${API_BASE_URL}/ticket-tracker/${encodeURIComponent(targetId)}`, {
+        method: "DELETE"
+      });
+    }
+    if (ticketCode && ticketCode !== targetId && ticketCode !== "CUSTOM") {
+      await fetch(`${API_BASE_URL}/ticket-tracker/${encodeURIComponent(ticketCode)}`, {
+        method: "DELETE"
+      });
+    }
   } catch (err) {
     console.warn("Backend delete unreachable, deleted locally");
   }

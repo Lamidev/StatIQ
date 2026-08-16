@@ -229,11 +229,12 @@ export function evaluatePickLive(sel) {
   if (!sel) return { status: "PENDING", resultText: "--" };
 
   // Prioritize backend settled leg status if already evaluated as WON, LOST, or VOID
-  if (sel.leg_status === "WON" || sel.leg_status === "LOST" || sel.leg_status === "VOID") {
+  if (sel.leg_status === "WON" || sel.leg_status === "LOST" || sel.leg_status === "VOID" || sel.leg_result === "WON" || sel.leg_result === "LOST" || sel.leg_result === "VOID") {
+    const st = sel.leg_status || sel.leg_result;
     const pickName = String(sel.selection_name || sel.selection || sel.original_pick || "").trim();
     return {
-      status: sel.leg_status,
-      resultText: sel.leg_status === "WON" ? (pickName || "Won") : sel.leg_status === "LOST" ? "Lost" : "Void",
+      status: st,
+      resultText: st === "WON" ? (pickName || "Won") : st === "LOST" ? "Lost" : "Void",
     };
   }
 
@@ -247,6 +248,16 @@ export function evaluatePickLive(sel) {
 
   // If score is missing or unparseable
   if (homeScore === null || awayScore === null) {
+    if (sel.leg_status === "WON" || sel.leg_result === "WON") {
+      return { status: "WON", resultText: sel.selection_name || "Won" };
+    }
+    if (sel.leg_status === "LOST" || sel.leg_result === "LOST") {
+      return { status: "LOST", resultText: "Lost" };
+    }
+    if (sel.leg_status === "VOID" || sel.leg_result === "VOID") {
+      return { status: "VOID", resultText: "Void" };
+    }
+    // Unverified score: strictly return PENDING with "--" until score is fetched
     return { status: "PENDING", resultText: "--" };
   }
 
@@ -578,13 +589,23 @@ export function evaluatePickLive(sel) {
 export function evaluateTicketStatus(ticket) {
   if (!ticket) return { status: "RUNNING", isWon: false, isLost: false, isLive: false };
 
+  // If the backend has ALREADY settled this ticket as WON or LOST, RESPECT THE SETTLEMENT!
+  const serverStatus = (ticket.status || "").toUpperCase();
+  if (serverStatus === "WON" || serverStatus === "LOST") {
+    return {
+      status: serverStatus,
+      isWon: serverStatus === "WON",
+      isLost: serverStatus === "LOST",
+      isLive: false
+    };
+  }
+
   const selections = ticket.selections || [];
   if (selections.length === 0) {
-    const rawStatus = (ticket.status || "RUNNING").toUpperCase();
     return {
-      status: rawStatus,
-      isWon: rawStatus === "WON",
-      isLost: rawStatus === "LOST",
+      status: serverStatus || "RUNNING",
+      isWon: serverStatus === "WON",
+      isLost: serverStatus === "LOST",
       isLive: false
     };
   }

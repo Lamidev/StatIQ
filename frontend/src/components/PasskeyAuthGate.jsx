@@ -15,13 +15,13 @@ export default function PasskeyAuthGate({ onAuthenticated, children }) {
     const existing = getUserProfileId();
     const cleanExisting = existing ? existing.trim().toUpperCase() : "";
 
-    const masterKeys = ["THISSLAMI1805", "THISISLAMI1805", "LAMIDEV", "ADMIN", "SUPERADMIN"];
-    if (cleanExisting && masterKeys.includes(cleanExisting)) {
-      const adminObj = { key: cleanExisting, label: "Lami (Admin)", role: "ADMIN", success: true };
+    const MASTER_ADMIN_KEY = "THISSLAMI1805";
+    if (cleanExisting && cleanExisting === MASTER_ADMIN_KEY) {
+      const adminObj = { key: MASTER_ADMIN_KEY, label: "Lami (Admin)", role: "ADMIN", success: true };
       setIsAuthenticated(true);
       setCurrentUser(adminObj);
-      localStorage.setItem("statiq_passkey", cleanExisting);
-      localStorage.setItem("statiq_profile_id", cleanExisting);
+      localStorage.setItem("statiq_passkey", MASTER_ADMIN_KEY);
+      localStorage.setItem("statiq_profile_id", MASTER_ADMIN_KEY);
       if (onAuthenticated) onAuthenticated(adminObj);
       setChecking(false);
       return;
@@ -61,11 +61,11 @@ export default function PasskeyAuthGate({ onAuthenticated, children }) {
     setLoading(true);
     setError(null);
 
-    const masterKeys = ["THISSLAMI1805", "THISISLAMI1805", "LAMIDEV", "ADMIN", "SUPERADMIN"];
-    if (masterKeys.includes(cleanKey)) {
-      const adminObj = { key: cleanKey, label: "Lami (Admin)", role: "ADMIN", success: true };
-      localStorage.setItem("statiq_passkey", cleanKey);
-      localStorage.setItem("statiq_profile_id", cleanKey);
+    const MASTER_ADMIN_KEY = "THISSLAMI1805";
+    if (cleanKey === MASTER_ADMIN_KEY) {
+      const adminObj = { key: MASTER_ADMIN_KEY, label: "Lami (Admin)", role: "ADMIN", success: true };
+      localStorage.setItem("statiq_passkey", MASTER_ADMIN_KEY);
+      localStorage.setItem("statiq_profile_id", MASTER_ADMIN_KEY);
       setIsAuthenticated(true);
       setCurrentUser(adminObj);
       if (onAuthenticated) onAuthenticated(adminObj);
@@ -92,7 +92,7 @@ export default function PasskeyAuthGate({ onAuthenticated, children }) {
   };
 
   const handleQuickAdmin = () => {
-    setPasskeyInput("LAMIDEV");
+    setPasskeyInput("THISSLAMI1805");
   };
 
   if (checking) {

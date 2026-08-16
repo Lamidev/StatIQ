@@ -12,6 +12,8 @@ class Settings(BaseSettings):
     # API-Football (api-football.com) — for corners & halftime stat verification
     API_FOOTBALL_KEY: str = ""  # Set in .env: API_FOOTBALL_KEY=your_key_here
     API_FOOTBALL_BASE_URL: str = "https://v3.football.api-sports.io"
+    # Google AI Studio Gemini API Key (Loaded securely from .env / environment)
+    GEMINI_API_KEY: str = ""
 
     model_config = SettingsConfigDict(
         env_file=str(BASE_DIR / ".env"),

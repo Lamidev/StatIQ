@@ -17,26 +17,29 @@ from app.db.models import AccessPasskey
 
 router = APIRouter()
 
-DEFAULT_ADMIN_KEYS = ["THISSLAMI1805"]
+MASTER_ADMIN_KEY = "THISSLAMI1805"
 
 def _ensure_admin_seed(db: Session):
-    """Ensures only a single master admin key (THISSLAMI1805) exists on startup."""
+    """Ensures only THISSLAMI1805 exists as the admin."""
     try:
-        # Purge legacy and duplicate admin keys if present
         from sqlalchemy import delete
-        db.execute(delete(AccessPasskey).where(AccessPasskey.key.in_(["THISISLAMI1805", "LAMIDEV", "LAMI-ADMIN", "STATIQ-ROOT"])))
+        # Delete any admin record that is not THISSLAMI1805
+        db.execute(delete(AccessPasskey).where((AccessPasskey.role == "ADMIN") & (AccessPasskey.key != MASTER_ADMIN_KEY)))
         
-        # Ensure single THISSLAMI1805 admin exists
-        existing_admin = db.execute(select(AccessPasskey).where(AccessPasskey.key == "THISSLAMI1805")).scalar_one_or_none()
+        # Ensure THISSLAMI1805 exists and is active
+        existing_admin = db.execute(select(AccessPasskey).where(AccessPasskey.key == MASTER_ADMIN_KEY)).scalar_one_or_none()
         if not existing_admin:
             admin_key = AccessPasskey(
-                key="THISSLAMI1805",
+                key=MASTER_ADMIN_KEY,
                 label="Lami (System Admin)",
                 role="ADMIN",
                 is_active=True,
                 created_at=datetime.datetime.utcnow()
             )
             db.add(admin_key)
+        elif not existing_admin.is_active or existing_admin.role != "ADMIN":
+            existing_admin.is_active = True
+            existing_admin.role = "ADMIN"
         db.commit()
     except Exception as e:
         db.rollback()
@@ -68,10 +71,10 @@ def verify_passkey(req: VerifyPasskeyRequest, db: Session = Depends(get_db)):
     # Check database
     passkey_obj = db.execute(select(AccessPasskey).where(AccessPasskey.key == raw_key)).scalar_one_or_none()
 
-    # If it's a default admin key and wasn't in DB yet
-    if not passkey_obj and raw_key in DEFAULT_ADMIN_KEYS:
+    # If it's the master admin key and wasn't in DB yet
+    if not passkey_obj and raw_key == MASTER_ADMIN_KEY:
         passkey_obj = AccessPasskey(
-            key=raw_key,
+            key=MASTER_ADMIN_KEY,
             label="Lami (System Admin)",
             role="ADMIN",
             is_active=True,
@@ -194,7 +197,7 @@ def delete_passkey(key: str, db: Session = Depends(get_db)):
     """
     Deletes an access passkey.
     """
-    if key in DEFAULT_ADMIN_KEYS:
+    if key == MASTER_ADMIN_KEY:
         raise HTTPException(status_code=400, detail="Cannot delete master admin passkey")
 
     p = db.execute(select(AccessPasskey).where(AccessPasskey.key == key)).scalar_one_or_none()

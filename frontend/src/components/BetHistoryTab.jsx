@@ -82,8 +82,18 @@ export default function BetHistoryTab({ externalSelectedTicketId, onClearExterna
   useEffect(() => {
     if (externalSelectedTicketId) {
       setStatusFilter("ALL");
+      const target = String(externalSelectedTicketId).trim().toUpperCase();
+      const findTicket = (list) =>
+        list.find(
+          (t) =>
+            String(t.id || "").toUpperCase() === target ||
+            String(t.code || "").toUpperCase() === target ||
+            (t.id && target.includes(String(t.id))) ||
+            (t.code && target.includes(String(t.code).toUpperCase()))
+        );
+
       if (tickets.length > 0) {
-        const match = tickets.find((t) => t.id === externalSelectedTicketId);
+        const match = findTicket(tickets);
         if (match) {
           setSelectedTicket(match);
           if (onClearExternalTicket) onClearExternalTicket();
@@ -91,13 +101,13 @@ export default function BetHistoryTab({ externalSelectedTicketId, onClearExterna
       } else {
         fetchTrackedTickets().then((data) => {
           const list = Array.isArray(data) ? data : data.tickets || [];
-          const found = list.find((t) => t.id === externalSelectedTicketId);
+          const found = findTicket(list);
           if (found) setSelectedTicket(found);
           if (onClearExternalTicket) onClearExternalTicket();
         });
       }
     }
-  }, [externalSelectedTicketId]);
+  }, [externalSelectedTicketId, tickets]);
 
   // Fast local data refresh every 10s — just re-reads from backend DB cache, cheap
   useEffect(() => {
@@ -135,18 +145,23 @@ export default function BetHistoryTab({ externalSelectedTicketId, onClearExterna
 
   const executeDelete = async () => {
     if (!ticketToDelete) return;
-    const ticketId = ticketToDelete.id || ticketToDelete.code;
+    const ticketId = ticketToDelete.id;
+    const ticketCode = ticketToDelete.code;
     setDeleting(true);
 
     // Instantly remove from local UI state for snappy experience
-    setTickets((prev) => prev.filter((t) => t.id !== ticketId && t.code !== ticketId));
-    if (selectedTicket?.id === ticketId || selectedTicket?.code === ticketId) {
+    setTickets((prev) => prev.filter((t) => {
+      if (ticketId && (t.id === ticketId || t.code === ticketId)) return false;
+      if (ticketCode && ticketCode !== "CUSTOM" && (t.code === ticketCode || t.id === ticketCode)) return false;
+      return true;
+    }));
+    if (selectedTicket?.id === ticketId || (ticketCode && selectedTicket?.code === ticketCode)) {
       setSelectedTicket(null);
     }
     if (onTicketsChanged) onTicketsChanged();
 
     try {
-      await deleteTrackedTicket(ticketId);
+      await deleteTrackedTicket(ticketId, ticketCode);
       setTicketToDelete(null);
       await loadData(true);
     } catch (err) {
@@ -512,11 +527,11 @@ export default function BetHistoryTab({ externalSelectedTicketId, onClearExterna
             {/* Status Filter Tabs (Active / Live / Won / Lost / All) */}
             <div className="flex items-center bg-slate-100 p-1 rounded-xl overflow-x-auto gap-1">
               {[
-                { id: "ACTIVE", label: `Active Staked (${tickets.filter((t) => t.status === "RUNNING" || t.status === "PENDING" || !t.status).length})` },
+                { id: "ACTIVE", label: `Active Staked (${evaluatedTickets.filter((t) => t.status === "RUNNING" || t.status === "PENDING" || !t.status).length})` },
                 { id: "LIVE", label: `Live In-Play (${liveTicketCount})` },
-                { id: "WON", label: `Won (${tickets.filter((t) => t.status === "WON").length})` },
-                { id: "LOST", label: `Lost (${tickets.filter((t) => t.status === "LOST").length})` },
-                { id: "ALL", label: `All History (${tickets.length})` },
+                { id: "WON", label: `Won (${evaluatedTickets.filter((t) => t.status === "WON").length})` },
+                { id: "LOST", label: `Lost (${evaluatedTickets.filter((t) => t.status === "LOST").length})` },
+                { id: "ALL", label: `All History (${evaluatedTickets.length})` },
               ].map((tab) => (
                 <button
                   key={tab.id}

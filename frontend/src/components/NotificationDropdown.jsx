@@ -72,8 +72,8 @@ export default function NotificationDropdown({ onSelectTicket }) {
       }
     }
     setIsOpen(false);
-    if (onSelectTicket && item.ticket_id) {
-      onSelectTicket(item.ticket_id);
+    if (onSelectTicket && (item.ticket_id || item.code)) {
+      onSelectTicket(item.ticket_id || item.code);
     }
   };
 
