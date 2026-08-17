@@ -359,15 +359,18 @@ class SportyBetVerificationEngine(SportsbookProvider):
 
                 # ── 6. Over/Under Goals ───────────────────────────────────────
                 if ("OVER" in t_mkt_upper or "UNDER" in t_mkt_upper or "OVER" in t_sel_upper or "UNDER" in t_sel_upper or "GOALS" in t_mkt_upper) and not ("HANDICAP" in t_mkt_upper or "CORNER" in t_mkt_upper):
-                    if (is_over_under or "OVER" in m_desc or "UNDER" in m_desc) and not any(h in m_desc for h in ["CORNER", "BOOKING", "CARD", "1ST", "2ND", "HANDICAP"]):
+                    if (is_over_under or "OVER" in m_desc or "UNDER" in m_desc) and not any(h in m_desc for h in ["&", "1X2", "DOUBLE", "WINNER", "BOTH", "CORNER", "BOOKING", "CARD", "1ST", "2ND", "HANDICAP", "HALF"]):
                         line_match = True
                         if target_line:
                             line_match = (target_line in m_spec) or (target_line in oc_desc) or (target_line in m_desc)
 
                         if line_match:
-                            if "OVER" in combined_target and "OVER" in oc_desc:
+                            # Ensure outcome is strictly Over or Under, not a combo outcome
+                            is_pure_over = "OVER" in oc_desc and not any(k in oc_desc for k in ["&", "HOME", "AWAY", "DRAW", "1", "2", "X"])
+                            is_pure_under = "UNDER" in oc_desc and not any(k in oc_desc for k in ["&", "HOME", "AWAY", "DRAW", "1", "2", "X"])
+                            if "OVER" in combined_target and (is_pure_over or oc_desc.startswith("OVER")):
                                 return mkt, oc, "MATCHED_OVER_UNDER"
-                            elif "UNDER" in combined_target and "UNDER" in oc_desc:
+                            elif "UNDER" in combined_target and (is_pure_under or oc_desc.startswith("UNDER")):
                                 return mkt, oc, "MATCHED_OVER_UNDER"
 
                 # ── 7. Both Teams To Score (GG/NG) ────────────────────────────

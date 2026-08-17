@@ -604,14 +604,15 @@ class SportyBetAdapter(BookmakerAdapter):
                 m_desc = (mkt.get("desc") or mkt.get("name") or mkt.get("market_name") or "").lower().strip()
                 m_id = str(mkt.get("id") or mkt.get("market_id") or "")
                 spec = str(mkt.get("specifier") or mkt.get("handicap") or "")
-                if (m_id == "18" or "over/under" in m_desc or "total goals" in m_desc) and (line_val in spec or line_val in m_desc):
+                if (m_id == "18" or "over/under" in m_desc or "total goals" in m_desc) and not any(k in m_desc for k in ["&", "1x2", "double", "winner", "both", "team", "half", "corner"]) and (line_val in spec or line_val in m_desc):
                     outcomes = mkt.get("outcomes", [])
                     if isinstance(outcomes, dict): outcomes = list(outcomes.values())
                     for oc in outcomes:
                         o_desc = (oc.get("desc") or oc.get("name") or oc.get("selection_name") or "").lower().strip()
                         o_id = str(oc.get("id") or oc.get("outcome_id") or "")
                         if (is_over and ("over" in o_desc or o_id == "12")) or (not is_over and ("under" in o_desc or o_id == "13")):
-                            return m_id or "18", o_id, target_spec
+                            if not any(k in o_desc for k in ["&", "home", "away", "draw"]):
+                                return m_id or "18", o_id, target_spec
             return "18", "12" if is_over else "13", target_spec
 
         # ── 8. BTTS / GG / NG (Market ID: 29) ─────────────────────────────
