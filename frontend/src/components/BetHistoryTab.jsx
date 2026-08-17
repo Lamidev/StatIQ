@@ -882,104 +882,75 @@ function TicketCard({ ticket, onClick, onDelete }) {
         isLive ? "border-red-300 ring-1 ring-red-100" : "border-slate-200 hover:border-slate-300"
       }`}
     >
-      {/* Top Header: Date, Code, Mode, Live Sticker, Status Badge */}
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-3">
-        <div className="flex items-center gap-2.5">
-          <span className="text-xs font-bold text-slate-500">
-            {ticket.created_at || "Recent Ticket"}
-          </span>
-
-          {/* Live Sticker on Ticket Card */}
-          {isLive && (
-            <span className="bg-red-500/10 text-red-600 border border-red-500/30 px-2.5 py-0.5 rounded-full text-[11px] font-black flex items-center gap-1.5 animate-pulse">
-              <span className="w-2 h-2 rounded-full bg-red-600 animate-ping" />
-              LIVE {liveLegCount > 0 && `(${liveLegCount} IN-PLAY)`}
+      {/* Top Header: Mode Title, Date, Code, Flex, Status & Obvious Delete Button */}
+      <div className="flex items-start justify-between gap-3 border-b border-slate-100 pb-3">
+        <div className="space-y-1 min-w-0">
+          {/* Mode Title in Pure Black Bold Text (NO BOX) + Live Sticker */}
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-xs sm:text-sm font-black text-slate-900 uppercase tracking-wide">
+              {(() => {
+                const m = (ticket.mode || "AUDITOR").toUpperCase();
+                if (m === "SWAP" || m === "HYBRID") return "SWAP MODE";
+                if (m === "REMOVE") return "REMOVE MODE";
+                if (m === "ROLLOVER") return "ROLLOVER MODE";
+                if (m === "BUILDER" || m === "AI_BUILDER" || m === "ACCUMULATOR" || m === "TODAY_GAMES") return "AI BUILDER";
+                return "AUDITOR MODE";
+              })()}
             </span>
-          )}
 
-          {/* Mode Tag */}
-          {(() => {
-            const m = (ticket.mode || "AUDITOR").toUpperCase();
-            if (m === "SWAP" || m === "HYBRID") {
-              return (
-                <span className="text-xs font-black bg-indigo-100 text-indigo-900 border border-indigo-300 px-3 py-1 rounded-lg uppercase tracking-wider flex items-center gap-1.5 shadow-xs">
-                  <RefreshCw className="w-3.5 h-3.5 text-indigo-700" />
-                  <span>SWAP MODE</span>
-                </span>
-              );
-            }
-            if (m === "REMOVE") {
-              return (
-                <span className="text-xs font-black bg-rose-100 text-rose-900 border border-rose-300 px-3 py-1 rounded-lg uppercase tracking-wider flex items-center gap-1.5 shadow-xs">
-                  <Trash2 className="w-3.5 h-3.5 text-rose-700" />
-                  <span>REMOVE MODE</span>
-                </span>
-              );
-            }
-            if (m === "ROLLOVER") {
-              return (
-                <span className="text-xs font-black bg-blue-100 text-blue-900 border border-blue-300 px-3 py-1 rounded-lg uppercase tracking-wider flex items-center gap-1.5 shadow-xs">
-                  <TrendingUp className="w-3.5 h-3.5 text-blue-700" />
-                  <span>ROLLOVER MODE</span>
-                </span>
-              );
-            }
-            if (m === "BUILDER" || m === "AI_BUILDER" || m === "ACCUMULATOR" || m === "TODAY_GAMES") {
-              return (
-                <span className="text-xs font-black bg-amber-100 text-amber-900 border border-amber-300 px-3 py-1 rounded-lg uppercase tracking-wider flex items-center gap-1.5 shadow-xs">
-                  <Target className="w-3.5 h-3.5 text-amber-700" />
-                  <span>AI BUILDER</span>
-                </span>
-              );
-            }
-            return (
-              <span className="text-xs font-black bg-emerald-100 text-emerald-900 border border-emerald-300 px-3 py-1 rounded-lg uppercase tracking-wider flex items-center gap-1.5 shadow-xs">
-                <ShieldCheck className="w-3.5 h-3.5 text-emerald-700" />
-                <span>AUDITOR MODE</span>
+            {/* Live Sticker */}
+            {isLive && (
+              <span className="bg-red-500 text-white px-2 py-0.5 rounded-md text-[10px] font-black uppercase flex items-center gap-1 animate-pulse shrink-0">
+                <span className="w-1.5 h-1.5 rounded-full bg-white animate-ping" />
+                LIVE {liveLegCount > 0 && `(${liveLegCount} IN-PLAY)`}
               </span>
-            );
-          })()}
+            )}
+          </div>
 
-          {ticket.flex_cut && !["OFF", "NONE", "0", ""].includes(String(ticket.flex_cut).toUpperCase().trim()) && (
-            <span className="text-[11px] font-extrabold bg-slate-800 text-emerald-400 px-2.5 py-0.5 rounded-full border border-slate-700 uppercase tracking-wider">
-              Flex: {ticket.flex_cut}
-            </span>
-          )}
+          {/* Subtitle Row: Timestamp, Code, and Active Flex */}
+          <div className="flex items-center gap-2 flex-wrap text-[11px] font-semibold text-slate-500">
+            <span>{ticket.created_at || "Recent Ticket"}</span>
 
-          {ticket.code && (
-            <span className="text-[11px] font-bold text-slate-400 font-mono">
-              Code: {ticket.code}
-            </span>
-          )}
+            {ticket.code && (
+              <span className="font-mono font-bold text-slate-700 bg-slate-100 px-2 py-0.5 rounded-md">
+                Code: {ticket.code}
+              </span>
+            )}
+
+            {ticket.flex_cut && !["OFF", "NONE", "0", ""].includes(String(ticket.flex_cut).toUpperCase().trim()) && (
+              <span className="font-extrabold text-amber-800 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-md text-[10px] uppercase tracking-wider">
+                Flex: {ticket.flex_cut}
+              </span>
+            )}
+          </div>
         </div>
 
-        <div className="flex items-center gap-2">
+        {/* Right Side: Status Badge + Obvious Delete Button */}
+        <div className="flex items-center gap-2 shrink-0 pt-0.5">
           {isWon ? (
-            <div className="flex flex-col items-end">
-              <span className="bg-emerald-100 text-emerald-800 border border-emerald-300 px-3 py-1 rounded-full text-xs font-extrabold flex items-center gap-1">
-                <CheckCircle2 className="w-3.5 h-3.5" /> Won
-              </span>
-            </div>
+            <span className="bg-emerald-100 text-emerald-800 border border-emerald-300 px-3 py-1 rounded-xl text-xs font-black flex items-center gap-1">
+              <CheckCircle2 className="w-3.5 h-3.5" /> Won
+            </span>
           ) : isLost ? (
-            <div className="flex flex-col items-end">
-              <span className="bg-rose-100 text-rose-800 border border-rose-300 px-3 py-1 rounded-full text-xs font-extrabold flex items-center gap-1">
-                <XCircle className="w-3.5 h-3.5" /> Lost
-              </span>
-            </div>
+            <span className="bg-rose-100 text-rose-800 border border-rose-300 px-3 py-1 rounded-xl text-xs font-black flex items-center gap-1">
+              <XCircle className="w-3.5 h-3.5" /> Lost
+            </span>
           ) : isLive ? (
-            <span className="bg-red-100 text-red-800 border border-red-300 px-3 py-1 rounded-full text-xs font-black flex items-center gap-1.5">
-              <Radio className="w-3.5 h-3.5 animate-pulse text-red-600" /> Ongoing / Live
+            <span className="bg-red-100 text-red-800 border border-red-300 px-3 py-1 rounded-xl text-xs font-black flex items-center gap-1.5">
+              <Radio className="w-3.5 h-3.5 animate-pulse text-red-600" /> Ongoing
             </span>
           ) : (
-            <span className="bg-amber-100 text-amber-800 border border-amber-300 px-3 py-1 rounded-full text-xs font-extrabold flex items-center gap-1">
-              <Clock className="w-3.5 h-3.5" /> Running
+            <span className="bg-amber-50 text-amber-900 border border-amber-300 px-3 py-1 rounded-xl text-xs font-black flex items-center gap-1">
+              <Clock className="w-3.5 h-3.5 text-amber-600" /> Running
             </span>
           )}
 
+          {/* Obvious Delete Button with visible background and clear icon */}
           <button
             onClick={(e) => onDelete(ticket, e)}
-            className="p-1.5 text-slate-300 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-all"
+            className="w-8 h-8 rounded-xl bg-slate-100 hover:bg-rose-50 border border-slate-200 hover:border-rose-200 text-slate-500 hover:text-rose-600 flex items-center justify-center transition-all shadow-xs"
             title="Delete Ticket"
+            aria-label="Delete Ticket"
           >
             <Trash2 className="w-4 h-4" />
           </button>
