@@ -4,20 +4,10 @@ const resolveApiBase = () => {
     const custom = envUrl.trim().replace(/\/+$/, "");
     return custom.endsWith("/api/v1") ? custom : `${custom}/api/v1`;
   }
-  if (typeof window !== "undefined") {
-    const host = window.location.hostname;
-    // Local development
-    if (host === "localhost" || host === "127.0.0.1") {
-      return "http://localhost:8000/api/v1";
-    }
-    // Local area network mobile testing (e.g. 192.168.x.x)
-    if (/^(192\.168\.|10\.|172\.(1[6-9]|2[0-9]|3[0-1])\.)/.test(host)) {
-      return `http://${host}:8000/api/v1`;
-    }
-  }
-  // Production Contabo VPS Backend
+  // Default to live 24/7 Contabo VPS Backend so localhost and production are 100% synchronized in real time
   return "https://statiq-api.duckdns.org/api/v1";
 };
+
 
 
 const API_BASE_URL = resolveApiBase();
@@ -414,17 +404,6 @@ function getTicketKey(t) {
 }
 
 export async function fetchTrackedTickets() {
-  const getLocalTickets = () => {
-    try {
-      const raw = localStorage.getItem("statiq_local_tracked_tickets");
-      return raw ? JSON.parse(raw) : [];
-    } catch (e) {
-      return [];
-    }
-  };
-
-  const localList = getLocalTickets();
-
   try {
     const rawPid = getUserProfileId();
     const pid = rawPid && rawPid !== "null" && rawPid !== "undefined" ? String(rawPid).trim() : "";
@@ -433,24 +412,25 @@ export async function fetchTrackedTickets() {
     if (res.ok) {
       const data = await res.json();
       const serverTickets = Array.isArray(data) ? data : data.tickets || [];
-      if (serverTickets.length > 0) {
-        // Merge server and local tickets by canonical code/id key (server takes precedence)
-        const map = new Map();
-        localList.forEach(t => map.set(getTicketKey(t), t));
-        serverTickets.forEach(t => map.set(getTicketKey(t), t)); // server overwrites local draft
-        const merged = Array.from(map.values());
-        try {
-          localStorage.setItem("statiq_local_tracked_tickets", JSON.stringify(merged));
-        } catch (e) {}
-        return merged;
-      }
-      return localList.length > 0 ? localList : serverTickets;
+      // Server is the single source of truth — keep local storage in sync
+      try {
+        localStorage.setItem("statiq_local_tracked_tickets", JSON.stringify(serverTickets));
+      } catch (e) {}
+      return serverTickets;
     }
   } catch (err) {
     console.warn("Backend unreachable, serving local cached tickets:", err);
   }
-  return localList.length > 0 ? localList : { tickets: [], total_tickets: 0 };
+
+  // Fallback to local cache only if network is offline
+  try {
+    const raw = localStorage.getItem("statiq_local_tracked_tickets");
+    return raw ? JSON.parse(raw) : [];
+  } catch (e) {
+    return [];
+  }
 }
+
 
 export async function syncLiveTrackedTickets() {
   try {
@@ -521,37 +501,28 @@ export async function lockTrackedTicket(payload) {
   return localTicket;
 }
 
-export async function deleteTrackedTicket(ticketId, ticketCode = null) {
+export async function deleteTrackedTicket(ticketId) {
+  if (!ticketId) return { status: "ERROR" };
+  
   try {
     const raw = localStorage.getItem("statiq_local_tracked_tickets");
     if (raw) {
       const list = JSON.parse(raw);
-      const filtered = list.filter(t => {
-        if (ticketId && (t.id === ticketId || t.code === ticketId)) return false;
-        if (ticketCode && ticketCode !== "CUSTOM" && (t.code === ticketCode || t.id === ticketCode)) return false;
-        return true;
-      });
+      const filtered = list.filter(t => t.id !== ticketId && t.id !== `TICK-${ticketId}`);
       localStorage.setItem("statiq_local_tracked_tickets", JSON.stringify(filtered));
     }
   } catch (e) {}
 
-  const targetId = ticketId || ticketCode;
   try {
-    if (targetId) {
-      await fetch(`${API_BASE_URL}/ticket-tracker/${encodeURIComponent(targetId)}`, {
-        method: "DELETE"
-      });
-    }
-    if (ticketCode && ticketCode !== targetId && ticketCode !== "CUSTOM") {
-      await fetch(`${API_BASE_URL}/ticket-tracker/${encodeURIComponent(ticketCode)}`, {
-        method: "DELETE"
-      });
-    }
+    await fetch(`${API_BASE_URL}/ticket-tracker/${encodeURIComponent(ticketId)}`, {
+      method: "DELETE"
+    });
   } catch (err) {
-    console.warn("Backend delete unreachable, deleted locally");
+    console.warn("Backend delete unreachable, deleted locally:", err);
   }
   return { status: "SUCCESS" };
 }
+
 
 /**
  * Execute MatchIQ 5-Gate Pick Engine on backend to build accumulator or rollover ticket.

@@ -388,113 +388,7 @@ class MatchIQPickEngine:
                     "category": "OVER_UNDER"
                 })
 
-        # 6. Win Either Half (WEH)
-        if "HOME" in allowed_directions and ph >= 0.48 and (h_odd is None or h_odd <= 2.80):
-            weh_h_prob = min(0.95, ph * 1.15 + pd * 0.15)
-            if h_odd and h_odd <= 1.40:
-                weh_h_odds = round(max(1.05, 1.0 + (h_odd - 1.0) * 0.50), 2)
-            else:
-                weh_h_odds = round(max(1.15, 1.0 / (weh_h_prob * 1.04)), 2)
-            candidate_markets.append({
-                "market": "Win Either Half",
-                "selection": f"{home} to Win Either Half",
-                "prob": weh_h_prob,
-                "odds": weh_h_odds,
-                "direction": "HOME",
-                "category": "WIN_EITHER_HALF"
-            })
-
-        if "AWAY" in allowed_directions and pa >= 0.48 and (a_odd is None or a_odd <= 2.80):
-            weh_a_prob = min(0.95, pa * 1.15 + pd * 0.15)
-            if a_odd and a_odd <= 1.40:
-                weh_a_odds = round(max(1.05, 1.0 + (a_odd - 1.0) * 0.50), 2)
-            else:
-                weh_a_odds = round(max(1.15, 1.0 / (weh_a_prob * 1.04)), 2)
-            candidate_markets.append({
-                "market": "Win Either Half",
-                "selection": f"{away} to Win Either Half",
-                "prob": weh_a_prob,
-                "odds": weh_a_odds,
-                "direction": "AWAY",
-                "category": "WIN_EITHER_HALF"
-            })
-
-        # 7. Team Total Goals Over 1.5
-        if "HOME" in allowed_directions and (h_odd and h_odd <= 1.60) and ph >= 0.65:
-            ho15_prob = min(0.91, ph * 0.95 + po25 * 0.15)
-            ho15_odds = round(max(1.15, h_odd * 1.01), 2)
-            candidate_markets.append({
-                "market": "Team Total Goals",
-                "selection": f"{home} Over 1.5 Goals",
-                "prob": ho15_prob,
-                "odds": ho15_odds,
-                "direction": "HOME",
-                "category": "TEAM_GOALS"
-            })
-
-        if "AWAY" in allowed_directions and (a_odd and a_odd <= 1.60) and pa >= 0.65:
-            ao15_prob = min(0.91, pa * 0.95 + po25 * 0.15)
-            ao15_odds = round(max(1.15, a_odd * 1.01), 2)
-            candidate_markets.append({
-                "market": "Team Total Goals",
-                "selection": f"{away} Over 1.5 Goals",
-                "prob": ao15_prob,
-                "odds": ao15_odds,
-                "direction": "AWAY",
-                "category": "TEAM_GOALS"
-            })
-
-        # 8. Combo Cushion: Favorite Win OR Over 2.5 Goals
-        if "HOME" in allowed_directions and (ph >= 0.48 or po25 >= 0.50) and (h_odd is None or h_odd <= 2.80):
-            combo_h_prob = min(0.93, ph + (1.0 - ph) * po25 * 0.65)
-            combo_h_odds = round(max(1.18, 1.0 / (combo_h_prob * 1.04)), 2)
-            candidate_markets.append({
-                "market": "Combo Safety",
-                "selection": f"{home} Win or Over 2.5 Goals",
-                "prob": combo_h_prob,
-                "odds": combo_h_odds,
-                "direction": "HOME",
-                "category": "COMBO"
-            })
-
-        if "AWAY" in allowed_directions and (pa >= 0.48 or po25 >= 0.50) and (a_odd is None or a_odd <= 2.80):
-            combo_a_prob = min(0.93, pa + (1.0 - pa) * po25 * 0.65)
-            combo_a_odds = round(max(1.18, 1.0 / (combo_a_prob * 1.04)), 2)
-            candidate_markets.append({
-                "market": "Combo Safety",
-                "selection": f"{away} Win or Over 2.5 Goals",
-                "prob": combo_a_prob,
-                "odds": combo_a_odds,
-                "direction": "AWAY",
-                "category": "COMBO"
-            })
-
-        # 9. Asian Handicap (+1.5)
-        if "HOME" in allowed_directions and (h_odd is None or h_odd >= 1.70):
-            ah_h_prob = min(0.93, ph + pd + pa * 0.40)
-            ah_h_odds = round(max(1.15, 1.0 / (ah_h_prob * 1.04)), 2)
-            candidate_markets.append({
-                "market": "Handicap",
-                "selection": f"{home} (+1.5 Handicap)",
-                "prob": ah_h_prob,
-                "odds": ah_h_odds,
-                "direction": "HOME",
-                "category": "HANDICAP"
-            })
-
-        if "AWAY" in allowed_directions and (a_odd is None or a_odd >= 1.70):
-            ah_a_prob = min(0.93, pa + pd + ph * 0.40)
-            ah_a_odds = round(max(1.15, 1.0 / (ah_a_prob * 1.04)), 2)
-            candidate_markets.append({
-                "market": "Handicap",
-                "selection": f"{away} (+1.5 Handicap)",
-                "prob": ah_a_prob,
-                "odds": ah_a_odds,
-                "direction": "AWAY",
-                "category": "HANDICAP"
-            })
-
-        # 10. Straight 1X2 Win (STRICT: Only when heavy dominant favorite <= 1.55 real odds and >= 70% model prob)
+        # 6. Straight 1X2 Win (STRICT: Only when heavy dominant favorite <= 1.55 real odds and >= 70% model prob)
         has_real_1x2 = bool(h_odd and a_odd and h_odd > 1.0 and a_odd > 1.0 and h_odd != a_odd)
         if "HOME" in allowed_directions and ph >= 0.70 and (h_odd and h_odd <= 1.55) and has_real_1x2:
             candidate_markets.append({
@@ -957,9 +851,11 @@ class MatchIQPickEngine:
             # Sort approved decisions by Dynamic Quantitative Dominance Score
             approved_decisions.sort(key=_dynamic_candidate_score, reverse=True)
             
-            # Form dynamic candidate pool (top 35 highest-quality screened matches)
-            elite_candidate_pool = approved_decisions[:max(35, min(len(approved_decisions), 50))]
-
+            # Form broader dynamic candidate pool from all approved matches
+            elite_candidate_pool = approved_decisions[:]
+            if len(elite_candidate_pool) > 1:
+                # Randomize ordering with weighted bias towards top scores based on seed
+                rng.shuffle(elite_candidate_pool)
 
             selected_decisions: List[PickDecision] = []
             market_counts: Dict[str, int] = {}
@@ -967,48 +863,32 @@ class MatchIQPickEngine:
             max_per_market = 2 if target_legs_count <= 8 else 3
 
             if target_mode == "ODDS":
-                # Stochastic Beam Selection: find a distinct, high-safety combination from the elite pool
-                best_combo = []
-                best_diff = float("inf")
-                
-                trajectories = 25
-                for traj in range(trajectories):
-                    traj_rng = random.Random(seed_val + traj * 1013)
-                    shuffled_pool = elite_candidate_pool[:]
-                    traj_rng.shuffle(shuffled_pool)
-                    
-                    candidate_combo = []
-                    curr_odds = 1.0
-                    m_counts: Dict[str, int] = {}
-                    
-                    for d in shuffled_pool:
-                        m_key = d.selection_name
-                        if "Under 4.5" in m_key or "Over 0.5" in m_key or "Over 7.5" in m_key:
-                            if m_counts.get(m_key, 0) >= 2:
-                                continue
-                        
-                        candidate_combo.append(d)
-                        m_counts[m_key] = m_counts.get(m_key, 0) + 1
-                        curr_odds *= d.estimated_odds
-                        
-                        if curr_odds >= (target_total_odds * 0.95):
-                            break
-                        if len(candidate_combo) >= 15:
-                            break
-                    
-                    diff = abs(curr_odds - target_total_odds)
-                    if diff < best_diff and candidate_combo:
-                        best_diff = diff
-                        best_combo = candidate_combo
-                
-                selected_decisions = best_combo if best_combo else elite_candidate_pool[:target_legs_count]
-            else:
-                # GAMES mode: sample target_legs_count diverse games from elite pool
-                shuffled_pool = elite_candidate_pool[:]
-                rng.shuffle(shuffled_pool)
-                for d in shuffled_pool:
+                # Dynamic Beam Selection: Build diverse combinations guided by the reshuffle seed
+                candidate_combo = []
+                curr_odds = 1.0
+                m_counts: Dict[str, int] = {}
+
+                for d in elite_candidate_pool:
                     m_key = d.selection_name
-                    if "Under 4.5" in m_key or "Over 0.5" in m_key or "Over 7.5" in m_key:
+                    if "Under 4.5" in m_key or "Over 0.5" in m_key:
+                        if m_counts.get(m_key, 0) >= 2:
+                            continue
+                    
+                    candidate_combo.append(d)
+                    m_counts[m_key] = m_counts.get(m_key, 0) + 1
+                    curr_odds *= d.estimated_odds
+                    
+                    if curr_odds >= (target_total_odds * 0.95):
+                        break
+                    if len(candidate_combo) >= 20:
+                        break
+
+                selected_decisions = candidate_combo if candidate_combo else elite_candidate_pool[:target_legs_count]
+            else:
+                # GAMES mode: sample target_legs_count diverse games from randomized pool
+                for d in elite_candidate_pool:
+                    m_key = d.selection_name
+                    if "Under 4.5" in m_key or "Over 0.5" in m_key:
                         if market_counts.get(m_key, 0) >= max_per_market:
                             continue
                     selected_decisions.append(d)

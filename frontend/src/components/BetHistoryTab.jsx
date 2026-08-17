@@ -35,7 +35,9 @@ export default function BetHistoryTab({ externalSelectedTicketId, onClearExterna
   // Filters: ACTIVE (Default - Show running & live tickets first), LIVE, WON, LOST, ALL
   const [statusFilter, setStatusFilter] = useState("ACTIVE"); 
   const [dateFilter, setDateFilter] = useState("ALL"); 
+  const [featureFilter, setFeatureFilter] = useState("ALL"); // ALL, AI_BUILDER, ROLLOVER, AUDITOR, REMOVE, SWAP
   const [searchQuery, setSearchQuery] = useState("");
+
 
   // Pagination
   const [currentPage, setCurrentPage] = useState(1);
@@ -143,25 +145,24 @@ export default function BetHistoryTab({ externalSelectedTicketId, onClearExterna
     setTicketToDelete(ticketObj);
   };
 
+  // Feature panel pagination (separate from main list)
+  const [featurePage, setFeaturePage] = useState(1);
+  const featureItemsPerPage = 6;
+
   const executeDelete = async () => {
     if (!ticketToDelete) return;
     const ticketId = ticketToDelete.id;
-    const ticketCode = ticketToDelete.code;
     setDeleting(true);
 
     // Instantly remove from local UI state for snappy experience
-    setTickets((prev) => prev.filter((t) => {
-      if (ticketId && (t.id === ticketId || t.code === ticketId)) return false;
-      if (ticketCode && ticketCode !== "CUSTOM" && (t.code === ticketCode || t.id === ticketCode)) return false;
-      return true;
-    }));
-    if (selectedTicket?.id === ticketId || (ticketCode && selectedTicket?.code === ticketCode)) {
+    setTickets((prev) => prev.filter((t) => t.id !== ticketId));
+    if (selectedTicket?.id === ticketId) {
       setSelectedTicket(null);
     }
     if (onTicketsChanged) onTicketsChanged();
 
     try {
-      await deleteTrackedTicket(ticketId, ticketCode);
+      await deleteTrackedTicket(ticketId);
       setTicketToDelete(null);
       await loadData(true);
     } catch (err) {
@@ -184,6 +185,35 @@ export default function BetHistoryTab({ externalSelectedTicketId, onClearExterna
     };
   });
 
+  const classifyTicket = (t) => {
+    const mode = String(t.mode || "").toUpperCase();
+    const code = String(t.code || "").toUpperCase();
+    const feat = String(t.feature_used || t.feature || "").toUpperCase();
+    const strat = String(t.strategy || "").toUpperCase();
+    const source = String(t.source || "").toUpperCase();
+
+    // ROLLOVER check first — must come before AI_BUILDER
+    if (mode === "ROLLOVER" || strat.includes("ROLLOVER") || feat.includes("ROLLOVER") || feat.includes("1.50") || code.startsWith("ROLLOVER")) {
+      return "ROLLOVER";
+    }
+    // AI Builder: covers new canonical AI_BUILDER + legacy ACCUMULATOR / TODAY_GAMES modes
+    if (
+      mode === "BUILDER" || mode === "AI_BUILDER" || mode === "ACCUMULATOR" || mode === "TODAY_GAMES" ||
+      source === "AI_BUILDER" ||
+      code.startsWith("STATIQ-ACC") || code.startsWith("AI-BUILDER") ||
+      feat.includes("AI BUILDER") || feat.includes("AI TICKET")
+    ) {
+      return "AI_BUILDER";
+    }
+    if (mode === "SWAP" || feat.includes("SWAP")) {
+      return "SWAP";
+    }
+    if (mode === "REMOVE" || feat.includes("REMOVE")) {
+      return "REMOVE";
+    }
+    return "AUDITOR";
+  };
+
   const filteredTickets = evaluatedTickets.filter((t) => {
     const isWon = t.status === "WON";
     const isLost = t.status === "LOST";
@@ -194,6 +224,10 @@ export default function BetHistoryTab({ externalSelectedTicketId, onClearExterna
     if (statusFilter === "ACTIVE" && (isWon || isLost)) return false;
     if (statusFilter === "WON" && !isWon) return false;
     if (statusFilter === "LOST" && !isLost) return false;
+
+    // NOTE: featureFilter is intentionally NOT applied here.
+    // The feature card section above has its own inline ticket panel.
+    // The main list always reflects status/date/search only.
 
     // Date Filter
     if (dateFilter !== "ALL" && t.created_at) {
@@ -271,7 +305,7 @@ export default function BetHistoryTab({ externalSelectedTicketId, onClearExterna
 
       {/* Summary Metrics Cards Bar */}
       {!selectedTicket && (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-2 sm:gap-3">
+        <div className="grid grid-cols-3 gap-2 sm:gap-3">
           <div className="bg-white p-3 sm:p-4 rounded-xl sm:rounded-2xl border border-slate-200 shadow-sm space-y-1">
             <span className="text-[9px] sm:text-[10px] font-extrabold text-slate-400 uppercase tracking-wider block">
               Total Tracked
@@ -286,48 +320,33 @@ export default function BetHistoryTab({ externalSelectedTicketId, onClearExterna
             </div>
           </div>
 
-
-          <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm space-y-1">
-            <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider block">
-              Acca Tickets Won
+          <div className="bg-white p-3 sm:p-4 rounded-xl sm:rounded-2xl border border-slate-200 shadow-sm space-y-1">
+            <span className="text-[9px] sm:text-[10px] font-extrabold text-slate-400 uppercase tracking-wider block">
+              Tickets Won
             </span>
             <div className="flex items-center gap-1.5">
-              <span className="text-xl font-black text-emerald-600">
-                {tickets.filter((t) => t.status === "WON").length} Won
+              <span className="text-lg sm:text-xl font-black text-emerald-600">
+                {tickets.filter((t) => t.status === "WON").length}
               </span>
-              <span className="text-xs text-slate-400 font-extrabold">
+              <span className="text-[10px] sm:text-xs text-slate-400 font-extrabold">
                 / {tickets.filter((t) => t.status === "LOST").length} Lost
               </span>
             </div>
           </div>
 
-          <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm space-y-1">
-            <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider block">
-              Individual Games Won
+          <div className="bg-white p-3 sm:p-4 rounded-xl sm:rounded-2xl border border-slate-200 shadow-sm space-y-1">
+            <span className="text-[9px] sm:text-[10px] font-extrabold text-slate-400 uppercase tracking-wider block">
+              Leg Accuracy
             </span>
             <div className="flex items-center gap-1.5">
-              <span className="text-xl font-black text-emerald-600">
-                {tickets.reduce((acc, t) => acc + (t.selections || []).filter((s) => s.leg_status === "WON").length, 0)}
-              </span>
-              <span className="text-xs text-slate-400 font-extrabold">
-                / {tickets.reduce((acc, t) => acc + (t.selections || []).length, 0)} Matches
-              </span>
-            </div>
-          </div>
-
-          <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm space-y-1">
-            <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider block">
-              Individual Game Win Rate
-            </span>
-            <div className="flex items-center gap-1">
-              <span className="text-xl font-black text-slate-900">
+              <span className="text-lg sm:text-xl font-black text-emerald-600">
                 {(() => {
-                  const total = tickets.reduce((acc, t) => acc + (t.selections || []).length, 0);
-                  const won = tickets.reduce((acc, t) => acc + (t.selections || []).filter((s) => s.leg_status === "WON").length, 0);
-                  return total > 0 ? Math.round((won / total) * 100) : 0;
+                  const totalLegs = tickets.reduce((acc, t) => acc + (t.selections || []).length, 0);
+                  const wonLegs = tickets.reduce((acc, t) => acc + (t.selections || []).filter((s) => s.leg_status === "WON").length, 0);
+                  return totalLegs > 0 ? ((wonLegs / totalLegs) * 100).toFixed(1) : "0.0";
                 })()}%
               </span>
-              <span className="text-xs font-bold text-emerald-600">Accuracy</span>
+              <span className="text-[10px] sm:text-xs font-bold text-slate-400">Win Rate</span>
             </div>
           </div>
         </div>
@@ -335,25 +354,32 @@ export default function BetHistoryTab({ externalSelectedTicketId, onClearExterna
 
       {/* Feature Performance Analytics Comparison Dashboard */}
       {!selectedTicket && evaluatedTickets.length > 0 && (
-        <div className="bg-white p-4 sm:p-5 rounded-2xl border border-slate-200 space-y-3 shadow-sm">
-          <div className="flex items-center justify-between border-b border-slate-100 pb-2.5">
+        <div className="bg-white p-4 sm:p-5 rounded-2xl border border-slate-200 space-y-4 shadow-sm">
+          {/* Header */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-slate-100 pb-3 gap-2">
             <div>
-              <h3 className="text-xs font-black text-slate-900 uppercase tracking-wider flex items-center gap-1.5">
-                <span>📊 Re-Editor & AI Builder Performance Analytics</span>
-                {dateFilter !== "ALL" && (
-                  <span className="text-[10px] bg-slate-100 text-slate-700 px-2 py-0.5 rounded-full font-bold">
-                    {dateFilter}
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-xs font-black uppercase tracking-wider text-slate-800">Feature Mode Filter</span>
+                {featureFilter !== "ALL" && (
+                  <span className="text-[10px] bg-emerald-500 text-white font-black px-2 py-0.5 rounded-full uppercase tracking-wider">
+                    {featureFilter.replace("_", " ")}
                   </span>
                 )}
-              </h3>
-              <p className="text-[11px] text-slate-500">
-                Mutually exclusive win rates and settlement outcomes across AI Ticket Builder, Rollover, and Re-Editor strategies.
-              </p>
+              </div>
+              <p className="text-[11px] text-slate-400 mt-0.5">Click a card to view tickets by strategy.</p>
             </div>
+            {featureFilter !== "ALL" && (
+              <button
+                onClick={() => { setFeatureFilter("ALL"); setCurrentPage(1); setFeaturePage(1); }}
+                className="text-xs text-slate-600 hover:text-slate-900 font-bold flex items-center gap-1.5 bg-slate-100 hover:bg-slate-200 border border-slate-200 px-3 py-1.5 rounded-xl transition-all self-start sm:self-auto cursor-pointer"
+              >
+                Clear Filter (Show All)
+              </button>
+            )}
           </div>
 
+          {/* Feature Cards — 2 cols on mobile, 5 on desktop */}
           {(() => {
-            // Apply current date filter to analytics tickets
             const targetTickets = evaluatedTickets.filter((t) => {
               if (dateFilter !== "ALL" && t.created_at) {
                 const ticketDateStr = t.created_at.split(" ")[0];
@@ -368,141 +394,181 @@ export default function BetHistoryTab({ externalSelectedTicketId, onClearExterna
               return true;
             });
 
-            const classifyTicket = (t) => {
-              const mode = String(t.mode || "").toUpperCase();
-              const code = String(t.code || "").toUpperCase();
-              const feat = String(t.feature_used || t.feature || "").toUpperCase();
-              const strat = String(t.strategy || "").toUpperCase();
-              const source = String(t.source || "").toUpperCase();
-
-              // ROLLOVER check first — must come before AI_BUILDER to prevent mode=ROLLOVER being caught by TODAY_GAMES fallback
-              if (mode === "ROLLOVER" || strat.includes("ROLLOVER") || feat.includes("ROLLOVER") || feat.includes("1.50") || code.startsWith("ROLLOVER")) {
-                return "ROLLOVER";
-              }
-              // AI Builder: covers new canonical AI_BUILDER + legacy ACCUMULATOR / TODAY_GAMES modes
-              if (
-                mode === "BUILDER" || mode === "AI_BUILDER" || mode === "ACCUMULATOR" || mode === "TODAY_GAMES" ||
-                source === "AI_BUILDER" ||
-                code.startsWith("STATIQ-ACC") || code.startsWith("AI-BUILDER") ||
-                feat.includes("AI BUILDER") || feat.includes("AI TICKET")
-              ) {
-                return "AI_BUILDER";
-              }
-              if (mode === "SWAP" || feat.includes("SWAP")) {
-                return "SWAP";
-              }
-              if (mode === "REMOVE" || feat.includes("REMOVE")) {
-                return "REMOVE";
-              }
-              return "AUDITOR";
-            };
-
-            const aiTickets = targetTickets.filter(t => classifyTicket(t) === "AI_BUILDER");
-            const rollTickets = targetTickets.filter(t => classifyTicket(t) === "ROLLOVER");
-            const auditorTickets = targetTickets.filter(t => classifyTicket(t) === "AUDITOR");
-            const removeTickets = targetTickets.filter(t => classifyTicket(t) === "REMOVE");
-            const swapTickets = targetTickets.filter(t => classifyTicket(t) === "SWAP");
-
-            const getStats = (list) => {
+            const getStats = (key) => {
+              const list = targetTickets.filter(t => classifyTicket(t) === key);
               const total = list.length;
               const won = list.filter(t => t.status === "WON").length;
-              const rate = total > 0 ? ((won / total) * 100).toFixed(1) : "0.0";
-              return { total, won, rate };
+              const running = list.filter(t => t.status === "RUNNING" || t.status === "PENDING" || !t.status).length;
+              return { total, won, running, rate: total > 0 ? ((won / total) * 100).toFixed(1) : "0.0" };
             };
 
-            const aiStats = getStats(aiTickets);
-            const rollStats = getStats(rollTickets);
-            const audStats = getStats(auditorTickets);
-            const remStats = getStats(removeTickets);
-            const swapStats = getStats(swapTickets);
+            const featureItems = [
+              { key: "AI_BUILDER", label: "AI Builder", desc: "5-Gate target odds" },
+              { key: "ROLLOVER",   label: "Rollover",   desc: "Compound bankers" },
+              { key: "AUDITOR",    label: "Auditor",    desc: "Code upgrades" },
+              { key: "REMOVE",     label: "Remove",     desc: "Risk reduction" },
+              { key: "SWAP",       label: "Swap",       desc: "High-prob swaps" },
+            ];
+
+            // Tickets for the selected feature panel
+            const panelTickets = featureFilter !== "ALL"
+              ? targetTickets.filter(t => classifyTicket(t) === featureFilter)
+              : [];
+            const panelTotalPages = Math.max(1, Math.ceil(panelTickets.length / featureItemsPerPage));
+            const safeFeaturePage = Math.min(featurePage, panelTotalPages);
+            const panelSlice = panelTickets.slice(
+              (safeFeaturePage - 1) * featureItemsPerPage,
+              safeFeaturePage * featureItemsPerPage
+            );
 
             return (
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2.5 sm:gap-3 text-xs">
-                {/* 1. AI TICKET BUILDER */}
-                <div className="bg-purple-50/70 border border-purple-200 p-3 rounded-xl space-y-1">
-                  <div className="flex items-center justify-between">
-                    <span className="font-extrabold text-purple-900 flex items-center gap-1">
-                      <Sparkles className="w-3.5 h-3.5 text-purple-600" />
-                      <span>AI BUILDER</span>
-                    </span>
-                    <span className="bg-purple-600 text-white text-[10px] font-black px-2 py-0.5 rounded-full">
-                      {aiStats.rate}% Win
-                    </span>
-                  </div>
-                  <p className="text-slate-700 font-extrabold text-sm mt-1">
-                    {aiStats.won} Won <span className="text-slate-400 text-xs font-normal">/ {aiStats.total} Slips</span>
-                  </p>
-                  <p className="text-[10px] text-slate-500">5-Gate target odds accumulator slip engine.</p>
+              <>
+                {/* 2-col on mobile, 5-col on lg */}
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2 sm:gap-2.5">
+                  {featureItems.map((item) => {
+                    const stats = getStats(item.key);
+                    const isActive = featureFilter === item.key;
+                    return (
+                      <button
+                        key={item.key}
+                        type="button"
+                        onClick={() => {
+                          setFeatureFilter(f => f === item.key ? "ALL" : item.key);
+                          setFeaturePage(1);
+                          setCurrentPage(1);
+                        }}
+                        className={`relative text-left p-3 sm:p-3.5 rounded-xl border transition-all cursor-pointer overflow-hidden ${
+                          isActive
+                            ? "bg-slate-900 border-emerald-500 shadow-md ring-1 ring-emerald-400/20"
+                            : "bg-slate-50 border-slate-200 hover:border-slate-300 hover:bg-slate-100"
+                        }`}
+                      >
+                        {/* Top accent bar */}
+                        {isActive && <div className="absolute top-0 left-0 right-0 h-0.5 bg-emerald-500 rounded-t-xl" />}
+
+                        {/* Label + win-rate badge */}
+                        <div className="flex items-start justify-between gap-1 mb-2">
+                          <span className={`text-[11px] sm:text-xs font-black tracking-wide leading-tight ${
+                            isActive ? "text-emerald-400" : "text-slate-700"
+                          }`}>
+                            {item.label}
+                          </span>
+                          <span className={`shrink-0 text-[9px] sm:text-[10px] font-black px-1.5 py-0.5 rounded-full ${
+                            parseFloat(stats.rate) >= 80
+                              ? "bg-emerald-100 text-emerald-700 border border-emerald-200"
+                              : parseFloat(stats.rate) >= 50
+                              ? "bg-blue-100 text-blue-700 border border-blue-200"
+                              : "bg-slate-200 text-slate-500 border border-slate-300"
+                          }`}>
+                            {stats.rate}%
+                          </span>
+                        </div>
+
+                        {/* Won / Total */}
+                        <div className="flex items-baseline gap-1">
+                          <span className={`text-sm sm:text-base font-black ${ isActive ? "text-white" : "text-slate-900" }`}>{stats.won}</span>
+                          <span className={`text-[10px] font-semibold ${ isActive ? "text-slate-400" : "text-slate-400" }`}>/ {stats.total}</span>
+                        </div>
+
+                        {/* Running indicator */}
+                        {stats.running > 0 && (
+                          <span className="mt-1 inline-flex items-center gap-1 text-[9px] sm:text-[10px] font-bold text-amber-500">
+                            <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
+                            {stats.running} active
+                          </span>
+                        )}
+
+                        <p className={`text-[10px] mt-1 truncate ${ isActive ? "text-slate-400" : "text-slate-400" }`}>{item.desc}</p>
+                      </button>
+                    );
+                  })}
                 </div>
 
-                {/* 2. ROLLOVER STRATEGY */}
-                <div className="bg-amber-50/70 border border-amber-200 p-3 rounded-xl space-y-1">
-                  <div className="flex items-center justify-between">
-                    <span className="font-extrabold text-amber-900 flex items-center gap-1">
-                      <TrendingUp className="w-3.5 h-3.5 text-amber-600" />
-                      <span>ROLLOVER MODE</span>
-                    </span>
-                    <span className="bg-amber-600 text-white text-[10px] font-black px-2 py-0.5 rounded-full">
-                      {rollStats.rate}% Win
-                    </span>
-                  </div>
-                  <p className="text-slate-700 font-extrabold text-sm mt-1">
-                    {rollStats.won} Won <span className="text-slate-400 text-xs font-normal">/ {rollStats.total} Slips</span>
-                  </p>
-                  <p className="text-[10px] text-slate-500">Ultra-safe 1.50x daily compound banker legs.</p>
-                </div>
+                {/* Inline ticket panel for selected feature */}
+                {featureFilter !== "ALL" && (
+                  <div className="mt-2 space-y-2">
+                    {panelTickets.length === 0 ? (
+                      <div className="bg-slate-50 border border-slate-200 rounded-xl p-5 text-center">
+                        <p className="text-xs text-slate-400 font-semibold">No tickets for this feature yet.</p>
+                      </div>
+                    ) : (
+                      <>
+                        {panelSlice.map((t) => (
+                          <button
+                            key={t.id || t.code}
+                            type="button"
+                            onClick={() => setSelectedTicket(t)}
+                            className="w-full text-left bg-slate-50 hover:bg-slate-100 border border-slate-200 hover:border-slate-300 rounded-xl p-3 sm:p-4 transition-all cursor-pointer"
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="min-w-0">
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <span className="text-xs font-black text-slate-900 truncate">
+                                    {t.code && t.code !== "CUSTOM" && t.code !== "AI-BUILDER-TICKET" ? t.code : (t.id || "").replace("TICK-", "").substring(0, 12)}
+                                  </span>
+                                  <span className={`text-[9px] font-black px-1.5 py-0.5 rounded-full uppercase ${
+                                    t.status === "WON" ? "bg-emerald-100 text-emerald-700 border border-emerald-200" :
+                                    t.status === "LOST" ? "bg-red-100 text-red-700 border border-red-200" :
+                                    "bg-amber-100 text-amber-700 border border-amber-200"
+                                  }`}>
+                                    {t.status === "WON" ? "Won" : t.status === "LOST" ? "Lost" : "Running"}
+                                  </span>
+                                </div>
+                                <p className="text-[10px] text-slate-500 mt-0.5">
+                                  {(t.selections || []).length} legs · @{Number(t.total_odds || 0).toFixed(2)} odds
+                                  {t.created_at ? ` · ${t.created_at.split(" ")[0]}` : ""}
+                                </p>
+                              </div>
+                              <div className="text-right shrink-0">
+                                <p className="text-xs font-black text-slate-900">₦{Number(t.stake || 0).toLocaleString()}</p>
+                                <p className="text-[10px] text-slate-400">stake</p>
+                              </div>
+                            </div>
+                          </button>
+                        ))}
 
-                {/* 3. AUDITOR MODE */}
-                <div className="bg-emerald-50/70 border border-emerald-200 p-3 rounded-xl space-y-1">
-                  <div className="flex items-center justify-between">
-                    <span className="font-extrabold text-emerald-900 flex items-center gap-1">
-                      <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
-                      <span>AUDITOR MODE</span>
-                    </span>
-                    <span className="bg-emerald-600 text-white text-[10px] font-black px-2 py-0.5 rounded-full">
-                      {audStats.rate}% Win
-                    </span>
+                        {/* Feature panel pagination */}
+                        {panelTotalPages > 1 && (
+                          <div className="flex items-center justify-between gap-2 pt-1">
+                            <span className="text-[11px] text-slate-500 font-semibold">
+                              {(safeFeaturePage - 1) * featureItemsPerPage + 1}–{Math.min(safeFeaturePage * featureItemsPerPage, panelTickets.length)} of {panelTickets.length}
+                            </span>
+                            <div className="flex items-center gap-1">
+                              <button
+                                disabled={safeFeaturePage === 1}
+                                onClick={() => setFeaturePage(p => Math.max(1, p - 1))}
+                                className="px-2.5 py-1 rounded-lg border border-slate-200 text-[11px] font-extrabold text-slate-600 disabled:opacity-40 hover:bg-slate-100 transition-all cursor-pointer"
+                              >
+                                Prev
+                              </button>
+                              {Array.from({ length: panelTotalPages }, (_, i) => i + 1).map(p => (
+                                <button
+                                  key={p}
+                                  onClick={() => setFeaturePage(p)}
+                                  className={`w-7 h-7 rounded-lg text-[11px] font-black transition-all cursor-pointer ${
+                                    safeFeaturePage === p
+                                      ? "bg-slate-900 text-white"
+                                      : "border border-slate-200 text-slate-600 hover:bg-slate-100"
+                                  }`}
+                                >
+                                  {p}
+                                </button>
+                              ))}
+                              <button
+                                disabled={safeFeaturePage === panelTotalPages}
+                                onClick={() => setFeaturePage(p => Math.min(panelTotalPages, p + 1))}
+                                className="px-2.5 py-1 rounded-lg border border-slate-200 text-[11px] font-extrabold text-slate-600 disabled:opacity-40 hover:bg-slate-100 transition-all cursor-pointer"
+                              >
+                                Next
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </>
+                    )}
                   </div>
-                  <p className="text-slate-700 font-extrabold text-sm mt-1">
-                    {audStats.won} Won <span className="text-slate-400 text-xs font-normal">/ {audStats.total} Slips</span>
-                  </p>
-                  <p className="text-[10px] text-slate-500">Strictly upgrades original booking code picks.</p>
-                </div>
-
-                {/* 4. REMOVE MODE */}
-                <div className="bg-rose-50/70 border border-rose-200 p-3 rounded-xl space-y-1">
-                  <div className="flex items-center justify-between">
-                    <span className="font-extrabold text-rose-900 flex items-center gap-1">
-                      <Trash2 className="w-3.5 h-3.5 text-rose-600" />
-                      <span>REMOVE MODE</span>
-                    </span>
-                    <span className="bg-rose-600 text-white text-[10px] font-black px-2 py-0.5 rounded-full">
-                      {remStats.rate}% Win
-                    </span>
-                  </div>
-                  <p className="text-slate-700 font-extrabold text-sm mt-1">
-                    {remStats.won} Won <span className="text-slate-400 text-xs font-normal">/ {remStats.total} Slips</span>
-                  </p>
-                  <p className="text-[10px] text-slate-500">Drops high-risk legs without adding substitutes.</p>
-                </div>
-
-                {/* 5. SWAP MODE */}
-                <div className="bg-indigo-50/70 border border-indigo-200 p-3 rounded-xl space-y-1">
-                  <div className="flex items-center justify-between">
-                    <span className="font-extrabold text-indigo-900 flex items-center gap-1">
-                      <RefreshCw className="w-3.5 h-3.5 text-indigo-600" />
-                      <span>SWAP MODE</span>
-                    </span>
-                    <span className="bg-indigo-600 text-white text-[10px] font-black px-2 py-0.5 rounded-full">
-                      {swapStats.rate}% Win
-                    </span>
-                  </div>
-                  <p className="text-slate-700 font-extrabold text-sm mt-1">
-                    {swapStats.won} Won <span className="text-slate-400 text-xs font-normal">/ {swapStats.total} Slips</span>
-                  </p>
-                  <p className="text-[10px] text-slate-500">Swaps risky games with high-probability European picks.</p>
-                </div>
-              </div>
+                )}
+              </>
             );
           })()}
         </div>

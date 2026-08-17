@@ -495,7 +495,13 @@ class SportyBetAdapter(BookmakerAdapter):
                          "home team total" in m_lower or "away team total" in m_lower or
                          (has_home_word and ("over" in m_lower or "under" in m_lower)) or
                          (has_away_word and ("over" in m_lower or "under" in m_lower)))
-        if is_team_goals and not any(k in m_lower for k in ["double chance", "win either half"]):
+        # CRITICAL: exclude Win Either Half and Compound OR from team-goals branch
+        _is_either_half = "either half" in m_lower or "either half" in s_lower
+        _is_compound_or = ("or over" in s_lower or "win or over" in s_lower or
+                           "or over" in m_lower or "win or over" in m_lower or
+                           "home or over" in s_lower or "home or over" in m_lower or
+                           "away or over" in s_lower or "away or over" in m_lower)
+        if is_team_goals and not any(k in m_lower for k in ["double chance", "win either half"]) and not _is_either_half and not _is_compound_or:
             is_away = "away" in m_lower or "away" in s_lower or (has_away_word and not has_home_word)
             target_m_id = "21" if is_away else "20"
             line_match = re.search(r"(\d+\.5|\d+)", s_lower + " " + m_lower)
@@ -513,8 +519,13 @@ class SportyBetAdapter(BookmakerAdapter):
             return target_m_id, "12" if is_over else "13", target_spec
 
         # ── 4. Win Either Half (Home: 73, Away: 74) ───────────────────────
-        if "either half" in m_lower or "either half" in s_lower or "win either half" in s_lower:
-            is_away = "away" in m_lower or "away" in s_lower or "(2)" in s_lower or (has_away_word and not has_home_word)
+        if _is_either_half or "win either half" in s_lower:
+            is_away = (
+                "away" in m_lower or "away" in s_lower or "(2)" in s_lower or
+                (has_away_word and not has_home_word)
+            )
+            if has_home_word and not has_away_word:
+                is_away = False
             target_m_id = "74" if is_away else "73"
             for mkt in m_list:
                 m_id = str(mkt.get("id") or mkt.get("market_id") or "")
@@ -523,15 +534,30 @@ class SportyBetAdapter(BookmakerAdapter):
                     if isinstance(outcomes, dict): outcomes = list(outcomes.values())
                     if outcomes:
                         return target_m_id, str(outcomes[0].get("id") or outcomes[0].get("outcome_id") or "75"), None
-            return target_m_id, "75", None
+            # Fallback to universally accepted Double Chance 1X or X2 on SportyBet
+            return "10", "11" if is_away else "9", None
 
+        # ── 5. Compound OR / Combo Safety (Home or Over 2.5 / Away or Over 2.5) ─
+        if _is_compound_or and "2.5" in (s_lower + " " + m_lower):
+            is_away = "away" in m_lower or "away" in s_lower or (has_away_word and not has_home_word)
+            for mkt in m_list:
+                m_desc = (mkt.get("desc") or mkt.get("name") or "").lower()
+                m_id = str(mkt.get("id") or mkt.get("market_id") or "")
+                if m_id == "62" or "or over" in m_desc or "win or over" in m_desc:
+                    for oc in (mkt.get("outcomes") or []):
+                        o_desc = (oc.get("desc") or oc.get("name") or "").lower()
+                        o_id = str(oc.get("id") or oc.get("outcome_id") or "")
+                        if (is_away and ("away" in o_desc or o_id in ("2", "3"))) or (not is_away and ("home" in o_desc or o_id == "1")):
+                            return m_id or "62", o_id, None
+            # Fallback to universally accepted Double Chance 1X or X2 on SportyBet
+            return "10", "11" if is_away else "9", None
 
-        # ── 5. Asian Handicap / Handicap ──────────────────────────────────
+        # ── 6. Asian Handicap / Handicap ──────────────────────────────────
         if "handicap" in m_lower or "asian handicap" in m_lower:
             is_away = "away" in s_lower or "(2)" in s_lower or has_away_word
-            target_m_id = "16"
             hcp_match = re.search(r"([+-]?\d+\.?\d*)", s_lower + " " + m_lower)
-            hcp_val = hcp_match.group(1) if hcp_match else "+1.5"
+            hcp_raw = hcp_match.group(1) if hcp_match else "1.5"
+            hcp_val = hcp_raw.replace("+", "")
             target_spec = f"hcp={hcp_val}"
             for mkt in m_list:
                 m_id = str(mkt.get("id") or mkt.get("market_id") or "")
@@ -540,7 +566,9 @@ class SportyBetAdapter(BookmakerAdapter):
                         o_id = str(oc.get("id") or oc.get("outcome_id") or "")
                         if (is_away and o_id in ("3", "away", "2")) or (not is_away and o_id in ("1", "home")):
                             return m_id, o_id, target_spec
-            return "16", "3" if is_away else "1", target_spec
+            # Fallback to universally accepted Double Chance 1X or X2 on SportyBet
+            return "10", "11" if is_away else "9", None
+
 
         # ── 6. Full-Time Double Chance (Market ID: 10) ───────────────────
         if "double chance" in m_lower or "dc" in m_lower or "1x" in s_lower or "x2" in s_lower or "12" in s_lower or "or draw" in s_lower or "home/draw" in s_lower or "home or away" in s_lower:

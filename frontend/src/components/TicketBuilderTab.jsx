@@ -52,16 +52,14 @@ export default function TicketBuilderTab() {
     if (!isSilent) setTodayLoading(false);
   };
 
-  // Background polling every 45s to auto-draft started games
+  // Dynamic background polling every 30s to keep SportyBet live match count 100% fresh in real-time
   useEffect(() => {
-    if (builderMode === "TODAY_GAMES") {
-      loadTodayGames(todayDayFilter);
-      const pollTimer = setInterval(() => {
-        loadTodayGames(todayDayFilter, true);
-      }, 45000);
-      return () => clearInterval(pollTimer);
-    }
-  }, [builderMode, todayDayFilter]);
+    loadTodayGames(todayDayFilter, true);
+    const pollTimer = setInterval(() => {
+      loadTodayGames(todayDayFilter, true);
+    }, 30000);
+    return () => clearInterval(pollTimer);
+  }, [todayDayFilter]);
 
 
   // Helper to extract comprehensive pick options (1X2, DC, O/U) for any match leg
@@ -284,8 +282,7 @@ export default function TicketBuilderTab() {
     "DOUBLE_CHANCE",
     "OVER_UNDER",
     "TEAM_GOALS",
-    "WIN_EITHER_HALF",
-    "COMBO"
+    "1X2"
   ]);
 
 
@@ -950,14 +947,38 @@ export default function TicketBuilderTab() {
         </div>
       )}
 
-      {/* Header Banner */}
-      <div className="bg-white p-4 sm:p-6 rounded-xl sm:rounded-2xl border border-slate-200 shadow-sm">
-        <h2 className="text-base sm:text-xl font-extrabold text-slate-900">
-          AI Ticket & Rollover Builder
-        </h2>
-        <p className="text-[11px] sm:text-xs text-slate-500 mt-1">
-          Build target odds accumulators or generate <strong>Multi-Day Daily Rollover Strategies</strong> with StatIQ live 2026/27 prediction models.
-        </p>
+      {/* Header Banner with Dynamic Live SportyBet Match Counter */}
+      <div className="bg-white p-4 sm:p-6 rounded-xl sm:rounded-2xl border border-slate-200 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div>
+          <h2 className="text-base sm:text-xl font-extrabold text-slate-900">
+            AI Ticket & Rollover Builder
+          </h2>
+          <p className="text-[11px] sm:text-xs text-slate-500 mt-1">
+            Build target odds accumulators or generate <strong>Multi-Day Daily Rollover Strategies</strong> with StatIQ live 2026/27 prediction models.
+          </p>
+        </div>
+
+        {/* Real-Time Live SportyBet Match Badge */}
+        <div className="flex items-center gap-2 self-start sm:self-auto flex-shrink-0">
+          <button
+            type="button"
+            onClick={() => loadTodayGames(todayDayFilter)}
+            title="Click to refresh live SportyBet match list"
+            className="inline-flex items-center gap-2.5 px-3.5 py-2 rounded-xl bg-slate-900 text-white hover:bg-slate-800 border border-slate-800 transition-all shadow-xs cursor-pointer group"
+          >
+            <span className="relative flex h-2.5 w-2.5">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
+            </span>
+            <div className="text-left">
+              <div className="text-[9px] font-bold text-slate-400 uppercase tracking-wider leading-none">SportyBet Live Board</div>
+              <div className="text-xs font-black text-white mt-0.5">
+                {todayData ? `${todayData.total_matches} Today's Matches` : "Syncing live matches..."}
+              </div>
+            </div>
+            <RefreshCw className={`w-3.5 h-3.5 text-slate-400 group-hover:text-white transition-colors ml-1 ${todayLoading ? "animate-spin" : ""}`} />
+          </button>
+        </div>
       </div>
 
       {/* Mode Selector Tabs */}
@@ -972,6 +993,11 @@ export default function TicketBuilderTab() {
         >
           <Calendar className="w-3.5 h-3.5 flex-shrink-0" />
           <span className="truncate">Today's Games</span>
+          {todayData?.total_matches > 0 && (
+            <span className="text-[9px] font-black px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300">
+              {todayData.total_matches}
+            </span>
+          )}
         </button>
 
         <button
@@ -1570,7 +1596,7 @@ export default function TicketBuilderTab() {
                   <label className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider block mb-2">Match Schedule Window</label>
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                     {[
-                      { id: "TODAY", label: "Today's Games", sub: "Matches playing today" },
+                      { id: "TODAY", label: "Today's Games", sub: todayData ? `${todayData.total_matches} SportyBet matches` : "Matches playing today" },
                       { id: "NEXT_24H", label: "Next 24 Hours", sub: "Upcoming 24h slate" },
                       { id: "WEEKEND", label: "Weekend Combined", sub: "Saturday & Sunday" },
                       { id: "NEXT_7D", label: "Upcoming 7 Days", sub: "Full week fixture pool" },
@@ -1762,9 +1788,6 @@ export default function TicketBuilderTab() {
                       { id: "DOUBLE_CHANCE", label: "Double Chance (1X/12/X2)" },
                       { id: "OVER_UNDER", label: "Over/Under Goals" },
                       { id: "TEAM_GOALS", label: "Team Total Goals" },
-                      { id: "WIN_EITHER_HALF", label: "Win Either Half" },
-                      { id: "COMBO", label: "Win or Over 2.5 Combo" },
-                      { id: "HANDICAP", label: "Asian Handicap (+1.5)" },
                       { id: "1X2", label: "1X2 Match Result" },
                     ].map(m => {
                       const isSelected = selectedMarketCategories.includes(m.id);
@@ -1965,37 +1988,55 @@ export default function TicketBuilderTab() {
                               {sel.home_team} vs {sel.away_team}
                             </span>
                             
-                            {/* Interactive Pick Re-selector + 1-Click AI Alt Button */}
-                            <div className="flex items-center gap-2 mt-1.5 flex-wrap">
-                              <span className="text-[11px] text-slate-500 font-bold">Pick:</span>
-                              <select
-                                value={sel.selection_name || sel.selection || sel.pick}
-                                onChange={(e) => {
-                                  const chosenName = e.target.value;
-                                  const opts = getAvailablePicksForLeg(sel);
-                                  const matchOpt = opts.find(o => o.name === chosenName || o.label === chosenName) || { name: chosenName, odds: sel.estimated_odds || sel.odds || 1.30, prob: sel.model_probability || 0.85 };
-                                  handleOverrideLegPick(scn.scenario_id, sIdx, matchOpt);
-                                }}
-                                className="bg-white border border-slate-300 text-slate-900 font-extrabold text-xs rounded-lg px-2.5 py-1 focus:outline-none focus:ring-2 focus:ring-slate-900 cursor-pointer shadow-2xs hover:border-slate-400 transition-all max-w-[240px] truncate"
-                              >
-                                {getAvailablePicksForLeg(sel).map((opt) => (
-                                  <option key={opt.name} value={opt.name}>
-                                    {opt.label} — @{opt.odds}
-                                  </option>
-                                ))}
-                              </select>
+                            {/* Assigned Pick Banner (Full Text & Clear Legibility) */}
+                            <div className="mt-2 bg-white rounded-xl p-2.5 border border-slate-200 shadow-2xs space-y-2">
+                              <div className="flex items-center justify-between gap-2 flex-wrap">
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <span className="text-[10px] font-black px-2 py-0.5 rounded bg-emerald-100 text-emerald-900 border border-emerald-300 uppercase tracking-wider">
+                                    Assigned Pick
+                                  </span>
+                                  <span className="text-xs font-black text-slate-900 leading-snug">
+                                    {sel.selection_name || sel.selection || sel.pick}
+                                  </span>
+                                </div>
+                                <span className="text-xs font-black text-slate-900 bg-slate-100 px-2.5 py-0.5 rounded-lg border border-slate-200">
+                                  @{(sel.estimated_odds || sel.odds || 1.30).toFixed(2)}
+                                </span>
+                              </div>
 
-                              <button
-                                type="button"
-                                onClick={() => handleCycleNextAiPick(scn.scenario_id, sIdx, sel)}
-                                className="px-2 py-1 bg-white hover:bg-slate-100 text-slate-700 text-[11px] font-bold rounded-lg border border-slate-300 flex items-center gap-1 transition-all shadow-2xs cursor-pointer"
-                                title="Click to ask AI for a more favorable / alternative market pick for this match"
-                              >
-                                <Sparkles className="w-3 h-3 text-indigo-600" />
-                                <span>AI Alt</span>
-                              </button>
+                              {/* Interactive Pick Re-selector + 1-Click AI Alt Button */}
+                              <div className="flex items-center gap-2 pt-1 border-t border-slate-100 flex-wrap">
+                                <span className="text-[11px] text-slate-500 font-bold">Switch Market:</span>
+                                <select
+                                  value={sel.selection_name || sel.selection || sel.pick}
+                                  onChange={(e) => {
+                                    const chosenName = e.target.value;
+                                    const opts = getAvailablePicksForLeg(sel);
+                                    const matchOpt = opts.find(o => o.name === chosenName || o.label === chosenName) || { name: chosenName, odds: sel.estimated_odds || sel.odds || 1.30, prob: sel.model_probability || 0.85 };
+                                    handleOverrideLegPick(scn.scenario_id, sIdx, matchOpt);
+                                  }}
+                                  className="bg-slate-50 border border-slate-300 text-slate-900 font-bold text-xs rounded-lg px-2 py-1 focus:outline-none focus:ring-2 focus:ring-slate-900 cursor-pointer shadow-2xs hover:border-slate-400 transition-all flex-1 min-w-[180px]"
+                                >
+                                  {getAvailablePicksForLeg(sel).map((opt) => (
+                                    <option key={opt.name} value={opt.name}>
+                                      {opt.label} — @{opt.odds}
+                                    </option>
+                                  ))}
+                                </select>
+
+                                <button
+                                  type="button"
+                                  onClick={() => handleCycleNextAiPick(scn.scenario_id, sIdx, sel)}
+                                  className="px-2.5 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-[11px] font-extrabold rounded-lg border border-indigo-200 flex items-center gap-1 transition-all shadow-2xs cursor-pointer"
+                                  title="Click to ask AI for a more favorable / alternative market pick for this match"
+                                >
+                                  <Sparkles className="w-3.5 h-3.5 text-indigo-600" />
+                                  <span>AI Alt</span>
+                                </button>
+                              </div>
                             </div>
                           </div>
+
 
                           <div className="flex items-center space-x-3">
                             <div className="text-right">
@@ -2212,37 +2253,55 @@ export default function TicketBuilderTab() {
                         {p.home_team} vs {p.away_team}
                       </span>
                       
-                      {/* Interactive Pick Re-selector + 1-Click AI Alt Button */}
-                      <div className="flex items-center gap-2 mt-1.5 flex-wrap">
-                        <span className="text-[11px] text-slate-500 font-bold">Pick:</span>
-                        <select
-                          value={p.selection_name || p.selection || p.pick}
-                          onChange={(e) => {
-                            const chosenName = e.target.value;
-                            const opts = getAvailablePicksForLeg(p);
-                            const matchOpt = opts.find(o => o.name === chosenName || o.label === chosenName) || { name: chosenName, odds: p.estimated_odds || p.odds || 1.30, prob: p.model_probability || 0.85 };
-                            handleOverrideRolloverPick(idx, matchOpt);
-                          }}
-                          className="bg-white border border-slate-300 text-slate-900 font-extrabold text-xs rounded-lg px-2.5 py-1 focus:outline-none focus:ring-2 focus:ring-slate-900 cursor-pointer shadow-2xs hover:border-slate-400 transition-all max-w-[240px] truncate"
-                        >
-                          {getAvailablePicksForLeg(p).map((opt) => (
-                            <option key={opt.name} value={opt.name}>
-                              {opt.label} — @{opt.odds}
-                            </option>
-                          ))}
-                        </select>
+                      {/* Assigned Pick Banner (Full Text & Clear Legibility) */}
+                      <div className="mt-2 bg-white rounded-xl p-2.5 border border-slate-200 shadow-2xs space-y-2">
+                        <div className="flex items-center justify-between gap-2 flex-wrap">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="text-[10px] font-black px-2 py-0.5 rounded bg-amber-100 text-amber-900 border border-amber-300 uppercase tracking-wider">
+                              Assigned Pick
+                            </span>
+                            <span className="text-xs font-black text-slate-900 leading-snug">
+                              {p.selection_name || p.selection || p.pick}
+                            </span>
+                          </div>
+                          <span className="text-xs font-black text-slate-900 bg-slate-100 px-2.5 py-0.5 rounded-lg border border-slate-200">
+                            @{oddsVal.toFixed(2)}
+                          </span>
+                        </div>
 
-                        <button
-                          type="button"
-                          onClick={() => handleCycleNextRolloverAiPick(idx, p)}
-                          className="px-2 py-1 bg-white hover:bg-slate-100 text-slate-700 text-[11px] font-bold rounded-lg border border-slate-300 flex items-center gap-1 transition-all shadow-2xs cursor-pointer"
-                          title="Automatically cycle to the next best mathematically vetted AI pick for this match"
-                        >
-                          <RotateCcw className="w-3 h-3 text-slate-500" />
-                          <span>AI Alt</span>
-                        </button>
+                        {/* Interactive Pick Re-selector + 1-Click AI Alt Button */}
+                        <div className="flex items-center gap-2 pt-1 border-t border-slate-100 flex-wrap">
+                          <span className="text-[11px] text-slate-500 font-bold">Switch Market:</span>
+                          <select
+                            value={p.selection_name || p.selection || p.pick}
+                            onChange={(e) => {
+                              const chosenName = e.target.value;
+                              const opts = getAvailablePicksForLeg(p);
+                              const matchOpt = opts.find(o => o.name === chosenName || o.label === chosenName) || { name: chosenName, odds: p.estimated_odds || p.odds || 1.30, prob: p.model_probability || 0.85 };
+                              handleOverrideRolloverPick(idx, matchOpt);
+                            }}
+                            className="bg-slate-50 border border-slate-300 text-slate-900 font-bold text-xs rounded-lg px-2 py-1 focus:outline-none focus:ring-2 focus:ring-slate-900 cursor-pointer shadow-2xs hover:border-slate-400 transition-all flex-1 min-w-[180px]"
+                          >
+                            {getAvailablePicksForLeg(p).map((opt) => (
+                              <option key={opt.name} value={opt.name}>
+                                {opt.label} — @{opt.odds}
+                              </option>
+                            ))}
+                          </select>
+
+                          <button
+                            type="button"
+                            onClick={() => handleCycleNextRolloverAiPick(idx, p)}
+                            className="px-2.5 py-1 bg-amber-50 hover:bg-amber-100 text-amber-800 text-[11px] font-extrabold rounded-lg border border-amber-200 flex items-center gap-1 transition-all shadow-2xs cursor-pointer"
+                            title="Automatically cycle to the next best mathematically vetted AI pick for this match"
+                          >
+                            <RotateCcw className="w-3.5 h-3.5 text-amber-600" />
+                            <span>AI Alt</span>
+                          </button>
+                        </div>
                       </div>
                     </div>
+
 
                     <div className="flex items-center space-x-3 flex-shrink-0">
                       <div className="text-right">

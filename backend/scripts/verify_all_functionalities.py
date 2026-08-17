@@ -18,14 +18,23 @@ test_submarkets = [
     ("2nd Half - Double Chance", "Away or Draw", "Narpes Kraft", "SJK Akatemia/2", "60", "11"),
     ("1st Half - Double Chance", "Home or Away", "Liverpool", "Como 1907", "41", "10"),
     ("Salzburg Over/Under", "Over 1.5", "WSG Tirol", "Salzburg", "21", "12"),
+    # Win Either Half - generic labels
     ("Home Team to Win Either Half", "Yes", "SK Brann", "HamKam", "73", "75"),
     ("Away Team to Win Either Half", "Yes", "RC Lens", "PSG", "74", "75"),
+    # Win Either Half - team name embedded in pick (the real-world format StatIQ uses)
+    ("Win Either Half", "KI Klaksvik to Win Either Half", "AB Argir", "KI Klaksvik", "74", "75"),
+    ("Win Either Half", "BK Hacken to Win Either Half", "BK Hacken", "Halmstads BK", "73", "75"),
+    ("Win Either Half", "Broendby IF to Win Either Half", "Broendby IF", "SonderjyskE", "73", "75"),
+    # Compound OR - team name embedded in pick
+    ("Combo Safety", "Cerro Porteno Asuncion Win or Over 2.5 Goals", "Cerro Porteno Asuncion", "Sportivo San Lorenzo", "62", "1"),
+    ("Combo Safety", "Away Win or Over 2.5 Goals", "WSG Tirol", "Salzburg", "62", "2"),
     ("Double Chance", "Home or Away", "FC Cajamarca", "Universitario", "10", "10"),
     ("Over/Under", "Over 1.5", "Harju JK Laagri", "FCI Levadia", "18", "12"),
     ("GG/NG", "Yes", "FC Supra", "Atletico Ottawa", "29", "24"),
     ("Asian Handicap (+1.5)", "Erzurumspor FK (+1.5)", "Amed Sportif", "Erzurumspor FK", "16", "3"),
     ("1X2", "Home", "HB Torshavn", "Tofta B68", "1", "1"),
 ]
+
 
 passed_submarkets = 0
 for mkt, sel, h, a, exp_m, exp_o in test_submarkets:

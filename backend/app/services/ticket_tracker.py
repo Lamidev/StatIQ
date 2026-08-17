@@ -157,7 +157,37 @@ def save_tracked_tickets(tickets: List[Dict[str, Any]], db: Optional[Session] = 
             db.close()
 
 
+def delete_tracked_ticket(ticket_id: str, db: Optional[Session] = None) -> bool:
+    """
+    Surgically delete ONLY the specific ticket matching the unique Primary Key ID.
+    Never deletes other tickets sharing the same booking code or metadata.
+    """
+    should_close = False
+    if db is None:
+        db = SessionLocal()
+        should_close = True
+    try:
+        # Match strictly on the unique ID
+        row = db.query(TrackedTicket).filter(TrackedTicket.id == ticket_id).first()
+        if not row:
+            # Fallback if passed without TICK- prefix
+            row = db.query(TrackedTicket).filter(TrackedTicket.id == f"TICK-{ticket_id}").first()
+        if row:
+            db.delete(row)
+            db.commit()
+            return True
+        return False
+    except Exception as e:
+        db.rollback()
+        print(f"[TicketTracker] Error deleting ticket {ticket_id}: {e}")
+        return False
+    finally:
+        if should_close:
+            db.close()
+
+
 def _parse_score(score_str: str):
+
     """
     Parse a score string like '0:2', '0 - 2', '2:2', '1-1' into (home, away) integers.
     Returns (None, None) if unparseable.
