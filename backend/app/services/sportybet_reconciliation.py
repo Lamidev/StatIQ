@@ -308,7 +308,19 @@ class SportyBetVerificationEngine(SportsbookProvider):
                         elif is_12 and ("12" in oc_desc or "HOME/AWAY" in oc_desc or "1 OR 2" in oc_desc or oc_desc == "12"):
                             return mkt, oc, "MATCHED_2H_DC_12"
 
-                # ── 2. Full-Time Double Chance ──────────────────────────────────
+                # ── 2. Asian Handicap (Must precede Over/Under to prevent line hijacking) ──
+                if "HANDICAP" in t_mkt_upper or "HANDICAP" in t_sel_upper:
+                    if is_handicap or "HANDICAP" in m_desc:
+                        line_match = True
+                        if target_line:
+                            line_match = (target_line in m_spec) or (target_line in m_desc) or (target_line in oc_desc)
+                        if line_match:
+                            if favors_home and ("1" in oc_desc or "HOME" in oc_desc or (h_norm and h_norm in self.normalize_team_name(oc_desc))):
+                                return mkt, oc, "MATCHED_HANDICAP_HOME"
+                            elif favors_away and ("2" in oc_desc or "AWAY" in oc_desc or (a_norm and a_norm in self.normalize_team_name(oc_desc))):
+                                return mkt, oc, "MATCHED_HANDICAP_AWAY"
+
+                # ── 3. Full-Time Double Chance ──────────────────────────────────
                 if ("DOUBLE_CHANCE" in t_mkt_upper or "DC" in t_mkt_upper or "DOUBLE CHANCE" in t_mkt_upper) and not any(h in t_mkt_upper for h in ["1ST", "2ND", "HALF"]):
                     if is_double_chance and not any(h in m_desc for h in ["1ST", "2ND", "HALF", "&", "CORNER"]):
                         is_1x = "1X" in t_sel_upper or "HOME OR DRAW" in t_sel_upper or "HOME/DRAW" in t_sel_upper or (favors_home and "DRAW" in t_sel_upper)
@@ -325,8 +337,8 @@ class SportyBetVerificationEngine(SportsbookProvider):
                             if "12" in oc_desc or "HOME/AWAY" in oc_desc or "HOME OR AWAY" in oc_desc or "1 OR 2" in oc_desc:
                                 return mkt, oc, "MATCHED_DC_12"
 
-                # ── 3. Match Winner / 1X2 ─────────────────────────────────────
-                if "1X2" in t_mkt_upper or "MATCH_RESULT" in t_mkt_upper or is_match_result:
+                # ── 4. Match Winner / 1X2 ─────────────────────────────────────
+                if ("1X2" in t_mkt_upper or "MATCH_RESULT" in t_mkt_upper or "MATCH RESULT" in t_mkt_upper) and not any(h in t_mkt_upper for h in ["HALF", "DOUBLE", "DC"]):
                     if is_match_result and not any(h in m_desc for h in ["1ST", "2ND", "HALF", "&", "CORNER"]):
                         if favors_home:
                             if "1" in oc_desc or "HOME" in oc_desc or (h_norm and h_norm in self.normalize_team_name(oc_desc)):
@@ -338,9 +350,16 @@ class SportyBetVerificationEngine(SportsbookProvider):
                             if "X" in oc_desc or "DRAW" in oc_desc:
                                 return mkt, oc, "MATCHED_1X2_DRAW"
 
-                # ── 4. Over/Under Goals ───────────────────────────────────────
-                if "OVER" in combined_target or "UNDER" in combined_target or "GOALS" in combined_target or is_over_under:
-                    if (is_over_under or "OVER" in m_desc or "UNDER" in m_desc) and not any(h in m_desc for h in ["CORNER", "BOOKING", "CARD", "1ST", "2ND"]):
+                # ── 5. Corners ────────────────────────────────────────────────
+                if "CORNER" in t_mkt_upper or "CORNER" in t_sel_upper:
+                    if is_corners or "CORNER" in m_desc:
+                        if ("OVER" in combined_target and "OVER" in oc_desc) or ("UNDER" in combined_target and "UNDER" in oc_desc):
+                            if not target_line or target_line in oc_desc or target_line in m_desc or target_line in m_spec:
+                                return mkt, oc, "MATCHED_CORNERS"
+
+                # ── 6. Over/Under Goals ───────────────────────────────────────
+                if ("OVER" in t_mkt_upper or "UNDER" in t_mkt_upper or "OVER" in t_sel_upper or "UNDER" in t_sel_upper or "GOALS" in t_mkt_upper) and not ("HANDICAP" in t_mkt_upper or "CORNER" in t_mkt_upper):
+                    if (is_over_under or "OVER" in m_desc or "UNDER" in m_desc) and not any(h in m_desc for h in ["CORNER", "BOOKING", "CARD", "1ST", "2ND", "HANDICAP"]):
                         line_match = True
                         if target_line:
                             line_match = (target_line in m_spec) or (target_line in oc_desc) or (target_line in m_desc)
@@ -351,31 +370,13 @@ class SportyBetVerificationEngine(SportsbookProvider):
                             elif "UNDER" in combined_target and "UNDER" in oc_desc:
                                 return mkt, oc, "MATCHED_OVER_UNDER"
 
-                # ── 5. Both Teams To Score (GG/NG) ────────────────────────────
-                if "BTTS" in t_mkt_upper or "BOTH_TEAMS" in t_mkt_upper or "GG" in t_mkt_upper or is_btts:
+                # ── 7. Both Teams To Score (GG/NG) ────────────────────────────
+                if "BTTS" in t_mkt_upper or "BOTH_TEAMS" in t_mkt_upper or "BOTH TEAMS" in t_mkt_upper or "GG" in t_mkt_upper or "NG" in t_mkt_upper:
                     if is_btts:
                         if ("YES" in t_sel_upper or "GG" in t_sel_upper) and ("YES" in oc_desc or "GG" in oc_desc):
                             return mkt, oc, "MATCHED_BTTS_YES"
                         if ("NO" in t_sel_upper or "NG" in t_sel_upper) and ("NO" in oc_desc or "NG" in oc_desc):
                             return mkt, oc, "MATCHED_BTTS_NO"
-
-
-                # ── 5. Corners ────────────────────────────────────────────────
-                if "CORNER" in combined_target or is_corners:
-                    if is_corners or "CORNER" in m_desc:
-                        if ("OVER" in combined_target and "OVER" in oc_desc) or ("UNDER" in combined_target and "UNDER" in oc_desc):
-                            if not target_line or target_line in oc_desc or target_line in m_desc or target_line in m_spec:
-                                return mkt, oc, "MATCHED_CORNERS"
-
-                # ── 6. Asian Handicap ─────────────────────────────────────────
-                if "HANDICAP" in combined_target or is_handicap:
-                    if is_handicap or "HANDICAP" in m_desc:
-                        if favors_home:
-                            if "1" in oc_desc or "HOME" in oc_desc or "+" in oc_desc or (h_norm and h_norm in self.normalize_team_name(oc_desc)):
-                                return mkt, oc, "MATCHED_HANDICAP_HOME"
-                        elif favors_away:
-                            if "2" in oc_desc or "AWAY" in oc_desc or "+" in oc_desc or (a_norm and a_norm in self.normalize_team_name(oc_desc)):
-                                return mkt, oc, "MATCHED_HANDICAP_AWAY"
 
         return None, None, "MARKET_OR_OUTCOME_NOT_FOUND"
 

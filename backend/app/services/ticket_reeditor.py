@@ -177,19 +177,22 @@ def _estimate_prob_from_odds(market: str, selection: str, odds: float, status: s
 
 
 # ─── Supported safe market types that MatchIQ can evaluate ───────────────────
-# Maps SportyBet market keyword → canonical MatchIQ market name
+# Maps SportyBet market keyword → canonical MatchIQ market name (Selection name is always dynamically taken from live feed)
 _LIVE_MARKET_WHITELIST = [
-    ("over/under",        "Over/Under",              "Over 1.5"),
-    ("over 1.5",          "Over/Under",              "Over 1.5"),
-    ("double chance",     "Double Chance",           None),     # selection picked from live odds
-    ("1st half",          "1st Half Over/Under",     "1st Half Over 0.5 Goals"),
-    ("corners",           "Total Corners",           "Total Corners Over 7.5"),
-    ("both teams",        "Both Teams To Score",     "Yes (GG)"),
-    ("asian handicap",    "Asian Handicap (+1.5)",   None),     # selection picked from live odds
-    ("goal bounds",       "Goal Bounds",             "2-5+"),
-    ("draw no bet",       "Draw No Bet",             None),     # selection picked from live odds
-    ("win either half",   "Win Either Half",         None),     # selection picked from live odds
-    ("team",              "Team Goals",              None),     # selection picked from live odds
+    ("over/under",        "Over/Under",              None),
+    ("over",              "Over/Under",              None),
+    ("under",             "Over/Under",              None),
+    ("double chance",     "Double Chance",           None),
+    ("1st half",          "1st Half Over/Under",     None),
+    ("2nd half",          "2nd Half - Double Chance",None),
+    ("corners",           "Total Corners",           None),
+    ("both teams",        "Both Teams To Score",     None),
+    ("asian handicap",    "Asian Handicap",          None),
+    ("handicap",          "Asian Handicap",          None),
+    ("goal bounds",       "Goal Bounds",             None),
+    ("draw no bet",       "Draw No Bet",             None),
+    ("win either half",   "Win Either Half",         None),
+    ("team",              "Team Goals",              None),
 ]
 
 
@@ -791,7 +794,7 @@ async def re_edit_ticket(
     else:
         per_game_target = _per_game_target(target_odds if target_odds > 1.0 else 2.5, working_n_games)
 
-    if ideal_legs <= 10:
+    if ideal_legs <= 10 and mode == "AUDITOR":
         working_scored = [_escalate_market_safety(s) for s in working_scored]
 
     if seed_val:

@@ -561,13 +561,14 @@ class SportyBetAdapter(BookmakerAdapter):
             target_spec = f"hcp={hcp_val}"
             for mkt in m_list:
                 m_id = str(mkt.get("id") or mkt.get("market_id") or "")
-                if m_id in ("16", "17", "28"):
+                if m_id in ("16", "17", "28") or "handicap" in (mkt.get("desc") or "").lower():
                     for oc in (mkt.get("outcomes") or []):
                         o_id = str(oc.get("id") or oc.get("outcome_id") or "")
-                        if (is_away and o_id in ("3", "away", "2")) or (not is_away and o_id in ("1", "home")):
+                        o_desc = (oc.get("desc") or oc.get("name") or "").lower()
+                        if (is_away and (o_id in ("1715", "3", "2") or "2" in o_desc or "away" in o_desc)) or (not is_away and (o_id in ("1714", "1") or "1" in o_desc or "home" in o_desc)):
                             return m_id, o_id, target_spec
-            # Fallback to universally accepted Double Chance 1X or X2 on SportyBet
-            return "10", "11" if is_away else "9", None
+            # Exact SportyBet Asian Handicap Market ID is 16, outcome 1715 (Away) or 1714 (Home)
+            return "16", "1715" if is_away else "1714", target_spec
 
 
         # ── 6. Full-Time Double Chance (Market ID: 10) ───────────────────
