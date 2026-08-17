@@ -1018,7 +1018,7 @@ function TicketCard({ ticket, onClick, onDelete }) {
                 </div>
 
                 <div className="flex items-center gap-2 font-mono">
-                  {parseScore(s).scoreStr !== "--" && (
+                  {(legLive || s.match_status === "CONCLUDED" || s.match_status === "FINISHED") && parseScore(s).scoreStr !== "--" && (
                     <span className={`text-[11px] font-black px-2 py-0.5 rounded ${legLive ? "bg-red-50 text-red-700 border border-red-200" : "bg-slate-100 text-slate-800"}`}>
                       {parseScore(s).scoreStr}
                     </span>
