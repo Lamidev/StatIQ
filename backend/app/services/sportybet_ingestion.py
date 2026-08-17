@@ -23,22 +23,32 @@ class SportyBetIngestionService:
     _cache_ttl = 120  # 2 minutes cache for live odds freshness
 
     TOP_TOURNAMENTS = [
-        "sr:tournament:17",  # Premier League
-        "sr:tournament:8",   # LaLiga
-        "sr:tournament:23",  # Serie A
-        "sr:tournament:35",  # Bundesliga
-        "sr:tournament:34",  # Ligue 1
-        "sr:tournament:37",  # Eredivisie
-        "sr:tournament:18",  # Championship
-        "sr:tournament:40",  # Allsvenskan
-        "sr:tournament:41",  # Eliteserien
-        "sr:tournament:39",  # Superliga
-        "sr:tournament:7",   # Champions League
-        "sr:tournament:679", # Europa League
+        "sr:tournament:17",   # Premier League
+        "sr:tournament:8",    # LaLiga
+        "sr:tournament:23",   # Serie A
+        "sr:tournament:35",   # Bundesliga
+        "sr:tournament:34",   # Ligue 1
+        "sr:tournament:37",   # Eredivisie
+        "sr:tournament:18",   # Championship
+        "sr:tournament:40",   # Allsvenskan
+        "sr:tournament:41",   # Eliteserien
+        "sr:tournament:39",   # Superliga (Denmark)
+        "sr:tournament:7",    # Champions League
+        "sr:tournament:679",  # Europa League
+        "sr:tournament:325",  # UEFA Conference League
+        "sr:tournament:52",   # Super Lig (Turkey)
+        "sr:tournament:242",  # MLS
+        "sr:tournament:384",  # Saudi Pro League
+        "sr:tournament:329",  # Brazil Serie A
+        "sr:tournament:155",  # Argentina Liga Profesional
+        "sr:tournament:45",   # Scottish Premiership
+        "sr:tournament:38",   # Belgian Pro League
+        "sr:tournament:44",   # Austrian Bundesliga
+        "sr:tournament:238",  # Portugal Primeira Liga
     ]
 
     @classmethod
-    def fetch_upcoming_fixtures(cls, limit: int = 150, force_refresh: bool = False) -> List[Dict[str, Any]]:
+    def fetch_upcoming_fixtures(cls, limit: int = 250, force_refresh: bool = False) -> List[Dict[str, Any]]:
         """
         Fetches active upcoming football fixtures from SportyBet across all major tournaments.
         """
@@ -67,7 +77,9 @@ class SportyBetIngestionService:
             return []
 
         fetch_urls = [
-            f"{cls.BASE_URL}/wapUpcomingEvents?sportId=sr:sport:1&pageSize=100",
+            f"{cls.BASE_URL}/wapUpcomingEvents?sportId=sr:sport:1&pageNum=1&pageSize=100",
+            f"{cls.BASE_URL}/wapUpcomingEvents?sportId=sr:sport:1&pageNum=2&pageSize=100",
+            f"{cls.BASE_URL}/wapUpcomingEvents?sportId=sr:sport:1&timeline=today&pageSize=100",
         ] + [
             f"{cls.BASE_URL}/wapUpcomingEvents?sportId=sr:sport:1&tournamentId={t_id}" for t_id in cls.TOP_TOURNAMENTS
         ]

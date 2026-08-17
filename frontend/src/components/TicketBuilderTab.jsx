@@ -275,6 +275,9 @@ export default function TicketBuilderTab() {
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState(null);
   const [result, setResult] = useState(null);
+  const [rolloverResult, setRolloverResult] = useState(null);
+  const [generatedCodes, setGeneratedCodes] = useState({});
+
   // Risk Profile & Market Preferences
   const [riskProfile, setRiskProfile] = useState("BALANCED"); // "ULTRA_CONSERVATIVE", "BALANCED", "AGGRESSIVE"
   const [selectedMarketCategories, setSelectedMarketCategories] = useState([
@@ -284,6 +287,7 @@ export default function TicketBuilderTab() {
     "WIN_EITHER_HALF",
     "COMBO"
   ]);
+
 
   // Audit Logs & Rejected Picks UI State
   const [expandedAuditLogs, setExpandedAuditLogs] = useState({});

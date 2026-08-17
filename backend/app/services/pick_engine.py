@@ -872,81 +872,59 @@ class MatchIQPickEngine:
 
         rejected_decisions = [d for d in all_decisions if not d.approved]
 
-        # Sort approved decisions: in ROLLOVER mode prioritize top European leagues and highest probability
-        TOP_LEAGUES_BOOST = {
-            "PL": 10, "PREMIER LEAGUE": 10, "ENGLAND PREMIER LEAGUE": 10,
-            "CL": 10, "CHAMPIONS LEAGUE": 10, "UEFA CHAMPIONS LEAGUE": 10,
-            "PD": 9, "LA LIGA": 9, "SPAIN LALIGA": 9, "SPAIN PRIMERA DIVISION": 9,
-            "SA": 9, "SERIE A": 9, "ITALY SERIE A": 9,
-            "BL1": 9, "BUNDESLIGA": 9, "GERMANY BUNDESLIGA": 9,
-            "FL1": 8, "LIGUE 1": 8, "FRANCE LIGUE 1": 8,
-            "DED": 8, "EREDIVISIE": 8, "NETHERLANDS EREDIVISIE": 8,
-            "ELC": 8, "CHAMPIONSHIP": 8, "ENGLAND CHAMPIONSHIP": 8,
-            "PPL": 7, "PRIMEIRA LIGA": 7, "PORTUGAL LIGA PORTUGAL": 7,
-        }
+        def _dynamic_candidate_score(d: PickDecision) -> float:
+            """
+            100% Dynamic Quantitative Scoring Metric.
+            Zero hardcoded club or league strings. Evaluates true dominance purely from live data:
+            - Live Market Dominance Ratio (Underdog Odds / Favorite Odds)
+            - Dynamic ELO / Statistical Rating Gap
+            - Verified Model Win Probability
+            - Market Safety Cushioning Factor (Tier 1 vs Naked 1X2)
+            """
+            # 1. Base Model Probability Core (0 to 100)
+            prob_score = d.model_probability * 100.0
 
-        TOP_POWERHOUSE_CLUBS = {
-            "PSV", "PSV EINDHOVEN", "PORTO", "FC PORTO", "FENERBAHCE", "FENERBAHCE ISTANBUL",
-            "AL NASSR", "AL NASSR CLUB", "CELTIC", "VIKTORIA PLZEN", "GENK", "CLUB BRUGGE",
-            "LUDOGORETS", "TORINO", "FC TORINO", "UDINESE", "AL-ITTIHAD", "AL-ITTIHAD CLUB",
-            "REAL MADRID", "BARCELONA", "PSG", "PARIS SAINT-GERMAIN", "MANCHESTER CITY", "MAN CITY",
-            "ARSENAL", "LIVERPOOL", "CHELSEA", "BAYERN", "BAYERN MUNICH", "INTER", "INTER MILAN",
-            "JUVENTUS", "GALATASARAY", "BENFICA", "SPORTING CP", "ATLETICO MADRID", "SEVILLA", "KRASNODAR",
-            "CADIZ", "REAL OVIEDO", "MALLORCA", "SHEFFIELD UNITED", "KAISERSLAUTERN", "FORTUNA SITTARD"
-        }
+            # 2. Live Market Dominance & Price Asymmetry (Dynamic Powerhouse Metric)
+            raw = d.raw_match_data or {}
+            r1x2 = raw.get("result_1x2") or {}
+            dominance_score = 0.0
+            try:
+                h_odd = float(r1x2.get("1") or r1x2.get("home") or 0.0)
+                a_odd = float(r1x2.get("2") or r1x2.get("away") or 0.0)
+                if h_odd > 1.0 and a_odd > 1.0:
+                    fav = min(h_odd, a_odd)
+                    und = max(h_odd, a_odd)
+                    # When a real favorite dominates (e.g. 1.25 vs 9.0), ratio is huge
+                    dominance_ratio = und / fav
+                    if fav <= 1.50 and dominance_ratio >= 3.0:
+                        dominance_score = min(75.0, dominance_ratio * 8.0)
+                    elif fav <= 1.80 and dominance_ratio >= 1.8:
+                        dominance_score = min(40.0, dominance_ratio * 6.0)
+            except Exception:
+                pass
 
-        def _rank_candidate(d: PickDecision) -> float:
-            c = str(d.competition or "").upper()
-            base_score = 1.0
-            for k, score in TOP_LEAGUES_BOOST.items():
-                if k in c:
-                    base_score = float(score)
-                    break
-            return (base_score * 50.0) + (d.model_probability * 50.0)
+            # 3. Dynamic ELO / Rating Gap
+            elo_score = min(35.0, max(0.0, abs(float(d.elo_gap or 0.0)) * 0.25))
+
+            # 4. Market Cushion Safety (Tier 1 Double Chance & Compound OR get priority)
+            cushion_bonus = 0.0
+            m_name = (d.market_name or "").lower()
+            if "double chance" in m_name or "or over" in m_name:
+                cushion_bonus = 25.0
+            elif "over 1.5" in (d.selection_name or "").lower():
+                cushion_bonus = 20.0
+            elif "1x2" in m_name:
+                cushion_bonus = 0.0
+
+            return prob_score + dominance_score + elo_score + cushion_bonus
 
         if mode == "ROLLOVER":
-            # For Rollover: Strictly prioritize powerhouse clubs, favorite odds gap & high win probability
-            def _rollover_candidate_score(d: PickDecision) -> float:
-                h_name = str(d.home_team or "").upper()
-                a_name = str(d.away_team or "").upper()
-                c = str(d.competition or "").upper()
-                
-                # 1. Powerhouse Club Metric (Major priority for top European & global powerhouse clubs)
-                is_powerhouse = any(club in h_name or club in a_name for club in TOP_POWERHOUSE_CLUBS)
-                powerhouse_boost = 150.0 if is_powerhouse else 0.0
-
-                # 2. League Prestige
-                league_score = 0.0
-                for k, score in TOP_LEAGUES_BOOST.items():
-                    if k in c:
-                        league_score = float(score)
-                        break
-
-                # 3. Favorite vs Underdog Odds Distance / Dominance Gap
-                distance_boost = 0.0
-                raw = d.raw_match_data or {}
-                r1x2 = raw.get("result_1x2") or {}
-                try:
-                    h_odd = float(r1x2.get("1") or 0.0)
-                    a_odd = float(r1x2.get("2") or 0.0)
-                    if h_odd > 1.0 and a_odd > 1.0:
-                        fav = min(h_odd, a_odd)
-                        und = max(h_odd, a_odd)
-                        if fav <= 1.65 and und >= 4.0:
-                            distance_boost = min(60.0, (und / fav) * 10.0)
-                except Exception:
-                    pass
-
-                return powerhouse_boost + (league_score * 20.0) + distance_boost + (d.model_probability * 50.0)
-
-            approved_decisions.sort(key=_rollover_candidate_score, reverse=True)
-            # Filter out any candidates from obscure/amateur competitions if top powerhouse fixtures exist
-            top_decisions = [
-                d for d in approved_decisions 
-                if any(club in str(d.home_team or "").upper() or club in str(d.away_team or "").upper() for club in TOP_POWERHOUSE_CLUBS)
-                or any(k in str(d.competition or "").upper() for k in TOP_LEAGUES_BOOST.keys())
-            ]
-            pool_candidates = top_decisions if len(top_decisions) >= 1 else approved_decisions[:]
+            # For Rollover: Strictly prioritize high dominance ratio, wide ELO gap & high win probability
+            approved_decisions.sort(key=_dynamic_candidate_score, reverse=True)
+            
+            # Filter for true dominant fixtures with high statistical cushion
+            top_decisions = [d for d in approved_decisions if _dynamic_candidate_score(d) >= 110.0]
+            pool_candidates = top_decisions if len(top_decisions) >= 2 else approved_decisions[:]
             
             # Enable dynamic permutation for regenerate while keeping candidates elite
             seed_val = reshuffle_seed if reshuffle_seed is not None else int(time.time() * 1000)
@@ -956,20 +934,10 @@ class MatchIQPickEngine:
             elite_subset = pool_candidates[:max(8, len(pool_candidates))]
             pool_copy = elite_subset[:]
             rng.shuffle(pool_copy)
-        else:
-            approved_decisions.sort(key=lambda d: d.model_probability, reverse=True)
-            pool_copy = approved_decisions[:]
-            seed_val = reshuffle_seed if reshuffle_seed is not None else int(time.time() * 1000)
-            rng = random.Random(seed_val)
-            rng.shuffle(pool_copy)
 
-        selected_decisions: List[PickDecision] = []
-        market_counts: Dict[str, int] = {}
-        target_legs_count = leg_config["ideal_legs"]
-        max_per_market = 2 if target_legs_count <= 8 else 3
 
-        if mode == "ROLLOVER":
             # PRECISE ODDS MATCHING: Accumulate high-assurance legs until product closely matches target_total_odds
+            selected_decisions: List[PickDecision] = []
             curr_acc_odds = 1.0
             for d in pool_copy:
                 if len(selected_decisions) >= 1 and curr_acc_odds >= (target_total_odds * 0.92):
@@ -983,22 +951,78 @@ class MatchIQPickEngine:
             if not selected_decisions and pool_copy:
                 selected_decisions.append(pool_copy[0])
         else:
-            for d in pool_copy:
-                m_key = d.selection_name
-                if "Under 4.5" in m_key or "Over 0.5" in m_key or "Over 7.5" in m_key:
-                    if market_counts.get(m_key, 0) >= max_per_market:
-                        continue
-                selected_decisions.append(d)
-                market_counts[m_key] = market_counts.get(m_key, 0) + 1
-                if len(selected_decisions) >= target_legs_count:
-                    break
+            seed_val = reshuffle_seed if reshuffle_seed is not None else int(time.time() * 1000)
+            rng = random.Random(seed_val)
 
-            if len(selected_decisions) < target_legs_count:
-                for d in pool_copy:
-                    if d not in selected_decisions:
-                        selected_decisions.append(d)
-                        if len(selected_decisions) >= target_legs_count:
+            # Sort approved decisions by Dynamic Quantitative Dominance Score
+            approved_decisions.sort(key=_dynamic_candidate_score, reverse=True)
+            
+            # Form dynamic candidate pool (top 35 highest-quality screened matches)
+            elite_candidate_pool = approved_decisions[:max(35, min(len(approved_decisions), 50))]
+
+
+            selected_decisions: List[PickDecision] = []
+            market_counts: Dict[str, int] = {}
+            target_legs_count = leg_config["ideal_legs"]
+            max_per_market = 2 if target_legs_count <= 8 else 3
+
+            if target_mode == "ODDS":
+                # Stochastic Beam Selection: find a distinct, high-safety combination from the elite pool
+                best_combo = []
+                best_diff = float("inf")
+                
+                trajectories = 25
+                for traj in range(trajectories):
+                    traj_rng = random.Random(seed_val + traj * 1013)
+                    shuffled_pool = elite_candidate_pool[:]
+                    traj_rng.shuffle(shuffled_pool)
+                    
+                    candidate_combo = []
+                    curr_odds = 1.0
+                    m_counts: Dict[str, int] = {}
+                    
+                    for d in shuffled_pool:
+                        m_key = d.selection_name
+                        if "Under 4.5" in m_key or "Over 0.5" in m_key or "Over 7.5" in m_key:
+                            if m_counts.get(m_key, 0) >= 2:
+                                continue
+                        
+                        candidate_combo.append(d)
+                        m_counts[m_key] = m_counts.get(m_key, 0) + 1
+                        curr_odds *= d.estimated_odds
+                        
+                        if curr_odds >= (target_total_odds * 0.95):
                             break
+                        if len(candidate_combo) >= 15:
+                            break
+                    
+                    diff = abs(curr_odds - target_total_odds)
+                    if diff < best_diff and candidate_combo:
+                        best_diff = diff
+                        best_combo = candidate_combo
+                
+                selected_decisions = best_combo if best_combo else elite_candidate_pool[:target_legs_count]
+            else:
+                # GAMES mode: sample target_legs_count diverse games from elite pool
+                shuffled_pool = elite_candidate_pool[:]
+                rng.shuffle(shuffled_pool)
+                for d in shuffled_pool:
+                    m_key = d.selection_name
+                    if "Under 4.5" in m_key or "Over 0.5" in m_key or "Over 7.5" in m_key:
+                        if market_counts.get(m_key, 0) >= max_per_market:
+                            continue
+                    selected_decisions.append(d)
+                    market_counts[m_key] = market_counts.get(m_key, 0) + 1
+                    if len(selected_decisions) >= target_legs_count:
+                        break
+                
+                if len(selected_decisions) < target_legs_count:
+                    for d in elite_candidate_pool:
+                        if d not in selected_decisions:
+                            selected_decisions.append(d)
+                            if len(selected_decisions) >= target_legs_count:
+                                break
+
 
         # Calculate combined probability & accumulated odds
         accumulated_odds = 1.0
