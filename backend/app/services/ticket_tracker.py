@@ -1273,6 +1273,115 @@ def evaluate_pick_status(
 # Main evaluation loop (called on every GET /list)
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _heal_falsely_lost_tickets(tickets: list, now_ms: int) -> bool:
+    """
+    Pre-evaluation healing pass.
+    For any LOST ticket created today, checks each selection:
+    - If the selection's start_time_ms is in the future → reset to UPCOMING/PENDING
+    - If the selection has a 0-0 score and no authoritative leg_result from SportyBet → reset to UPCOMING/PENDING
+    After healing, if a ticket has 0 LOST legs it is restored to RUNNING.
+    Returns True if any ticket was changed.
+    """
+    import urllib.request, ssl, json as _json, time as _time
+    changed = False
+    today_str = _time.strftime("%Y-%m-%d")
+
+    # Only heal today's LOST tickets with booking codes
+    candidates = [
+        t for t in tickets
+        if t.get("status") == "LOST"
+        and today_str in str(t.get("created_at") or t.get("locked_at") or "")
+    ]
+
+    if not candidates:
+        return False
+
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Accept': 'application/json, text/plain, */*'
+    }
+
+    for t in candidates:
+        code = t.get("code") or ""
+        if not code or code in ("CUSTOM", "AI-BUILDER-INTERNAL", "ROLLOVER-INTERNAL"):
+            continue
+
+        # Fetch authoritative kickoffs from SportyBet
+        sb_kickoffs: dict = {}
+        for reg in ["ng", "gh", "ke", "ug"]:
+            url = f"https://www.sportybet.com/api/{reg}/orders/share/{code.upper()}"
+            try:
+                req = urllib.request.Request(url, headers=headers)
+                with urllib.request.urlopen(req, context=ctx, timeout=5) as resp:
+                    data = _json.loads(resp.read().decode('utf-8'))
+                    if data.get("bizCode") == 10000:
+                        for out in data.get("data", {}).get("outcomes", []):
+                            h = str(out.get("homeTeamName") or "").lower().strip()
+                            a = str(out.get("awayTeamName") or "").lower().strip()
+                            est = out.get("estimateStartTime") or out.get("startTime") or 0
+                            sb_status = str(out.get("matchStatus") or "").strip().lower()
+                            sb_kickoffs[f"{h}_{a}"] = {"start_ms": est, "sb_status": sb_status}
+                        break
+            except Exception:
+                pass
+
+        ticket_healed = False
+        for sel in t.get("selections", []):
+            h = str(sel.get("home_team") or "").lower().strip()
+            a = str(sel.get("away_team") or "").lower().strip()
+            key = f"{h}_{a}"
+
+            sb_info = sb_kickoffs.get(key)
+            sb_start_ms = sb_info.get("start_ms", 0) if sb_info else 0
+            sb_status = sb_info.get("sb_status", "") if sb_info else ""
+
+            stored_start_ms = sel.get("start_time_ms") or 0
+            kickoff_ms = sb_start_ms if sb_start_ms > 0 else stored_start_ms
+
+            is_not_started = (
+                (kickoff_ms > 0 and kickoff_ms > now_ms)
+                or sb_status in ("not start", "notstart", "0", "pre", "upcoming", "")
+            )
+
+            if is_not_started and sel.get("leg_status") in ("LOST", "WON"):
+                # Only reset if there's no genuine concluded score from the bookmaker
+                has_real_score = (
+                    sel.get("leg_result") in ("WON", "LOST")  # authoritative bookmaker result
+                    or (
+                        sel.get("home_score") is not None
+                        and sel.get("away_score") is not None
+                        and (int(sel.get("home_score", 0)) + int(sel.get("away_score", 0))) > 0  # actual goals scored
+                    )
+                )
+                if not has_real_score:
+                    sel["match_status"] = "UPCOMING"
+                    sel["is_live"] = False
+                    sel["leg_status"] = "PENDING"
+                    sel["result"] = "--"
+                    sel["score"] = "--"
+                    sel["home_score"] = None
+                    sel["away_score"] = None
+                    if kickoff_ms > 0:
+                        sel["start_time_ms"] = kickoff_ms
+                    ticket_healed = True
+
+        if ticket_healed:
+            loss_count = sum(1 for sel in t.get("selections", []) if sel.get("leg_status") == "LOST")
+            if loss_count == 0:
+                t["status"] = "RUNNING"
+                t["flex_status_text"] = None
+                t["loss_count"] = 0
+                t["stale"] = False
+            else:
+                t["loss_count"] = loss_count
+            changed = True
+
+    return changed
+
+
 def evaluate_tracked_tickets(db: Optional[Session] = None) -> List[Dict[str, Any]]:
     """
     Evaluates all tracked tickets.
@@ -1286,6 +1395,11 @@ def evaluate_tracked_tickets(db: Optional[Session] = None) -> List[Dict[str, Any
     _apply_authoritative_verified_scores(tickets)
     updated = False
     now = int(time.time())
+    now_ms = now * 1000
+
+    # ── Pre-evaluation healing pass: fix tickets incorrectly tagged LOST before games started ──
+    if _heal_falsely_lost_tickets(tickets, now_ms):
+        updated = True
 
     for t in tickets:
         is_ticket_live = False
