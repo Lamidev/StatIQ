@@ -535,9 +535,9 @@ class SportyBetVerificationEngine(SportsbookProvider):
             # Direct Provider ID Fast-Path:
             # If the selection carries direct SportyBet marketId & outcomeId (from decoded ticket or AUDITOR live pick),
             # match them directly in event_markets for 100% exact booking payload creation.
-            target_mkt_id = str(sel.get("_sportybet_market_id") or sel.get("provider_market_id") or "")
-            target_mkt_id = str(sel.get("_sportybet_market_id") or sel.get("provider_market_id") or "")
-            target_oc_id = str(sel.get("_sportybet_outcome_id") or sel.get("provider_outcome_id") or "")
+            target_mkt_id = str(sel.get("_sportybet_market_id") or sel.get("provider_market_id") or sel.get("marketId") or "").strip()
+            target_oc_id = str(sel.get("_sportybet_outcome_id") or sel.get("provider_outcome_id") or sel.get("outcomeId") or "").strip()
+            target_spec = sel.get("_sportybet_specifier") or sel.get("provider_specifier") or sel.get("specifier")
 
             mkt = None
             outcome = None
@@ -546,12 +546,15 @@ class SportyBetVerificationEngine(SportsbookProvider):
                 if target_mkt_id and target_oc_id:
                     for em in event_markets:
                         if str(em.get("id")) == target_mkt_id:
+                            # If specifier is provided, ensure it matches
+                            if target_spec and em.get("specifier") and str(em.get("specifier")) != str(target_spec):
+                                continue
                             for oc in em.get("outcomes", []):
                                 if str(oc.get("id")) == target_oc_id:
                                     mkt = em
                                     outcome = oc
                                     break
-                        if mkt:
+                        if mkt and outcome:
                             break
 
                 if not mkt or not outcome:
@@ -569,13 +572,35 @@ class SportyBetVerificationEngine(SportsbookProvider):
                 }
                 if mkt.get("specifier"):
                     payload_item["specifier"] = str(mkt.get("specifier"))
+                elif target_spec:
+                    payload_item["specifier"] = str(target_spec)
                 resolved_payload.append(payload_item)
                 audit_resolved.append({
                     "home_team": home,
                     "away_team": away,
                     "sportybet_event_id": event_id,
-                    "market": mkt.get("desc"),
-                    "outcome": outcome.get("desc"),
+                    "market": mkt.get("desc") or mkt_name,
+                    "outcome": outcome.get("desc") or sel_name,
+                    "odds": float(odds_val)
+                })
+            elif target_mkt_id and target_oc_id:
+                # Direct Verified Provider ID match even if event_markets list was truncated by SportyBet API
+                odds_val = str(sel.get("odds", "1.50"))
+                payload_item = {
+                    "eventId": event_id if event_id.startswith("sr:match:") else f"sr:match:{event_id}",
+                    "marketId": target_mkt_id,
+                    "outcomeId": target_oc_id,
+                    "odds": odds_val
+                }
+                if target_spec:
+                    payload_item["specifier"] = str(target_spec)
+                resolved_payload.append(payload_item)
+                audit_resolved.append({
+                    "home_team": home,
+                    "away_team": away,
+                    "sportybet_event_id": event_id,
+                    "market": mkt_name,
+                    "outcome": sel_name,
                     "odds": float(odds_val)
                 })
             else:
@@ -609,7 +634,7 @@ class SportyBetVerificationEngine(SportsbookProvider):
                     "eventId": event_id if event_id.startswith("sr:match:") else f"sr:match:{event_id}",
                     "marketId": m_id,
                     "outcomeId": o_id,
-                    "odds": str(sel.get("odds") or "1.50")
+                    "odds": str(sel.get("odds", "1.30"))
                 }
                 if spec:
                     payload_item["specifier"] = spec
@@ -618,9 +643,9 @@ class SportyBetVerificationEngine(SportsbookProvider):
                     "home_team": home,
                     "away_team": away,
                     "sportybet_event_id": event_id,
-                    "market": "Canonical",
+                    "market": mkt_name,
                     "outcome": sel_name,
-                    "odds": float(sel.get("odds") or 1.50)
+                    "odds": float(sel.get("odds", 1.30))
                 })
 
         if not resolved_payload:

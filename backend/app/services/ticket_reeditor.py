@@ -984,9 +984,8 @@ async def re_edit_ticket(
                     keep_count += 1
 
         else:  # REMOVE mode
-            # REMOVE mode filters out unfixable games, upgrading working games to safer market lines
-            sel = _upgrade_handicap_selection(sel)
-            sel["action"] = "KEEP" if sel.get("action") != "HANDICAP_UPGRADED" else "HANDICAP_UPGRADED"
+            # REMOVE mode keeps the exact original selection with full provider IDs preserved
+            sel["action"] = "KEEP"
             final_selections.append(sel)
             used_match_keys.append(match_key)
             keep_count += 1
