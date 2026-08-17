@@ -897,14 +897,14 @@ function TicketCard({ ticket, onClick, onDelete }) {
             </span>
           )}
 
-          {/* Feature Mode Tag */}
+          {/* Mode Tag */}
           {(() => {
             const m = (ticket.mode || "AUDITOR").toUpperCase();
             if (m === "SWAP" || m === "HYBRID") {
               return (
                 <span className="text-xs font-black bg-indigo-100 text-indigo-900 border border-indigo-300 px-3 py-1 rounded-lg uppercase tracking-wider flex items-center gap-1.5 shadow-xs">
                   <RefreshCw className="w-3.5 h-3.5 text-indigo-700" />
-                  <span>Feature: SWAP Mode</span>
+                  <span>SWAP MODE</span>
                 </span>
               );
             }
@@ -912,7 +912,7 @@ function TicketCard({ ticket, onClick, onDelete }) {
               return (
                 <span className="text-xs font-black bg-rose-100 text-rose-900 border border-rose-300 px-3 py-1 rounded-lg uppercase tracking-wider flex items-center gap-1.5 shadow-xs">
                   <Trash2 className="w-3.5 h-3.5 text-rose-700" />
-                  <span>Feature: REMOVE Mode</span>
+                  <span>REMOVE MODE</span>
                 </span>
               );
             }
@@ -920,7 +920,7 @@ function TicketCard({ ticket, onClick, onDelete }) {
               return (
                 <span className="text-xs font-black bg-blue-100 text-blue-900 border border-blue-300 px-3 py-1 rounded-lg uppercase tracking-wider flex items-center gap-1.5 shadow-xs">
                   <TrendingUp className="w-3.5 h-3.5 text-blue-700" />
-                  <span>Feature: ROLLOVER MODE</span>
+                  <span>ROLLOVER MODE</span>
                 </span>
               );
             }
@@ -928,19 +928,19 @@ function TicketCard({ ticket, onClick, onDelete }) {
               return (
                 <span className="text-xs font-black bg-amber-100 text-amber-900 border border-amber-300 px-3 py-1 rounded-lg uppercase tracking-wider flex items-center gap-1.5 shadow-xs">
                   <Target className="w-3.5 h-3.5 text-amber-700" />
-                  <span>Feature: AI BUILDER</span>
+                  <span>AI BUILDER</span>
                 </span>
               );
             }
             return (
               <span className="text-xs font-black bg-emerald-100 text-emerald-900 border border-emerald-300 px-3 py-1 rounded-lg uppercase tracking-wider flex items-center gap-1.5 shadow-xs">
                 <ShieldCheck className="w-3.5 h-3.5 text-emerald-700" />
-                <span>Feature: AUDITOR Mode</span>
+                <span>AUDITOR MODE</span>
               </span>
             );
           })()}
 
-          {ticket.flex_cut && (
+          {ticket.flex_cut && !["OFF", "NONE", "0", ""].includes(String(ticket.flex_cut).toUpperCase().trim()) && (
             <span className="text-[11px] font-extrabold bg-slate-800 text-emerald-400 px-2.5 py-0.5 rounded-full border border-slate-700 uppercase tracking-wider">
               Flex: {ticket.flex_cut}
             </span>
@@ -1245,23 +1245,23 @@ function TicketDetailView({ ticket, onBack, onDelete }) {
             <div className="flex-shrink-0">
               {m === "SWAP" || m === "HYBRID" ? (
                 <span className="text-xs font-black bg-indigo-100 text-indigo-900 border border-indigo-300 px-3 py-1.5 rounded-xl uppercase tracking-wider">
-                  Feature: SWAP Mode
+                  SWAP MODE
                 </span>
               ) : m === "REMOVE" ? (
                 <span className="text-xs font-black bg-rose-100 text-rose-900 border border-rose-300 px-3 py-1.5 rounded-xl uppercase tracking-wider">
-                  Feature: REMOVE Mode
+                  REMOVE MODE
                 </span>
               ) : m === "ROLLOVER" ? (
                 <span className="text-xs font-black bg-blue-100 text-blue-900 border border-blue-300 px-3 py-1.5 rounded-xl uppercase tracking-wider">
-                  Feature: ROLLOVER MODE
+                  ROLLOVER MODE
                 </span>
               ) : m === "BUILDER" || m === "AI_BUILDER" || m === "ACCUMULATOR" || m === "TODAY_GAMES" ? (
                 <span className="text-xs font-black bg-amber-100 text-amber-900 border border-amber-300 px-3 py-1.5 rounded-xl uppercase tracking-wider">
-                  Feature: AI BUILDER
+                  AI BUILDER
                 </span>
               ) : (
                 <span className="text-xs font-black bg-emerald-100 text-emerald-900 border border-emerald-300 px-3 py-1.5 rounded-xl uppercase tracking-wider">
-                  Feature: AUDITOR Mode
+                  AUDITOR MODE
                 </span>
               )}
             </div>
@@ -1320,8 +1320,7 @@ function TicketDetailView({ ticket, onBack, onDelete }) {
           })()}
         </p>
       </div>
-
-      {/* Status Details & Strategy summary */}
+{/* Status Details & Strategy summary */}
       <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 space-y-1 text-xs font-semibold text-slate-700">
         <div className="flex items-center justify-between">
           <span className="font-extrabold text-slate-900">
@@ -1363,129 +1362,78 @@ function TicketDetailView({ ticket, onBack, onDelete }) {
             const evalRes = evaluatePickLive(sel);
             const isLegWon = evalRes.status === "WON";
             const isLegLost = evalRes.status === "LOST";
+            const isLegConcluded = sel.match_status === "CONCLUDED" || sel.match_status === "FINISHED";
 
             const matchTimeStr = matchInfo.matchTime || sel.match_time || (legLive ? "LIVE" : null);
             const gameId = sel.game_id || sel.fixture_id || sel.external_fixture_id || null;
             const kickoffStr = sel.kickoff_datetime_str || (sel.kickoff_datetime ? new Date(sel.kickoff_datetime).toLocaleDateString([], {month:'2-digit', day:'2-digit'}) + ' ' + new Date(sel.kickoff_datetime).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : null);
 
             const scoreObj = parseScore(sel);
-            const homeScore = scoreObj.home !== null ? scoreObj.home : "--";
-            const awayScore = scoreObj.away !== null ? scoreObj.away : "--";
+            const hasScore = (legLive || isLegConcluded) && scoreObj.home !== null && scoreObj.away !== null;
+            const homeScore = hasScore ? scoreObj.home : "--";
+            const awayScore = hasScore ? scoreObj.away : "--";
 
             return (
               <div
                 key={idx}
                 className={`bg-white border rounded-2xl p-4 space-y-3 shadow-sm transition-all ${
                   legLive
-                    ? "border-red-300 ring-1 ring-red-50 bg-gradient-to-r from-red-50/20 via-white to-white"
-                    : "border-slate-200 hover:border-slate-300"
+                    ? "border-red-300 ring-1 ring-red-50"
+                    : "border-slate-200"
                 }`}
               >
-                {/* Row 1: Leg Number, Live Sticker / Kickoff Time, Game ID, Live Link, Match State */}
                 <div className="flex flex-wrap items-center justify-between border-b border-slate-100 pb-2.5 gap-2">
                   <div className="flex items-center gap-3">
-                    {/* Index Badge */}
-                    <span className="w-6 h-6 rounded-full bg-slate-900 text-white font-extrabold text-xs flex items-center justify-center shadow-sm">
+                    <span className="w-6 h-6 rounded-full bg-slate-900 text-white font-extrabold text-xs flex items-center justify-center">
                       {idx + 1}
                     </span>
-
-                    {/* Live Badge & Time or Kickoff Time */}
                     {legLive ? (
                       <div className="flex items-center gap-2">
-                        <span className="bg-red-600 text-white px-2 py-0.5 rounded-md text-[10px] font-black uppercase tracking-wide flex items-center gap-1 animate-pulse">
+                        <span className="bg-red-600 text-white px-2 py-0.5 rounded-md text-[10px] font-black uppercase flex items-center gap-1 animate-pulse">
                           <span className="w-1.5 h-1.5 rounded-full bg-white animate-ping" />
                           Live
                         </span>
-                        {matchTimeStr && (
-                          <span className="text-xs font-black text-red-600 font-mono">
-                            {matchTimeStr}
-                          </span>
-                        )}
+                        {matchTimeStr && <span className="text-xs font-black text-red-600 font-mono">{matchTimeStr}</span>}
                       </div>
                     ) : (
-                      <span className="text-xs font-bold text-slate-500">
-                        {kickoffStr}
-                      </span>
+                      <span className="text-xs font-bold text-slate-500">{kickoffStr}</span>
                     )}
-
-                    {/* Game ID */}
-                    <span className="text-[11px] font-bold text-slate-400 font-mono">
-                      Game ID: {gameId}
-                    </span>
                   </div>
+                  <span className={`text-[11px] font-extrabold px-2.5 py-0.5 rounded-full uppercase border ${legLive ? "bg-red-50 text-red-700 border-red-200" : "bg-slate-100 text-slate-500 border-slate-200"}`}>
+                    {legLive ? "Ongoing" : isLegConcluded ? "Concluded" : "Not Started"}
+                  </span>
+                </div>
 
-                  <div className="flex items-center gap-2">
-                    {/* Go to Live Betting button if live */}
-                    {legLive && (
-                      <button
-                        onClick={() => simulateLiveGoal(idx)}
-                        className="text-[11px] font-extrabold text-red-600 bg-red-50 hover:bg-red-100 border border-red-200 px-2.5 py-1 rounded-lg transition-all flex items-center gap-1"
-                        title="Click to simulate live score update / test early win"
-                      >
-                        <Zap className="w-3 h-3 fill-red-600" />
-                        <span>Go to Live Betting</span>
-                      </button>
-                    )}
-
-                    {/* Match State: Ongoing / Not Started / Concluded / Interrupted */}
-                    <span className={`text-[11px] font-extrabold px-2.5 py-0.5 rounded-full uppercase tracking-wider border ${
-                      matchInfo.isInterrupted
-                        ? "bg-amber-50 text-amber-800 border-amber-300"
-                        : legLive
-                        ? "bg-red-50 text-red-700 border-red-200"
-                        : sel.match_status === "CONCLUDED"
-                        ? "bg-slate-100 text-slate-700 border-slate-200"
-                        : "bg-slate-100 text-slate-500 border-slate-200"
-                    }`}>
-                      {matchInfo.isInterrupted ? "Interrupted" : legLive ? "Ongoing" : sel.match_status === "CONCLUDED" ? "Concluded" : "Not Started"}
-                    </span>
+                <div className="bg-slate-50 p-3 rounded-xl border border-slate-100 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-black text-slate-900">{sel.home_team || "Home"}</span>
+                    <span className={`font-mono text-sm font-black px-2 py-0.5 rounded ${hasScore ? "bg-white border border-slate-200" : "text-slate-400"}`}>{homeScore}</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-black text-slate-900">{sel.away_team || "Away"}</span>
+                    <span className={`font-mono text-sm font-black px-2 py-0.5 rounded ${hasScore ? "bg-white border border-slate-200" : "text-slate-400"}`}>{awayScore}</span>
                   </div>
                 </div>
 
-                {/* Row 2: Teams & Live Scores (SportyBet Stacked Layout) */}
-                <div className="bg-slate-50/80 p-3 rounded-xl border border-slate-100 space-y-2">
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-black text-slate-900">
-                      {sel.home_team || "Home Team"}
-                    </span>
-                    <span className={`font-mono text-sm font-black px-2.5 py-0.5 rounded-md ${
-                      legLive ? "bg-red-100 text-red-800 border border-red-200" : "bg-white text-slate-800 border border-slate-200"
-                    }`}>
-                      {homeScore}
+                {/* Pick Details & Market Grid */}
+                <div className="bg-white p-3 rounded-xl border border-slate-200 text-xs space-y-1.5 sm:space-y-0 sm:grid sm:grid-cols-3 sm:gap-2">
+                  <div className="flex sm:flex-col justify-between sm:justify-start items-center sm:items-start gap-1">
+                    <span className="text-[10px] font-bold text-slate-400 uppercase">Pick</span>
+                    <span className="font-extrabold text-indigo-700">
+                      {sel.selection_name || sel.selection || "Pick"} <span className="font-mono text-slate-500 font-bold">@{sel.odds || sel.estimated_odds || "1.25"}</span>
                     </span>
                   </div>
 
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-black text-slate-900">
-                      {sel.away_team || "Away Team"}
-                    </span>
-                    <span className={`font-mono text-sm font-black px-2.5 py-0.5 rounded-md ${
-                      legLive ? "bg-red-100 text-red-800 border border-red-200" : "bg-white text-slate-800 border border-slate-200"
-                    }`}>
-                      {awayScore}
-                    </span>
-                  </div>
-                </div>
-
-                {/* Row 3: Pick, Market & Result Grid (SportyBet Style) */}
-                <div className="grid grid-cols-3 gap-2 bg-white p-3 rounded-xl border border-slate-200 text-xs">
-                  <div>
-                    <span className="text-[10px] font-bold text-slate-400 block uppercase tracking-wider">Pick</span>
-                    <span className="font-extrabold text-slate-900 block">
-                      {sel.selection_name || sel.selection || "Pick"} @{sel.odds || sel.estimated_odds || "1.25"}
-                    </span>
-                  </div>
-
-                  <div>
-                    <span className="text-[10px] font-bold text-slate-400 block uppercase tracking-wider">Market</span>
-                    <span className="font-semibold text-slate-700 block">
+                  <div className="flex sm:flex-col justify-between sm:justify-start items-center sm:items-start gap-1 border-t sm:border-t-0 border-slate-100 pt-1 sm:pt-0">
+                    <span className="text-[10px] font-bold text-slate-400 uppercase">Market</span>
+                    <span className="font-semibold text-slate-700 truncate max-w-[180px] sm:max-w-full">
                       {sel.market_name || sel.market || "Market"}
                     </span>
                   </div>
 
-                  <div>
-                    <span className="text-[10px] font-bold text-slate-400 block uppercase tracking-wider">Result</span>
-                    <span className={`font-black block ${
+                  <div className="flex sm:flex-col justify-between sm:justify-start items-center sm:items-start gap-1 border-t sm:border-t-0 border-slate-100 pt-1 sm:pt-0">
+                    <span className="text-[10px] font-bold text-slate-400 uppercase">Outcome</span>
+                    <span className={`font-black ${
                       isLegWon
                         ? "text-emerald-600 font-extrabold"
                         : evalRes.status === "VOID"
@@ -1494,46 +1442,36 @@ function TicketDetailView({ ticket, onBack, onDelete }) {
                         ? "text-rose-600 font-extrabold"
                         : "text-slate-500"
                     }`}>
-                      {evalRes.resultText}
+                      {isLegWon ? "Won" : isLegLost ? "Lost" : evalRes.status === "VOID" ? "Void (1.00)" : "Pending"}
                     </span>
                   </div>
                 </div>
 
-                {/* Leg Status Footer Banner */}
-                <div className="flex items-center justify-between pt-1">
-                  <div className="text-[11px] font-semibold text-slate-400">
-                    {legLive && isLegWon && (
-                      <span className="text-emerald-700 font-extrabold flex items-center gap-1">
-                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                        Pick entered / won early while match is ongoing!
-                      </span>
-                    )}
-                    {matchInfo.isInterrupted && (
-                      <span className="text-amber-700 font-bold flex items-center gap-1">
-                        Match interrupted (bad weather) — Flashscore: 3-3 (HT: 2-1, H2: 1-2)
-                      </span>
-                    )}
-                  </div>
+                {/* Footer Row: Game ID & Status Badge */}
+                <div className="flex items-center justify-between pt-0.5 text-[11px]">
+                  <span className="text-[10px] font-bold text-slate-400 font-mono">
+                    {gameId ? `Game ID: ${gameId}` : ""}
+                  </span>
 
                   <div>
                     {isLegWon ? (
-                      <span className="bg-emerald-100 text-emerald-800 border border-emerald-300 px-3 py-0.5 rounded-full text-xs font-black flex items-center gap-1">
-                        <CheckCircle2 className="w-3.5 h-3.5" /> Won
+                      <span className="bg-emerald-100 text-emerald-800 border border-emerald-300 px-2.5 py-0.5 rounded-full text-[11px] font-black flex items-center gap-1">
+                        <CheckCircle2 className="w-3 h-3 text-emerald-600" /> Won
                       </span>
                     ) : evalRes.status === "VOID" ? (
-                      <span className="bg-slate-100 text-slate-700 border border-slate-300 px-3 py-0.5 rounded-full text-xs font-black flex items-center gap-1">
-                        <MinusCircle className="w-3.5 h-3.5" /> Void (1.00)
+                      <span className="bg-slate-100 text-slate-700 border border-slate-300 px-2.5 py-0.5 rounded-full text-[11px] font-black flex items-center gap-1">
+                        <MinusCircle className="w-3 h-3" /> Void
                       </span>
                     ) : isLegLost ? (
-                      <span className="bg-rose-100 text-rose-800 border border-rose-300 px-3 py-0.5 rounded-full text-xs font-black flex items-center gap-1">
-                        <XCircle className="w-3.5 h-3.5" /> Lost
+                      <span className="bg-rose-100 text-rose-800 border border-rose-300 px-2.5 py-0.5 rounded-full text-[11px] font-black flex items-center gap-1">
+                        <XCircle className="w-3 h-3 text-rose-600" /> Lost
                       </span>
                     ) : legLive ? (
-                      <span className="bg-amber-100 text-amber-800 border border-amber-300 px-3 py-0.5 rounded-full text-xs font-extrabold flex items-center gap-1">
-                        <Clock className="w-3.5 h-3.5 animate-pulse text-amber-600" /> Live / Ongoing
+                      <span className="bg-red-100 text-red-800 border border-red-300 px-2.5 py-0.5 rounded-full text-[11px] font-extrabold flex items-center gap-1">
+                        <Clock className="w-3 h-3 animate-pulse text-red-600" /> Live
                       </span>
                     ) : (
-                      <span className="bg-slate-100 text-slate-600 border border-slate-200 px-3 py-0.5 rounded-full text-xs font-bold">
+                      <span className="bg-slate-100 text-slate-600 border border-slate-200 px-2.5 py-0.5 rounded-full text-[11px] font-bold">
                         Pending
                       </span>
                     )}
