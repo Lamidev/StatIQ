@@ -1,6 +1,7 @@
 const resolveApiBase = () => {
-  if (import.meta.env.VITE_API_BASE_URL) {
-    const custom = import.meta.env.VITE_API_BASE_URL.trim().replace(/\/+$/, "");
+  const envUrl = import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE_URL;
+  if (envUrl) {
+    const custom = envUrl.trim().replace(/\/+$/, "");
     return custom.endsWith("/api/v1") ? custom : `${custom}/api/v1`;
   }
   if (typeof window !== "undefined") {
@@ -14,9 +15,10 @@ const resolveApiBase = () => {
       return `http://${host}:8000/api/v1`;
     }
   }
-  // Production Cloud Render Backend
-  return "https://statiq-backend.onrender.com/api/v1";
+  // Production Contabo VPS Backend
+  return "https://statiq-api.duckdns.org/api/v1";
 };
+
 
 const API_BASE_URL = resolveApiBase();
 
