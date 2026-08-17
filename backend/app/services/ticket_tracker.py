@@ -1307,85 +1307,114 @@ def evaluate_tracked_tickets(db: Optional[Session] = None) -> List[Dict[str, Any
                 except Exception:
                     pass
 
-            # Fallback: if start_time_ms is still missing, use the ticket's locked_at_unix
-            # as a proxy — all selections on a ticket were due to kick off around lock time.
-            # If the ticket was locked >110 minutes ago, every unresolved game is now over.
-            ticket_locked_ms = (t.get("locked_at_unix") or 0) * 1000
-            if not kickoff_ms and ticket_locked_ms > 0:
-                kickoff_ms = ticket_locked_ms  # treat kick-off ≈ lock time
+            # Guard: If kickoff is in the future, the match is strictly UPCOMING — NEVER conclude or settle early!
+            if kickoff_ms and (now * 1000) < kickoff_ms:
+                sel["match_status"] = "UPCOMING"
+                sel["is_live"] = False
+                sel["leg_status"] = "PENDING"
+                sel["result"] = "--"
+                sel["score"] = "--"
+                sel["home_score"] = None
+                sel["away_score"] = None
+                continue
 
+            # Auto-healing guard: If match has 0-0 placeholder score and was never genuinely concluded/live, reset to UPCOMING
+            if not is_conc and sel.get("score") in ("0 - 0", "0:0") and not sel.get("leg_result"):
+                sel["match_status"] = "UPCOMING"
+                sel["is_live"] = False
+                sel["leg_status"] = "PENDING"
+                sel["result"] = "--"
+                sel["score"] = "--"
+                sel["home_score"] = None
+                sel["away_score"] = None
+                continue
+
+            # If kickoff has passed by > 120 minutes and it was confirmed live or started
             if not is_conc and kickoff_ms and kickoff_ms > 0:
                 elapsed_ms = (now * 1000) - kickoff_ms
-                if elapsed_ms > 110 * 60 * 1000:
-                    is_conc = True
-                    sel["match_status"] = "CONCLUDED"
-                    # Clear stale LIVE flag if game ended
-                    sel["is_live"] = False
-                elif elapsed_ms >= 0:
-                    # Match has kicked off and is currently active
-                    if not is_conc:
-                        sel["match_status"] = "LIVE"
-                        sel["is_live"] = True
-                        is_ticket_live = True
-                else:
-                    # Future match
-                    sel["match_status"] = "UPCOMING"
-                    sel["is_live"] = False
-            elif is_conc:
-                # Already marked concluded — clear any stale live flag
-                sel["is_live"] = False
-            elif st in ("LIVE", "ONGOING", "IN_PLAY"):
-                # Game was marked LIVE — if no kickoff time at all but ticket is old enough, conclude it
-                elapsed_ticket = (now * 1000) - ticket_locked_ms if ticket_locked_ms > 0 else 0
-                if kickoff_ms and kickoff_ms > 0:
-                    elapsed_ms = (now * 1000) - kickoff_ms
-                    if elapsed_ms > 110 * 60 * 1000:
-                        is_conc = True
-                        sel["match_status"] = "CONCLUDED"
-                        sel["is_live"] = False
-                elif elapsed_ticket > 110 * 60 * 1000:
-                    # No kickoff time but ticket is old — conclude this stale LIVE game
+                if elapsed_ms > 120 * 60 * 1000 and st in ("LIVE", "ONGOING", "IN_PLAY"):
                     is_conc = True
                     sel["match_status"] = "CONCLUDED"
                     sel["is_live"] = False
-
-            score_str = sel.get("score", "")
-
-            if st in ("LIVE", "ONGOING", "IN_PLAY") or sel.get("is_live"):
-                if not is_conc:
+                elif elapsed_ms >= 0 and st in ("LIVE", "ONGOING", "IN_PLAY"):
+                    sel["match_status"] = "LIVE"
+                    sel["is_live"] = True
                     is_ticket_live = True
 
-            if score_str or is_conc:
-                if score_str:
-                    h, a, ht_h, ht_a = _parse_full_and_ht_scores(score_str)
+            # If match is NOT concluded and NOT confirmed live, it is UPCOMING
+            if not is_conc and not sel.get("is_live") and st not in ("LIVE", "ONGOING", "IN_PLAY"):
+                sel["match_status"] = "UPCOMING"
+                sel["is_live"] = False
+                sel["leg_status"] = "PENDING"
+                sel["result"] = "--"
+                sel["score"] = "--"
+                sel["home_score"] = None
+                sel["away_score"] = None
+                continue
+
+            score_str = sel.get("score", "")
+            h, a, ht_h, ht_a = None, None, None, None
+            if score_str:
+                h, a, ht_h, ht_a = _parse_full_and_ht_scores(score_str)
+            else:
+                h, a = sel.get("home_score"), sel.get("away_score")
+
+            if ht_h is None:
+                ht_h = next((sel.get(k) for k in ("ht_home_score", "home_ht_score", "ht_home") if sel.get(k) is not None), None)
+            if ht_a is None:
+                ht_a = next((sel.get(k) for k in ("ht_away_score", "away_ht_score", "ht_away") if sel.get(k) is not None), None)
+
+            mkt_str = sel.get("market_name") or ""
+            sel_str = sel.get("selection_name") or sel.get("selection") or ""
+            full_pick = f"{mkt_str} — {sel_str}".strip(" —") if mkt_str else sel_str
+
+            authoritative_leg_res = sel.get("leg_result")
+            if authoritative_leg_res not in ("WON", "LOST", "VOID"):
+                authoritative_leg_res = None
+
+            # Handle LIVE matches: evaluate ONLY early winners (e.g. Over 1.5 Goals with live 2-0). NEVER mark live matches as LOST!
+            if sel.get("is_live") and not is_conc:
+                is_ticket_live = True
+                if h is not None and a is not None:
+                    live_res = evaluate_pick_status(
+                        full_pick, h, a,
+                        home_team=sel.get("home_team", ""),
+                        away_team=sel.get("away_team", ""),
+                        is_concluded=False,
+                        home_corners=sel.get("home_corners"),
+                        away_corners=sel.get("away_corners"),
+                        total_corners=sel.get("total_corners"),
+                        ht_home_score=ht_h,
+                        ht_away_score=ht_a
+                    )
+                    if live_res in ("WON", True):
+                        sel["leg_status"] = "WON"
+                        sel["result"] = sel.get("selection_name") or "Passed"
+                        concluded_legs += 1
+                    else:
+                        sel["leg_status"] = "PENDING"
+                        sel["result"] = "--"
                 else:
-                    h, a = sel.get("home_score"), sel.get("away_score")
-                    ht_h, ht_a = None, None
+                    sel["leg_status"] = "PENDING"
+                    sel["result"] = "--"
+                continue
 
-                if ht_h is None:
-                    ht_h = next((sel.get(k) for k in ("ht_home_score", "home_ht_score", "ht_home") if sel.get(k) is not None), None)
-                if ht_a is None:
-                    ht_a = next((sel.get(k) for k in ("ht_away_score", "away_ht_score", "ht_away") if sel.get(k) is not None), None)
-
-                mkt_str = sel.get("market_name") or ""
-                sel_str = sel.get("selection_name") or sel.get("selection") or ""
-                full_pick = f"{mkt_str} — {sel_str}".strip(" —") if mkt_str else sel_str
-
-                authoritative_leg_res = sel.get("leg_result")
-                if authoritative_leg_res not in ("WON", "LOST", "VOID"):
-                    authoritative_leg_res = None
-
-                res_status = evaluate_pick_status(
-                    full_pick, h, a,
-                    home_team=sel.get("home_team", ""),
-                    away_team=sel.get("away_team", ""),
-                    is_concluded=is_conc,
-                    home_corners=sel.get("home_corners"),
-                    away_corners=sel.get("away_corners"),
-                    total_corners=sel.get("total_corners"),
-                    ht_home_score=ht_h,
-                    ht_away_score=ht_a
-                )
+            # Handle CONCLUDED matches: settle leg definitively
+            if is_conc:
+                sel["is_live"] = False
+                res_status = "PENDING"
+                if h is not None and a is not None:
+                    res_status = evaluate_pick_status(
+                        full_pick, h, a,
+                        home_team=sel.get("home_team", ""),
+                        away_team=sel.get("away_team", ""),
+                        is_concluded=True,
+                        home_corners=sel.get("home_corners"),
+                        away_corners=sel.get("away_corners"),
+                        total_corners=sel.get("total_corners"),
+                        ht_home_score=ht_h,
+                        ht_away_score=ht_a
+                    )
 
                 if authoritative_leg_res and res_status in ("PENDING", None):
                     res_status = authoritative_leg_res
@@ -1402,37 +1431,12 @@ def evaluate_tracked_tickets(db: Optional[Session] = None) -> List[Dict[str, Any
                     sel["result"] = "Failed"
                     concluded_legs += 1
                 else:
-                    # Unverified score / no authoritative result yet
-                    if authoritative_leg_res == "WON":
-                        sel["leg_status"] = "WON"
-                        sel["result"] = sel.get("selection_name") or "Passed"
-                        concluded_legs += 1
-                    elif authoritative_leg_res == "LOST":
-                        sel["leg_status"] = "LOST"
-                        sel["result"] = "Failed"
-                        concluded_legs += 1
-                    else:
-                        # Strictly unverified — do not assume WON. Keep as PENDING until score/result is verified.
-                        sel["leg_status"] = "PENDING"
-                        sel["result"] = "--"
-
-                if is_conc:
-                    sel["match_status"] = "CONCLUDED"
-                continue
-
-
-            leg_res = sel.get("leg_result") or sel.get("leg_status")
-            if leg_res in ("WON", "LOST") and is_conc:
-                sel["leg_status"] = leg_res
-                concluded_legs += 1
-                continue
-
-            if leg_res == "VOID" or st in ("NULLED_EXPIRED", "CANCELLED", "POSTPONED"):
-                sel["leg_status"] = "VOID"
-                concluded_legs += 1
+                    sel["leg_status"] = "PENDING"
+                    sel["result"] = "--"
                 continue
 
             sel["leg_status"] = "PENDING"
+            sel["result"] = "--"
             sel["result"] = "--"
 
         t["is_live"] = is_ticket_live
@@ -1492,6 +1496,8 @@ def evaluate_tracked_tickets(db: Optional[Session] = None) -> List[Dict[str, Any
             # Ticket remains RUNNING with completed legs settled game-by-game
             t["status"] = "RUNNING"
             t["flex_status_text"] = None
+            if prev_status != "RUNNING":
+                updated = True
             locked_at = t.get("locked_at_unix", 0)
             age_hours = (now - locked_at) / 3600 if locked_at else 0
             if age_hours >= 4 and t.get("mode") in ("AUDITOR", "SWAP", "REMOVE"):
@@ -1500,8 +1506,8 @@ def evaluate_tracked_tickets(db: Optional[Session] = None) -> List[Dict[str, Any
             else:
                 t["stale"] = False
 
-    if updated:
-        save_tracked_tickets(tickets, db=db)
+    # Always persist updated and healed tickets to DB
+    save_tracked_tickets(tickets, db=db)
 
     return tickets
 
@@ -1883,92 +1889,7 @@ def sync_tracked_tickets_with_live_apis(db: Optional[Session] = None) -> List[Di
         except Exception as live_err:
             print("[TicketTracker] SportyBet events sync warning:", live_err)
 
-        # ── PASS 1D: Gemini AI Universal Results Reconciler ──────────────────────
-        try:
-            unresolved_matches = set()
-            for t in tickets:
-                if t.get("status") == "RUNNING":
-                    for sel in t.get("selections", []):
-                        if not sel.get("score") and sel.get("match_status") in ("CONCLUDED", "LIVE", "UPCOMING", None, ""):
-                            h = sel.get("home_team")
-                            a = sel.get("away_team")
-                            d_str = sel.get("date_str") or "2026-08-15"
-                            if h and a:
-                                unresolved_matches.add((h, a, d_str))
-
-            if unresolved_matches:
-                from app.services.gemini_service import GeminiAIService
-                ai_service = GeminiAIService()
-                if ai_service.api_key:
-                    match_items_str = "\n".join([f"- {h} vs {a} (Date: {d})" for h, a, d in list(unresolved_matches)[:25]])
-                    prompt = f"""
-You are MatchIQ's Sports Match Results Verification Engine.
-For each of the following football matches played on or around the specified date, provide the exact verified final score (full-time) and half-time score if known:
-
-{match_items_str}
-
-Return strictly a valid JSON array of objects with the exact schema:
-[
-  {{"home_team": "exact team name", "away_team": "exact team name", "home_score": 1, "away_score": 0, "ht_home": 0, "ht_away": 0, "status": "CONCLUDED"}}
-]
-Return ONLY the raw JSON array.
-"""
-                    res_text = ai_service._call_gemini_api(prompt)
-                    import json, re
-                    clean_json = res_text.strip()
-                    if clean_json.startswith("```json"):
-                        clean_json = clean_json[7:]
-                    if clean_json.startswith("```"):
-                        clean_json = clean_json[3:]
-                    if clean_json.endswith("```"):
-                        clean_json = clean_json[:-3]
-                    
-                    json_match = re.search(r'\[\s*\{.*\}\s*\]', clean_json, re.DOTALL)
-                    if json_match:
-                        parsed_results = json.loads(json_match.group(0))
-                        for r in parsed_results:
-                            r_h = str(r.get("home_team") or "").strip().lower()
-                            r_a = str(r.get("away_team") or "").strip().lower()
-                            r_h_score = r.get("home_score")
-                            r_a_score = r.get("away_score")
-                            r_ht_h = r.get("ht_home")
-                            r_ht_a = r.get("ht_away")
-                            r_status = str(r.get("status") or "CONCLUDED").upper()
-
-                            if r_h_score is not None and r_a_score is not None:
-                                for t in tickets:
-                                    for sel in t.get("selections", []):
-                                        sel_h = str(sel.get("home_team") or "").strip().lower()
-                                        sel_a = str(sel.get("away_team") or "").strip().lower()
-                                        
-                                        h_match = (
-                                            sel_h in r_h or r_h in sel_h or
-                                            (sel_h.split()[0] in r_h if sel_h else False) or
-                                            (r_h.split()[0] in sel_h if r_h else False)
-                                        )
-                                        a_match = (
-                                            sel_a in r_a or r_a in sel_a or
-                                            (sel_a.split()[0] in r_a if sel_a else False) or
-                                            (r_a.split()[0] in sel_a if r_a else False)
-                                        )
-                                        if h_match and a_match:
-                                            sel["score"] = f"{r_h_score} - {r_a_score}"
-                                            sel["home_score"] = int(r_h_score)
-                                            sel["away_score"] = int(r_a_score)
-                                            if r_ht_h is not None and r_ht_a is not None:
-                                                sel["ht_home_score"] = int(r_ht_h)
-                                                sel["ht_away_score"] = int(r_ht_a)
-                                            if r_status in ("CONCLUDED", "FINISHED", "FT"):
-                                                sel["match_status"] = "CONCLUDED"
-                                                sel["is_live"] = False
-        except Exception as ai_err:
-            print("[TicketTracker] Gemini AI results reconciler warning:", ai_err)
-
-        # ── PASS 2: Concluded Results Sweep ──────────────────────────────────────
-        # For any selection that is still marked LIVE or UPCOMING but whose kickoff was
-        # >110 minutes ago (i.e. the match is over), force a fresh booking code lookup
-        # to pull the concluded score/result before saving. This catches matches that
-        # disappeared from the live feed without being settled.
+        # ── PASS 2: Concluded Results Sweep (Verified Booking Codes Only) ────────
         try:
             now_ts2 = time.time()
             stale_tickets = [
@@ -1978,25 +1899,15 @@ Return ONLY the raw JSON array.
                 and t.get("code") not in ("CUSTOM", "", "AI-BUILDER-INTERNAL", "ROLLOVER-INTERNAL")
                 and any(
                     (
-                        (
-                            s.get("match_status") in ("LIVE", "ONGOING", "IN_PLAY", "UPCOMING", None, "")
-                            or not s.get("match_status")
-                        )
-                        and (
-                            # Has start_time_ms and it's old enough
-                            (s.get("start_time_ms") and ((now_ts2 * 1000) - s["start_time_ms"]) > 110 * 60 * 1000)
-                            or
-                            # OR no start_time_ms but ticket itself is old enough (>110 min since locked)
-                            (not s.get("start_time_ms") and t.get("locked_at_unix") and
-                             (now_ts2 - t["locked_at_unix"]) > 110 * 60)
-                        )
+                        s.get("match_status") in ("LIVE", "ONGOING", "IN_PLAY")
+                        and s.get("start_time_ms")
+                        and ((now_ts2 * 1000) - s["start_time_ms"]) > 120 * 60 * 1000
                     )
                     for s in t.get("selections", [])
                 )
             ]
 
             if stale_tickets:
-                print(f"[TicketTracker] Concluded sweep: {len(stale_tickets)} tickets have stale unresolved games")
                 from app.adapters.bookmaker_adapter import SportyBetAdapter as _SBA
                 _adapter2 = _SBA(db)
                 for t in stale_tickets:
@@ -2017,21 +1928,20 @@ Return ONLY the raw JSON array.
                             for sel in t.get("selections", []):
                                 sel_st = (sel.get("match_status") or "").upper()
                                 sel_ms = sel.get("start_time_ms")
-                                is_stale = (
-                                    sel_st in ("LIVE", "ONGOING", "IN_PLAY", "UPCOMING", "", None)
+                                is_stale_live = (
+                                    sel_st in ("LIVE", "ONGOING", "IN_PLAY")
                                     and sel_ms
-                                    and ((now_ts2 * 1000) - sel_ms) > 110 * 60 * 1000
+                                    and ((now_ts2 * 1000) - sel_ms) > 120 * 60 * 1000
                                 )
-                                if not is_stale:
+                                if not is_stale_live:
                                     continue
 
                                 gid = str(sel.get("game_id") or sel.get("fixture_id") or "")
                                 mkey = f"{(sel.get('home_team') or '').strip()}_{(sel.get('away_team') or '').strip()}".lower()
                                 sb_item = sb_map2.get(gid) or sb_map2.get(mkey)
                                 if sb_item:
-                                    # Pull score
                                     sc = sb_item.get("score") or ""
-                                    if sc and sc != "--":
+                                    if sc and sc != "--" and sc != "0:0" and sc != "0-0":
                                         sel["score"] = sc
                                         h2, a2 = _parse_score(sc)
                                         if h2 is not None:
@@ -2041,22 +1951,13 @@ Return ONLY the raw JSON array.
                                         sel["home_score"] = sb_item["home_score"]
                                         sel["away_score"] = sb_item["away_score"]
                                         sel["score"] = f"{sel['home_score']} - {sel['away_score']}"
-                                    # Pull leg result from bookmaker
                                     if sb_item.get("leg_result") in ("WON", "LOST", "VOID"):
                                         sel["leg_result"] = sb_item["leg_result"]
                                         sel["leg_status"] = sb_item["leg_result"]
-                                    # Mark concluded
                                     bk_st = str(sb_item.get("match_status") or "").upper()
-                                    if bk_st in ("CONCLUDED", "FT", "FINISHED", "ENDED", "NULLED_EXPIRED") or not bk_st:
+                                    if bk_st in ("CONCLUDED", "FT", "FINISHED", "ENDED"):
                                         sel["match_status"] = "CONCLUDED"
                                         sel["is_live"] = False
-                                    elif bk_st in ("IN_PROGRESS", "LIVE", "H1", "H2", "HT"):
-                                        sel["match_status"] = "LIVE"
-                                        sel["is_live"] = True
-                                else:
-                                    # Not found in booking code anymore — assume concluded (match over)
-                                    sel["match_status"] = "CONCLUDED"
-                                    sel["is_live"] = False
                     except Exception as stale_err:
                         print(f"[TicketTracker] Concluded sweep error for {code}:", stale_err)
         except Exception as sweep_err:

@@ -151,58 +151,59 @@ async def get_fixtures_by_gameweek(
     meta = COMPETITION_SEASON_MAP.get(comp, {"name": comp, "season": 2026})
     target_season = season if season is not None else meta.get("season", 2026)
     
-    # 1. Try SportyBet live upcoming feed first
-    try:
-        raw_sporty = SportyBetIngestionService.fetch_upcoming_fixtures(limit=100)
-        matched_fixtures = []
-        for ev in raw_sporty:
-            comp_name = (ev.get("competition") or ev.get("country") or "").lower()
-            league_target = meta.get("name", comp).lower()
-            if comp.lower() in comp_name or league_target in comp_name:
-                h_name = ev.get("home_team") or "Home"
-                a_name = ev.get("away_team") or "Away"
-                probs = calculate_matchiq_probabilities(h_name, a_name)
-                
-                matched_fixtures.append({
-                    "id": ev.get("event_id"),
-                    "event_id": ev.get("event_id"),
-                    "game_id": ev.get("game_id"),
-                    "home_team": h_name,
-                    "away_team": a_name,
-                    "kickoff_datetime": ev.get("kickoff_time"),
-                    "status": "TIMED",
+    # 1. Only try SportyBet live upcoming feed for CURRENT / UPCOMING season requests (not historical backtests)
+    if season is None or season >= 2026:
+        try:
+            raw_sporty = SportyBetIngestionService.fetch_upcoming_fixtures(limit=100)
+            matched_fixtures = []
+            for ev in raw_sporty:
+                comp_name = (ev.get("competition") or ev.get("country") or "").lower()
+                league_target = meta.get("name", comp).lower()
+                if comp.lower() in comp_name or league_target in comp_name:
+                    h_name = ev.get("home_team") or "Home"
+                    a_name = ev.get("away_team") or "Away"
+                    probs = calculate_matchiq_probabilities(h_name, a_name)
+                    
+                    matched_fixtures.append({
+                        "id": ev.get("event_id"),
+                        "event_id": ev.get("event_id"),
+                        "game_id": ev.get("game_id"),
+                        "home_team": h_name,
+                        "away_team": a_name,
+                        "kickoff_datetime": ev.get("kickoff_time"),
+                        "status": "TIMED",
+                        "matchday": matchday,
+                        "league_code": comp,
+                        "league_name": meta.get("name", comp),
+                        "ai_prob_home": probs["ai_prob_home"],
+                        "ai_prob_draw": probs["ai_prob_draw"],
+                        "ai_prob_away": probs["ai_prob_away"],
+                        "ai_prob_over_1_5": probs["ai_prob_over_1_5"],
+                        "home_elo": probs.get("home_elo", 1650),
+                        "away_elo": probs.get("away_elo", 1650),
+                        "elo_gap": probs.get("elo_gap", 0.0),
+                        "result_1x2": {
+                            "home": ev.get("odds_home", 2.0),
+                            "draw": ev.get("odds_draw", 3.2),
+                            "away": ev.get("odds_away", 3.0),
+                        },
+                        "has_prediction": True
+                    })
+
+            if matched_fixtures:
+                return {
+                    "source": "sportybet_live",
+                    "competition": comp,
+                    "competition_name": meta.get("name", comp),
+                    "season": target_season,
                     "matchday": matchday,
-                    "league_code": comp,
-                    "league_name": meta.get("name", comp),
-                    "ai_prob_home": probs["ai_prob_home"],
-                    "ai_prob_draw": probs["ai_prob_draw"],
-                    "ai_prob_away": probs["ai_prob_away"],
-                    "ai_prob_over_1_5": probs["ai_prob_over_1_5"],
-                    "home_elo": probs.get("home_elo", 1650),
-                    "away_elo": probs.get("away_elo", 1650),
-                    "elo_gap": probs.get("elo_gap", 0.0),
-                    "result_1x2": {
-                        "home": ev.get("odds_home", 2.0),
-                        "draw": ev.get("odds_draw", 3.2),
-                        "away": ev.get("odds_away", 3.0),
-                    },
-                    "has_prediction": True
-                })
+                    "total": len(matched_fixtures),
+                    "fixtures": matched_fixtures,
+                }
+        except Exception as e:
+            logger.warning(f"SportyBet gameweek lookup fallback: {e}")
 
-        if matched_fixtures:
-            return {
-                "source": "sportybet_live",
-                "competition": comp,
-                "competition_name": meta.get("name", comp),
-                "season": target_season,
-                "matchday": matchday,
-                "total": len(matched_fixtures),
-                "fixtures": matched_fixtures,
-            }
-    except Exception as e:
-        logger.warning(f"SportyBet gameweek lookup fallback: {e}")
-
-    # 2. Fallback to football-data.org if SportyBet returns empty for this league
+    # 2. Query football-data.org for historical/confirmed matches
     raw = await _fetch_from_football_data(
         f"competitions/{comp}/matches",
         {"matchday": matchday, "season": target_season}

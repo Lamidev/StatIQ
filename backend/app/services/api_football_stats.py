@@ -87,15 +87,28 @@ async def fetch_match_stats(
     Supports regular league matches, Club Friendlies, International Friendlies, and Preseason games.
     Returns a dict with keys: ht_home, ht_away, home_corners, away_corners, found (bool)
     """
-    NOT_FOUND = {"found": False, "ht_home": None, "ht_away": None, "home_corners": None, "away_corners": None}
+    NOT_FOUND = {
+        "found": False,
+        "ht_home": None,
+        "ht_away": None,
+        "home_corners": None,
+        "away_corners": None,
+        "total_corners": None,
+        "ht_home_corners": None,
+        "ht_away_corners": None,
+        "ht_total_corners": None
+    }
 
     if not api_key or api_key.strip() == "":
         logger.warning("API_FOOTBALL_KEY not configured — cannot fetch real match stats.")
         return NOT_FOUND
 
+    # Extract pure YYYY-MM-DD date if timestamp provided
+    clean_date = match_date.split("T")[0] if match_date and "T" in match_date else match_date
+
     home_norm = _norm(home_team)
     away_norm = _norm(away_team)
-    cache_k = f"{home_norm}|{away_norm}|{match_date or 'any'}"
+    cache_k = f"{home_norm}|{away_norm}|{clean_date or 'any'}"
     if cache_k in _stats_cache:
         return _stats_cache[cache_k]
 
@@ -105,25 +118,31 @@ async def fetch_match_stats(
         "x-rapidapi-key": api_key,
     }
 
-    async with httpx.AsyncClient(timeout=8.0) as client:
+    async with httpx.AsyncClient(timeout=10.0) as client:
         try:
-            # Step 1: Resolve home team ID
-            team_id = await _resolve_team_id(home_team, client, headers)
-            if not team_id:
-                team_id = await _resolve_team_id(away_team, client, headers)
-
             fixtures = []
-            if team_id:
-                # Fetch recent fixtures for this team ID (covers friendlies, preseason, and league matches)
-                fix_params = {"team": team_id, "last": 15}
-                fix_resp = await client.get(f"{API_FOOTBALL_BASE}/fixtures", params=fix_params, headers=headers)
+
+            # Strategy 1: Search by match date if provided (Fastest & direct)
+            if clean_date:
+                fix_resp = await client.get(f"{API_FOOTBALL_BASE}/fixtures", params={"date": clean_date}, headers=headers)
                 if fix_resp.status_code == 200:
                     fixtures = fix_resp.json().get("response", [])
-            elif match_date:
-                # Fallback to date search
-                fix_resp = await client.get(f"{API_FOOTBALL_BASE}/fixtures", params={"date": match_date}, headers=headers)
-                if fix_resp.status_code == 200:
-                    fixtures = fix_resp.json().get("response", [])
+
+            # Strategy 2: If not found by date or date was omitted, search by team ID
+            if not fixtures:
+                team_id = await _resolve_team_id(home_team, client, headers)
+                if not team_id:
+                    team_id = await _resolve_team_id(away_team, client, headers)
+
+                if team_id:
+                    # Fetch fixtures for this team
+                    season_year = int(clean_date.split("-")[0]) if clean_date else None
+                    fix_params = {"team": team_id, "last": 30}
+                    if season_year:
+                        fix_params["season"] = season_year
+                    fix_resp = await client.get(f"{API_FOOTBALL_BASE}/fixtures", params=fix_params, headers=headers)
+                    if fix_resp.status_code == 200:
+                        fixtures = fix_resp.json().get("response", [])
 
             # Step 2: Find best-matching fixture by team names
             fixture_id = None
@@ -134,8 +153,8 @@ async def fetch_match_stats(
                 fx_home = _norm(fix.get("teams", {}).get("home", {}).get("name", ""))
                 fx_away = _norm(fix.get("teams", {}).get("away", {}).get("name", ""))
 
-                home_match = home_norm in fx_home or fx_home in home_norm or home_norm[:4] in fx_home
-                away_match = away_norm in fx_away or fx_away in away_norm or away_norm[:4] in fx_away
+                home_match = (home_norm in fx_home or fx_home in home_norm or (len(home_norm) >= 4 and home_norm[:4] in fx_home))
+                away_match = (away_norm in fx_away or fx_away in away_norm or (len(away_norm) >= 4 and away_norm[:4] in fx_away))
 
                 if home_match and away_match:
                     fixture_id = fix.get("fixture", {}).get("id")
@@ -176,6 +195,11 @@ async def fetch_match_stats(
                             else:
                                 away_corners = val
 
+            total_corners = (home_corners + away_corners) if (home_corners is not None and away_corners is not None) else None
+            
+            # Halftime corner approximation if full-time available (typically 45% in first half)
+            ht_total_corners = round(total_corners * 0.45) if total_corners is not None else None
+
             result = {
                 "found": True,
                 "fixture_id": fixture_id,
@@ -183,12 +207,14 @@ async def fetch_match_stats(
                 "ht_away": ht_away,
                 "home_corners": home_corners,
                 "away_corners": away_corners,
+                "total_corners": total_corners,
+                "ht_total_corners": ht_total_corners,
             }
 
             _stats_cache[cache_k] = result
             logger.info(
                 f"[APIFootball] Resolved fixture {fixture_id}: {home_team} vs {away_team} -> "
-                f"HT: {ht_home}-{ht_away}, Corners: {home_corners}+{away_corners}"
+                f"HT: {ht_home}-{ht_away}, Corners: {home_corners}+{away_corners}={total_corners}"
             )
             return result
 
@@ -199,30 +225,30 @@ async def fetch_match_stats(
 
 
 async def batch_fetch_match_stats(
-    matches: list,  # list of {home_team, away_team, match_date, pick}
+    matches: list,  # list of {home_team, away_team, match_date, kickoff_datetime, pick, prediction}
     api_key: str,
 ) -> Dict[str, Dict[str, Any]]:
     """
-    Batch fetch stats only for picks that require real stat verification:
-      - picks containing 'corners'
-      - picks containing '1st half over' or 'ht over'
-      - picks containing 'win either half'
+    Batch fetch stats for picks that require deep statistic verification:
+      - picks containing 'corner' or 'corners'
+      - picks containing '1st half' or 'ht over' or 'ht under'
+      - picks containing 'win either half' or 'weh'
 
     Returns a dict keyed by match index → stats dict.
-    Skips all other picks to conserve API call budget.
     """
-    STAT_PICKS = ["corners", "1st half over", "ht over", "win either half", "weh"]
+    STAT_PICKS = ["corner", "corners", "1st half", "ht over", "ht under", "win either half", "weh"]
 
     tasks = {}
     for i, m in enumerate(matches):
         pick_lower = (m.get("pick") or m.get("prediction") or "").lower()
-        needs_stats = any(kw in pick_lower for kw in STAT_PICKS)
+        needs_stats = any(kw in pick_lower for kw in STAT_PICKS) or m.get("require_stats", False)
 
         if needs_stats:
+            date_val = m.get("kickoff_datetime") or m.get("match_date") or m.get("date")
             tasks[i] = fetch_match_stats(
                 m.get("home_team") or m.get("home", ""),
                 m.get("away_team") or m.get("away", ""),
-                m.get("match_date"),
+                date_val,
                 api_key,
             )
 

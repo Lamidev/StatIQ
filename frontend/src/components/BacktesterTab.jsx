@@ -13,6 +13,14 @@ export default function BacktesterTab() {
   const [expiredCodeInput, setExpiredCodeInput] = useState("");
   const [codeTargetOdds, setCodeTargetOdds] = useState("ALL"); // Sub-feature target odds filter for expired codes ("ALL", "2.0", "3.0", "5.0", "10.0", "20.0")
   const [selectedFlexCut, setSelectedFlexCut] = useState("AUTO"); // Flex Cut Selector ("AUTO", "OFF", "1".."7")
+  const [selectedMarketCategories, setSelectedMarketCategories] = useState([
+    "DOUBLE_CHANCE",
+    "OVER_UNDER",
+    "TEAM_GOALS",
+    "1X2",
+    "CORNERS",
+    "HALFTIME"
+  ]);
 
   // Dynamic state for audit sessions
   const [auditing, setAuditing] = useState(false);
@@ -165,10 +173,10 @@ export default function BacktesterTab() {
             isUnverified,
             realStats,
             reason: isUnverified
-              ? `StatIQ Brain Audit: StatIQ predicted [${matchIQPick.pick}]. Score: ${f.home_team} ${f.home_score} - ${f.away_score} ${f.away_team}. ⚠️ UNVERIFIED — this pick requires real match statistics (corners/halftime) not available from score data alone.`
+              ? `StatIQ Brain Audit: StatIQ predicted [${matchIQPick.pick}]. Score: ${f.home_team} ${f.home_score} - ${f.away_score} ${f.away_team}. UNVERIFIED — this pick requires real match statistics (corners/halftime) not available from score data alone.`
               : isVoid
-              ? `StatIQ Brain Audit: StatIQ predicted [${matchIQPick.pick}]. Actual final score: ${f.home_team} ${f.home_score} - ${f.away_score} ${f.away_team} → 🔄 VOID / PUSH (Stake returned @ 1.00x odds).`
-              : `StatIQ Brain Audit: StatIQ predicted [${matchIQPick.pick}]. Actual final score: ${f.home_team} ${f.home_score} - ${f.away_score} ${f.away_team} → ${isWin ? "STATIQ PICK WON" : "STATIQ PICK LOST"}. (Original Code Pick: ${f.originalPick}).`
+              ? `StatIQ Brain Audit: StatIQ predicted [${matchIQPick.pick}]. Actual final score: ${f.home_team} ${f.home_score} - ${f.away_score} ${f.away_team} -> VOID / PUSH (Stake returned @ 1.00x odds).`
+              : `StatIQ Brain Audit: StatIQ predicted [${matchIQPick.pick}]. Actual final score: ${f.home_team} ${f.home_score} - ${f.away_score} ${f.away_team} -> ${isWin ? "STATIQ PICK WON" : "STATIQ PICK LOST"}. (Original Code Pick: ${f.originalPick}).`
           };
         });
       } else {
@@ -198,10 +206,10 @@ export default function BacktesterTab() {
             isUnverified,
             realStats,
             reason: isUnverified
-              ? `StatIQ Brain Audit: StatIQ predicted [${leg.prediction}]. Score: ${leg.home} ${hScore} - ${aScore} ${leg.away}. ⚠️ UNVERIFIED — requires corners/halftime stats.`
+              ? `StatIQ Brain Audit: StatIQ predicted [${leg.prediction}]. Score: ${leg.home} ${hScore} - ${aScore} ${leg.away}. UNVERIFIED — requires corners/halftime stats.`
               : isVoid
-              ? `StatIQ Brain Audit: StatIQ predicted [${leg.prediction}]. Actual final score: ${leg.home} ${hScore} - ${aScore} ${leg.away} → 🔄 VOID / PUSH (Stake returned @ 1.00x odds).`
-              : `StatIQ Brain Audit: StatIQ predicted [${leg.prediction}]. Actual final score: ${leg.home} ${hScore} - ${aScore} ${leg.away} → ${isWin ? "STATIQ PICK WON" : "STATIQ PICK LOST"}. (Original Code Pick: ${leg.originalPick || "N/A"}).`
+              ? `StatIQ Brain Audit: StatIQ predicted [${leg.prediction}]. Actual final score: ${leg.home} ${hScore} - ${aScore} ${leg.away} -> VOID / PUSH (Stake returned @ 1.00x odds).`
+              : `StatIQ Brain Audit: StatIQ predicted [${leg.prediction}]. Actual final score: ${leg.home} ${hScore} - ${aScore} ${leg.away} -> ${isWin ? "STATIQ PICK WON" : "STATIQ PICK LOST"}. (Original Code Pick: ${leg.originalPick || "N/A"}).`
           };
         });
       }
@@ -249,14 +257,47 @@ export default function BacktesterTab() {
       let selectionsToAudit = [];
       if (historicalMatches.length > 0) {
         const usedTypeCounts = {};
-        selectionsToAudit = historicalMatches.map((f, idx) => {
+        const rawPickList = historicalMatches.map((f) => {
           const pd = generateSafePick(f, usedTypeCounts, true);
           usedTypeCounts[pd.marketType] = (usedTypeCounts[pd.marketType] || 0) + 1;
-          const hasRealScore = f.home_score !== null && f.home_score !== undefined && f.away_score !== null && f.away_score !== undefined;
-          if (!hasRealScore) return null; // skip fixtures with no real score
+          return { fixture: f, pick: pd };
+        }).filter(item => {
+          const f = item.fixture;
+          return f.home_score !== null && f.home_score !== undefined && f.away_score !== null && f.away_score !== undefined;
+        });
+
+        // Batch-fetch real match stats (corners, halftime scores) from backend API
+        const statQueryMatches = rawPickList.map((item) => ({
+          home_team: item.fixture.home_team,
+          away_team: item.fixture.away_team,
+          pick: item.pick.pick,
+          kickoff_datetime: item.fixture.kickoff_datetime
+        }));
+        const statsResponse = await fetchMatchStats(statQueryMatches);
+        const realStatsMap = statsResponse?.stats || {};
+
+        selectionsToAudit = rawPickList.map((item, idx) => {
+          const f = item.fixture;
+          const pd = item.pick;
           const hScore = f.home_score;
           const aScore = f.away_score;
-          const isWin = evaluatePickResult(pd.pick, hScore, aScore, f.home_team, f.away_team);
+          const realStats = realStatsMap[String(idx)] || null;
+          const evalRes = evaluatePickResult(pd.pick, hScore, aScore, f.home_team, f.away_team, realStats);
+          const isUnverified = evalRes === "UNVERIFIED";
+          const isVoid = evalRes === "VOID";
+          const isWin = isUnverified ? false : isVoid ? true : evalRes;
+
+          let proof = `FT: ${hScore} - ${aScore}`;
+          if (realStats && realStats.found) {
+            if (pd.pick.toLowerCase().includes("corner")) {
+              const hCorn = realStats.home_corners ?? 0;
+              const aCorn = realStats.away_corners ?? 0;
+              const totCorn = realStats.total_corners ?? (hCorn + aCorn);
+              proof = `Corners: ${hCorn} Home + ${aCorn} Away = ${totCorn} Total`;
+            } else if (pd.pick.toLowerCase().includes("1st half") || pd.pick.toLowerCase().includes("ht")) {
+              proof = `HT: ${realStats.ht_home ?? 0}-${realStats.ht_away ?? 0} | FT: ${hScore}-${aScore}`;
+            }
+          }
 
           return {
             id: f.fixture_id || idx + 2000,
@@ -264,15 +305,23 @@ export default function BacktesterTab() {
             home: f.home_team,
             away: f.away_team,
             prediction: pd.pick,
-            odds: pd.odds,
+            odds: isVoid ? 1.00 : pd.odds,
             prob: pd.prob,
             tier: pd.tier,
             actualHome: hScore,
             actualAway: aScore,
-            isWin: isWin,
-            reason: `Season ${season}/${season + 1} GW${gameweek}: ${f.home_team} ${hScore} - ${aScore} ${f.away_team}. [${pd.tier}]`
+            isWin,
+            isVoid,
+            isUnverified,
+            proof,
+            realStats,
+            reason: isUnverified
+              ? `UNVERIFIED: Requires deep match stats for ${pd.pick}`
+              : isVoid
+              ? `VOID (1.00x Odds) — Final: ${f.home_team} ${hScore} - ${aScore} ${f.away_team}`
+              : `${proof} -> ${isWin ? "PICK WON" : "PICK LOST"}`
           };
-        }).filter(Boolean);
+        });
       }
 
       if (selectionsToAudit.length === 0) {
@@ -285,8 +334,10 @@ export default function BacktesterTab() {
         return;
       }
 
+      const verifiedSelections = selectionsToAudit.filter(m => !m.isUnverified);
       const totalOdds = selectionsToAudit.reduce((acc, m) => acc * m.odds, 1.0);
-      const wonCount = selectionsToAudit.filter(m => m.isWin).length;
+      const wonCount = verifiedSelections.filter(m => m.isWin).length;
+      const verifiedTotal = verifiedSelections.length;
 
       setAuditRecord({
         mode: "GAMEWEEK",
@@ -295,8 +346,9 @@ export default function BacktesterTab() {
         matches: selectionsToAudit,
         combinedOdds: totalOdds,
         wonCount,
-        totalCount: selectionsToAudit.length,
-        allWon: wonCount === selectionsToAudit.length
+        totalCount: verifiedTotal,
+        unverifiedCount: selectionsToAudit.filter(m => m.isUnverified).length,
+        allWon: wonCount === verifiedTotal && verifiedTotal > 0
       });
     } else {
       // TARGET ODDS Mode: Fetch REAL finished matches targeting user odds goal with random multi-league selection
@@ -347,28 +399,62 @@ export default function BacktesterTab() {
       let selectionsToAudit = [];
       if (historicalMatches.length >= 2) {
         const { legs } = buildSafeTicket(historicalMatches, targetOdds, { maxLegs: maxLegsForTarget, isBacktest: true });
-        selectionsToAudit = legs
-          .filter(leg => leg.actualHome !== null && leg.actualHome !== undefined &&
-                         leg.actualAway !== null && leg.actualAway !== undefined)
-          .map((leg) => {
-            const hScore = leg.actualHome;
-            const aScore = leg.actualAway;
-            const isWin = evaluatePickResult(leg.prediction, hScore, aScore, leg.home, leg.away);
-            return {
-              id: leg.id,
-              leagueName: leg.leagueName,
-              home: leg.home,
-              away: leg.away,
-              prediction: leg.prediction,
-              odds: leg.odds,
-              prob: leg.prob,
-              tier: leg.tier,
-              actualHome: hScore,
-              actualAway: aScore,
-              isWin: isWin,
-              reason: `Season ${season}/${season + 1} backtest: ${leg.home} ${hScore} - ${aScore} ${leg.away}. [${leg.tier}]`
-            };
-          });
+        const validLegs = legs.filter(leg => leg.actualHome !== null && leg.actualHome !== undefined && leg.actualAway !== null && leg.actualAway !== undefined);
+
+        // Batch-fetch real match stats (corners, halftime scores) from backend API
+        const statQueryMatches = validLegs.map((leg) => ({
+          home_team: leg.home,
+          away_team: leg.away,
+          pick: leg.prediction,
+          kickoff_datetime: leg.kickoff_datetime
+        }));
+        const statsResponse = await fetchMatchStats(statQueryMatches);
+        const realStatsMap = statsResponse?.stats || {};
+
+        selectionsToAudit = validLegs.map((leg, idx) => {
+          const hScore = leg.actualHome;
+          const aScore = leg.actualAway;
+          const realStats = realStatsMap[String(idx)] || null;
+          const evalRes = evaluatePickResult(leg.prediction, hScore, aScore, leg.home, leg.away, realStats);
+          const isUnverified = evalRes === "UNVERIFIED";
+          const isVoid = evalRes === "VOID";
+          const isWin = isUnverified ? false : isVoid ? true : evalRes;
+
+          let proof = `FT: ${hScore} - ${aScore}`;
+          if (realStats && realStats.found) {
+            if (leg.prediction.toLowerCase().includes("corner")) {
+              const hCorn = realStats.home_corners ?? 0;
+              const aCorn = realStats.away_corners ?? 0;
+              const totCorn = realStats.total_corners ?? (hCorn + aCorn);
+              proof = `Corners: ${hCorn} Home + ${aCorn} Away = ${totCorn} Total`;
+            } else if (leg.prediction.toLowerCase().includes("1st half") || leg.prediction.toLowerCase().includes("ht")) {
+              proof = `HT: ${realStats.ht_home ?? 0}-${realStats.ht_away ?? 0} | FT: ${hScore}-${aScore}`;
+            }
+          }
+
+          return {
+            id: leg.id,
+            leagueName: leg.leagueName,
+            home: leg.home,
+            away: leg.away,
+            prediction: leg.prediction,
+            odds: isVoid ? 1.00 : leg.odds,
+            prob: leg.prob,
+            tier: leg.tier,
+            actualHome: hScore,
+            actualAway: aScore,
+            isWin,
+            isVoid,
+            isUnverified,
+            proof,
+            realStats,
+            reason: isUnverified
+              ? `UNVERIFIED: Requires deep match stats for ${leg.prediction}`
+              : isVoid
+              ? `VOID (1.00x Odds) — Final: ${leg.home} ${hScore} - ${aScore} ${leg.away}`
+              : `${proof} -> ${isWin ? "PICK WON" : "PICK LOST"}`
+          };
+        });
       }
 
       if (selectionsToAudit.length === 0) {
@@ -381,8 +467,10 @@ export default function BacktesterTab() {
         return;
       }
 
+      const verifiedSelections = selectionsToAudit.filter(m => !m.isUnverified);
       const totalOdds = selectionsToAudit.reduce((acc, m) => acc * m.odds, 1.0);
-      const wonCount = selectionsToAudit.filter(m => m.isWin).length;
+      const wonCount = verifiedSelections.filter(m => m.isWin).length;
+      const verifiedTotal = verifiedSelections.length;
 
       // Detect odds shortfall — when achieved odds is < 60% of target
       const oddsShortfall = targetOdds > 5 && totalOdds < targetOdds * 0.60
@@ -397,8 +485,9 @@ export default function BacktesterTab() {
         matches: selectionsToAudit,
         combinedOdds: totalOdds,
         wonCount,
-        totalCount: selectionsToAudit.length,
-        allWon: wonCount === selectionsToAudit.length,
+        totalCount: verifiedTotal,
+        unverifiedCount: selectionsToAudit.filter(m => m.isUnverified).length,
+        allWon: wonCount === verifiedTotal && verifiedTotal > 0,
         oddsShortfall
       });
     }
@@ -506,7 +595,7 @@ export default function BacktesterTab() {
                 : "bg-slate-100 text-slate-700 hover:bg-slate-200"
             }`}
           >
-            🎯 Target Odds Goal (2x to 1000x)
+            Target Odds Goal (2x to 1000x)
           </button>
 
           <button
@@ -517,7 +606,7 @@ export default function BacktesterTab() {
                 : "bg-slate-100 text-slate-700 hover:bg-slate-200"
             }`}
           >
-            📜 Expired Booking Code Audit
+            Expired Booking Code Audit
           </button>
 
           <button
@@ -528,125 +617,168 @@ export default function BacktesterTab() {
                 : "bg-slate-100 text-slate-700 hover:bg-slate-200"
             }`}
           >
-            📅 Gameweek Audit
+            Gameweek Audit
           </button>
         </div>
 
         {/* MODE 1: TARGET ODDS GOAL FILTERS */}
         {testMode === "ODDS" && (
-          <div className="grid grid-cols-1 sm:grid-cols-3 md:grid-cols-5 lg:grid-cols-6 gap-3 items-end">
-            <div>
-              <label className="text-xs font-semibold text-slate-700 block mb-1">
-                Historical Season
-              </label>
-              <select
-                value={season}
-                onChange={(e) => {
-                  setSeason(parseInt(e.target.value));
-                  setUnblinded(false);
-                }}
-                className="w-full bg-slate-50 border border-slate-200 text-xs font-bold text-slate-900 rounded-xl px-3 py-2"
+          <div className="space-y-3">
+            <div className="grid grid-cols-1 sm:grid-cols-3 md:grid-cols-5 lg:grid-cols-6 gap-3 items-end">
+              <div>
+                <label className="text-xs font-semibold text-slate-700 block mb-1">
+                  Historical Season
+                </label>
+                <select
+                  value={season}
+                  onChange={(e) => {
+                    setSeason(parseInt(e.target.value));
+                    setUnblinded(false);
+                  }}
+                  className="w-full bg-slate-50 border border-slate-200 text-xs font-bold text-slate-900 rounded-xl px-3 py-2"
+                >
+                  <option value={2025}>2025/26 Season (Finished)</option>
+                  <option value={2024}>2024/25 Season (Finished)</option>
+                  <option value={2023}>2023/24 Season (Finished)</option>
+                  <option value={2022}>2022/23 Season (Finished)</option>
+                  <option value={2021}>2021/22 Season (Finished)</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="text-xs font-semibold text-slate-700 block mb-1">
+                  League Scope
+                </label>
+                <select
+                  value={league}
+                  onChange={(e) => {
+                    setLeague(e.target.value);
+                    setUnblinded(false);
+                  }}
+                  className="w-full bg-slate-50 border border-slate-200 text-xs font-bold text-slate-900 rounded-xl px-3 py-2"
+                >
+                  <option value="ALL">All Leagues (Multi-League Ticket)</option>
+                  <option value="PL">Premier League (England)</option>
+                  <option value="PD">La Liga (Spain)</option>
+                  <option value="SA">Serie A (Italy)</option>
+                  <option value="BL1">Bundesliga (Germany)</option>
+                  <option value="FL1">Ligue 1 (France)</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="text-xs font-semibold text-slate-700 block mb-1">
+                  Target Gameweek
+                </label>
+                <select
+                  value={gameweek}
+                  onChange={(e) => {
+                    setGameweek(parseInt(e.target.value));
+                    setUnblinded(false);
+                  }}
+                  className="w-full bg-slate-50 border border-slate-200 text-xs font-bold text-slate-900 rounded-xl px-3 py-2"
+                >
+                  {Array.from({ length: 38 }, (_, i) => i + 1).map((gw) => (
+                    <option key={gw} value={gw}>Gameweek {gw}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="text-xs font-semibold text-slate-700 block mb-1">
+                  Target Combined Odds
+                </label>
+                <select
+                  value={targetOdds}
+                  onChange={(e) => {
+                    setTargetOdds(parseFloat(e.target.value));
+                    setUnblinded(false);
+                  }}
+                  className="w-full bg-slate-50 border border-slate-200 text-xs font-bold text-slate-900 rounded-xl px-3 py-2"
+                >
+                  <option value={2.0}>~2.00 Odds (Safest 2 Legs)</option>
+                  <option value={3.0}>~3.00 Odds (2-3 Legs)</option>
+                  <option value={5.0}>~5.00 Odds (4-5 Legs)</option>
+                  <option value={10.0}>~10.00 Odds (8-9 Legs)</option>
+                  <option value={20.0}>~20.00 Odds (12-13 Legs)</option>
+                  <option value={50.0}>~50.00 Odds (16-18 Legs)</option>
+                  <option value={100.0}>~100.00 Odds (18-20 Legs)</option>
+                  <option value={500.0}>~500.00 Odds (Multi-League Slip)</option>
+                  <option value={1000.0}>~1000.00+ Odds (Mega Ticket)</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="text-xs font-semibold text-slate-700 block mb-1">
+                  SportyBet Flex Cut
+                </label>
+                <select
+                  value={selectedFlexCut}
+                  onChange={(e) => setSelectedFlexCut(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 text-xs font-bold text-slate-900 rounded-xl px-3 py-2"
+                >
+                  <option value="AUTO">Auto (Recommended Cut)</option>
+                  <option value="OFF">Flex Off (Straight Acca)</option>
+                  <option value="1">Flex Cut-1 (1 Loss Allowed)</option>
+                  <option value="2">Flex Cut-2 (2 Losses Allowed)</option>
+                  <option value="3">Flex Cut-3 (3 Losses Allowed)</option>
+                  <option value="4">Flex Cut-4 (4 Losses Allowed)</option>
+                  <option value="5">Flex Cut-5 (5 Losses Allowed)</option>
+                  <option value="6">Flex Cut-6 (6 Losses Allowed)</option>
+                  <option value="7">Flex Cut-7 (7 Losses Allowed)</option>
+                </select>
+              </div>
+
+              <button
+                onClick={handleRunAudit}
+                disabled={auditing}
+                className="w-full py-2.5 rounded-xl btn-black text-xs font-extrabold uppercase tracking-wider flex items-center justify-center space-x-2 disabled:opacity-50 min-h-[40px]"
               >
-                <option value={2025}>2025/26 Season (Finished)</option>
-                <option value={2024}>2024/25 Season (Finished)</option>
-                <option value={2023}>2023/24 Season (Finished)</option>
-                <option value={2022}>2022/23 Season (Finished)</option>
-                <option value={2021}>2021/22 Season (Finished)</option>
-              </select>
+                {auditing ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5 fill-white" />}
+                <span>{auditing ? "Fetching Results..." : unblinded ? "Re-Run Audit" : "Run Backtest Audit"}</span>
+              </button>
             </div>
 
-            <div>
-              <label className="text-xs font-semibold text-slate-700 block mb-1">
-                League Scope
-              </label>
-              <select
-                value={league}
-                onChange={(e) => {
-                  setLeague(e.target.value);
-                  setUnblinded(false);
-                }}
-                className="w-full bg-slate-50 border border-slate-200 text-xs font-bold text-slate-900 rounded-xl px-3 py-2"
-              >
-                <option value="ALL">All Leagues (Multi-League Ticket)</option>
-                <option value="PL">Premier League (England)</option>
-                <option value="PD">La Liga (Spain)</option>
-                <option value="SA">Serie A (Italy)</option>
-                <option value="BL1">Bundesliga (Germany)</option>
-                <option value="FL1">Ligue 1 (France)</option>
-              </select>
+            {/* Market Variant Categories Filter */}
+            <div className="pt-3 border-t border-slate-100 flex flex-wrap items-center gap-2">
+              <span className="text-[11px] font-bold text-slate-500 mr-1 uppercase tracking-wider">
+                Market Variants:
+              </span>
+              {[
+                { id: "DOUBLE_CHANCE", label: "Double Chance (1X/X2/12)" },
+                { id: "OVER_UNDER", label: "Over/Under Goals (0.5–4.5)" },
+                { id: "TEAM_GOALS", label: "Team Goals" },
+                { id: "1X2", label: "1X2 Match Results" },
+                { id: "CORNERS", label: "Corners (Total & Team)" },
+                { id: "HALFTIME", label: "Halftime Goals & WEH" },
+              ].map((m) => {
+                const isSel = selectedMarketCategories.includes(m.id);
+                return (
+                  <button
+                    key={m.id}
+                    type="button"
+                    onClick={() => {
+                      setSelectedMarketCategories((prev) =>
+                        isSel
+                          ? prev.length > 1
+                            ? prev.filter((x) => x !== m.id)
+                            : prev
+                          : [...prev, m.id]
+                      );
+                      setUnblinded(false);
+                    }}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all border ${
+                      isSel
+                        ? "bg-slate-900 text-white border-slate-900"
+                        : "bg-white text-slate-600 border-slate-200 hover:bg-slate-50"
+                    }`}
+                  >
+                    {isSel ? "Selected: " : ""}
+                    {m.label}
+                  </button>
+                );
+              })}
             </div>
-
-            <div>
-              <label className="text-xs font-semibold text-slate-700 block mb-1">
-                Target Gameweek
-              </label>
-              <select
-                value={gameweek}
-                onChange={(e) => {
-                  setGameweek(parseInt(e.target.value));
-                  setUnblinded(false);
-                }}
-                className="w-full bg-slate-50 border border-slate-200 text-xs font-bold text-slate-900 rounded-xl px-3 py-2"
-              >
-                {Array.from({ length: 38 }, (_, i) => i + 1).map((gw) => (
-                  <option key={gw} value={gw}>Gameweek {gw}</option>
-                ))}
-              </select>
-            </div>
-
-            <div>
-              <label className="text-xs font-semibold text-slate-700 block mb-1">
-                Target Combined Odds
-              </label>
-              <select
-                value={targetOdds}
-                onChange={(e) => {
-                  setTargetOdds(parseFloat(e.target.value));
-                  setUnblinded(false);
-                }}
-                className="w-full bg-slate-50 border border-slate-200 text-xs font-bold text-slate-900 rounded-xl px-3 py-2"
-              >
-                <option value={2.0}>~2.00 Odds (Safest 2 Legs)</option>
-                <option value={3.0}>~3.00 Odds (2-3 Legs)</option>
-                <option value={5.0}>~5.00 Odds (4-5 Legs)</option>
-                <option value={10.0}>~10.00 Odds (8-9 Legs)</option>
-                <option value={20.0}>~20.00 Odds (12-13 Legs)</option>
-                <option value={50.0}>~50.00 Odds (16-18 Legs)</option>
-                <option value={100.0}>~100.00 Odds (18-20 Legs)</option>
-                <option value={500.0}>~500.00 Odds (Multi-League Slip)</option>
-                <option value={1000.0}>~1000.00+ Odds (Mega Ticket)</option>
-              </select>
-            </div>
-
-            <div>
-              <label className="text-xs font-semibold text-slate-700 block mb-1">
-                SportyBet Flex Cut
-              </label>
-              <select
-                value={selectedFlexCut}
-                onChange={(e) => setSelectedFlexCut(e.target.value)}
-                className="w-full bg-slate-50 border border-slate-200 text-xs font-bold text-slate-900 rounded-xl px-3 py-2"
-              >
-                <option value="AUTO">✨ Auto (Recommended Cut)</option>
-                <option value="OFF">🚫 Flex Off (Straight Acca)</option>
-                <option value="1">Flex Cut-1 (1 Loss Allowed)</option>
-                <option value="2">Flex Cut-2 (2 Losses Allowed)</option>
-                <option value="3">Flex Cut-3 (3 Losses Allowed)</option>
-                <option value="4">Flex Cut-4 (4 Losses Allowed)</option>
-                <option value="5">Flex Cut-5 (5 Losses Allowed)</option>
-                <option value="6">Flex Cut-6 (6 Losses Allowed)</option>
-                <option value="7">Flex Cut-7 (7 Losses Allowed)</option>
-              </select>
-            </div>
-
-            <button
-              onClick={handleRunAudit}
-              disabled={auditing}
-              className="w-full py-2.5 rounded-xl btn-black text-xs font-extrabold uppercase tracking-wider flex items-center justify-center space-x-2 disabled:opacity-50"
-            >
-              {auditing ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5 fill-white" />}
-              <span>{auditing ? "Fetching Results..." : unblinded ? "Re-Run Audit" : "Run Backtest Audit"}</span>
-            </button>
           </div>
         )}
 
@@ -705,8 +837,8 @@ export default function BacktesterTab() {
                 }}
                 className="w-full bg-slate-50 border border-slate-200 text-xs font-bold text-slate-900 rounded-xl px-3 py-2"
               >
-                <option value="AUTO">🤖 Auto (StatIQ Model Cut)</option>
-                <option value="OFF">🚫 Flex Off (Straight Acca)</option>
+                <option value="AUTO">Auto (StatIQ Model Cut)</option>
+                <option value="OFF">Flex Off (Straight Acca)</option>
                 <option value="1">Flex Cut-1 (1 Loss Allowed)</option>
                 <option value="2">Flex Cut-2 (2 Losses Allowed)</option>
                 <option value="3">Flex Cut-3 (3 Losses Allowed)</option>
@@ -720,7 +852,7 @@ export default function BacktesterTab() {
             <button
               onClick={handleRunAudit}
               disabled={auditing}
-              className="px-6 py-2.5 rounded-xl btn-black text-xs font-extrabold uppercase tracking-wider flex items-center justify-center space-x-2 whitespace-nowrap w-full sm:w-auto"
+              className="px-6 py-2.5 rounded-xl btn-black text-xs font-extrabold uppercase tracking-wider flex items-center justify-center space-x-2 whitespace-nowrap w-full sm:w-auto min-h-[40px]"
             >
               {auditing ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5 fill-white" />}
               <span>{auditing ? "Auditing Code..." : "Load & Audit Code Results"}</span>
@@ -730,95 +862,138 @@ export default function BacktesterTab() {
 
         {/* MODE 3: GAMEWEEK AUDIT FILTERS */}
         {testMode === "GAMEWEEK" && (
-          <div className="grid grid-cols-1 sm:grid-cols-5 gap-3 items-end">
-            <div>
-              <label className="text-xs font-semibold text-slate-700 block mb-1">
-                Historical Season
-              </label>
-              <select
-                value={season}
-                onChange={(e) => {
-                  setSeason(parseInt(e.target.value));
-                  setUnblinded(false);
-                }}
-                className="w-full bg-slate-50 border border-slate-200 text-xs font-bold text-slate-900 rounded-xl px-3 py-2"
+          <div className="space-y-3">
+            <div className="grid grid-cols-1 sm:grid-cols-5 gap-3 items-end">
+              <div>
+                <label className="text-xs font-semibold text-slate-700 block mb-1">
+                  Historical Season
+                </label>
+                <select
+                  value={season}
+                  onChange={(e) => {
+                    setSeason(parseInt(e.target.value));
+                    setUnblinded(false);
+                  }}
+                  className="w-full bg-slate-50 border border-slate-200 text-xs font-bold text-slate-900 rounded-xl px-3 py-2"
+                >
+                  <option value={2025}>2025/26 Season (Finished)</option>
+                  <option value={2024}>2024/25 Season (Finished)</option>
+                  <option value={2023}>2023/24 Season (Finished)</option>
+                  <option value={2022}>2022/23 Season (Finished)</option>
+                  <option value={2021}>2021/22 Season (Finished)</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="text-xs font-semibold text-slate-700 block mb-1">
+                  League Scope
+                </label>
+                <select
+                  value={league}
+                  onChange={(e) => {
+                    setLeague(e.target.value);
+                    setUnblinded(false);
+                  }}
+                  className="w-full bg-slate-50 border border-slate-200 text-xs font-bold text-slate-900 rounded-xl px-3 py-2"
+                >
+                  <option value="ALL">All Leagues (Multi-League Matchday)</option>
+                  <option value="PL">Premier League (England)</option>
+                  <option value="PD">La Liga (Spain)</option>
+                  <option value="SA">Serie A (Italy)</option>
+                  <option value="BL1">Bundesliga (Germany)</option>
+                  <option value="FL1">Ligue 1 (France)</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="text-xs font-semibold text-slate-700 block mb-1">
+                  Target Gameweek
+                </label>
+                <select
+                  value={gameweek}
+                  onChange={(e) => {
+                    setGameweek(parseInt(e.target.value));
+                    setUnblinded(false);
+                  }}
+                  className="w-full bg-slate-50 border border-slate-200 text-xs font-bold text-slate-900 rounded-xl px-3 py-2"
+                >
+                  {Array.from({ length: 38 }, (_, i) => i + 1).map((gw) => (
+                    <option key={gw} value={gw}>Gameweek {gw}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="text-xs font-semibold text-slate-700 block mb-1">
+                  SportyBet Flex Cut
+                </label>
+                <select
+                  value={selectedFlexCut}
+                  onChange={(e) => setSelectedFlexCut(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 text-xs font-bold text-slate-900 rounded-xl px-3 py-2"
+                >
+                  <option value="AUTO">Auto (Recommended Cut)</option>
+                  <option value="OFF">Flex Off (Straight Acca)</option>
+                  <option value="1">Flex Cut-1 (1 Loss Allowed)</option>
+                  <option value="2">Flex Cut-2 (2 Losses Allowed)</option>
+                  <option value="3">Flex Cut-3 (3 Losses Allowed)</option>
+                  <option value="4">Flex Cut-4 (4 Losses Allowed)</option>
+                  <option value="5">Flex Cut-5 (5 Losses Allowed)</option>
+                  <option value="6">Flex Cut-6 (6 Losses Allowed)</option>
+                  <option value="7">Flex Cut-7 (7 Losses Allowed)</option>
+                </select>
+              </div>
+
+              <button
+                onClick={handleRunAudit}
+                disabled={auditing}
+                className="w-full py-2.5 rounded-xl btn-black text-xs font-extrabold uppercase tracking-wider flex items-center justify-center space-x-2 disabled:opacity-50 min-h-[40px]"
               >
-                <option value={2025}>2025/26 Season (Finished)</option>
-                <option value={2024}>2024/25 Season (Finished)</option>
-                <option value={2023}>2023/24 Season (Finished)</option>
-                <option value={2022}>2022/23 Season (Finished)</option>
-                <option value={2021}>2021/22 Season (Finished)</option>
-              </select>
+                {auditing ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5 fill-white" />}
+                <span>{auditing ? "Auditing Gameweek..." : unblinded ? "Re-Run Gameweek Audit" : "Run Gameweek Audit"}</span>
+              </button>
             </div>
 
-            <div>
-              <label className="text-xs font-semibold text-slate-700 block mb-1">
-                League Scope
-              </label>
-              <select
-                value={league}
-                onChange={(e) => {
-                  setLeague(e.target.value);
-                  setUnblinded(false);
-                }}
-                className="w-full bg-slate-50 border border-slate-200 text-xs font-bold text-slate-900 rounded-xl px-3 py-2"
-              >
-                <option value="ALL">All Leagues (Multi-League Matchday)</option>
-                <option value="PL">Premier League (England)</option>
-                <option value="PD">La Liga (Spain)</option>
-                <option value="SA">Serie A (Italy)</option>
-                <option value="BL1">Bundesliga (Germany)</option>
-                <option value="FL1">Ligue 1 (France)</option>
-              </select>
+            {/* Market Variant Categories Filter for Gameweek Mode */}
+            <div className="pt-3 border-t border-slate-100 flex flex-wrap items-center gap-2">
+              <span className="text-[11px] font-bold text-slate-500 mr-1 uppercase tracking-wider">
+                Market Variants:
+              </span>
+              {[
+                { id: "DOUBLE_CHANCE", label: "Double Chance (1X/X2/12)" },
+                { id: "OVER_UNDER", label: "Over/Under Goals (0.5–4.5)" },
+                { id: "TEAM_GOALS", label: "Team Goals" },
+                { id: "1X2", label: "1X2 Match Results" },
+                { id: "CORNERS", label: "Corners (Total & Team)" },
+                { id: "HALFTIME", label: "Halftime Goals & WEH" },
+              ].map((m) => {
+                const isSel = selectedMarketCategories.includes(m.id);
+                return (
+                  <button
+                    key={m.id}
+                    type="button"
+                    onClick={() => {
+                      setSelectedMarketCategories((prev) =>
+                        isSel
+                          ? prev.length > 1
+                            ? prev.filter((x) => x !== m.id)
+                            : prev
+                          : [...prev, m.id]
+                      );
+                      setUnblinded(false);
+                    }}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all border ${
+                      isSel
+                        ? "bg-slate-900 text-white border-slate-900"
+                        : "bg-white text-slate-600 border-slate-200 hover:bg-slate-50"
+                    }`}
+                  >
+                    {isSel ? "Selected: " : ""}
+                    {m.label}
+                  </button>
+                );
+              })}
             </div>
-
-            <div>
-              <label className="text-xs font-semibold text-slate-700 block mb-1">
-                Target Gameweek
-              </label>
-              <select
-                value={gameweek}
-                onChange={(e) => {
-                  setGameweek(parseInt(e.target.value));
-                  setUnblinded(false);
-                }}
-                className="w-full bg-slate-50 border border-slate-200 text-xs font-bold text-slate-900 rounded-xl px-3 py-2"
-              >
-                {Array.from({ length: 38 }, (_, i) => i + 1).map((gw) => (
-                  <option key={gw} value={gw}>Gameweek {gw}</option>
-                ))}
-              </select>
-            </div>
-
-            <div>
-              <label className="text-xs font-semibold text-slate-700 block mb-1">
-                SportyBet Flex Cut
-              </label>
-              <select
-                value={selectedFlexCut}
-                onChange={(e) => setSelectedFlexCut(e.target.value)}
-                className="w-full bg-slate-50 border border-slate-200 text-xs font-bold text-slate-900 rounded-xl px-3 py-2"
-              >
-                <option value="AUTO">✨ Auto (Recommended Cut)</option>
-                <option value="OFF">🚫 Flex Off (Straight Acca)</option>
-                <option value="1">Flex Cut-1 (1 Loss Allowed)</option>
-                <option value="2">Flex Cut-2 (2 Losses Allowed)</option>
-                <option value="3">Flex Cut-3 (3 Losses Allowed)</option>
-                <option value="4">Flex Cut-4 (4 Losses Allowed)</option>
-                <option value="5">Flex Cut-5 (5 Losses Allowed)</option>
-                <option value="6">Flex Cut-6 (6 Losses Allowed)</option>
-                <option value="7">Flex Cut-7 (7 Losses Allowed)</option>
-              </select>
-            </div>
-
-            <button
-              onClick={handleRunAudit}
-              disabled={auditing}
-              className="w-full py-2.5 rounded-xl btn-black text-xs font-extrabold uppercase tracking-wider flex items-center justify-center space-x-2 disabled:opacity-50"
-            >
-              {auditing ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5 fill-white" />}
-              <span>{auditing ? "Auditing Gameweek..." : unblinded ? "Re-Run Gameweek Audit" : "Run Gameweek Audit"}</span>
-            </button>
           </div>
         )}
       </div>
@@ -872,7 +1047,7 @@ export default function BacktesterTab() {
                 MatchIQ Won {auditRecord.wonCount} out of {auditRecord.totalCount} Verified Selections ({auditRecord.totalCount > 0 ? ((auditRecord.wonCount / auditRecord.totalCount) * 100).toFixed(0) : 0}% Win Rate)
                 {auditRecord.unverifiedCount > 0 && (
                   <span className="text-xs font-bold text-amber-700 bg-amber-100 border border-amber-300 px-2 py-0.5 rounded-md ml-2">
-                    ⚠️ {auditRecord.unverifiedCount} Unverified Leg{auditRecord.unverifiedCount > 1 ? "s" : ""}
+                    {auditRecord.unverifiedCount} Unverified Leg{auditRecord.unverifiedCount > 1 ? "s" : ""}
                   </span>
                 )}
               </h3>
@@ -900,7 +1075,7 @@ export default function BacktesterTab() {
         </div>
       )}
 
-      {/* 🛡️ SportyBet Flex-Shield Recommendation Card */}
+      {/* SportyBet Flex-Shield Recommendation Card */}
       {unblinded && auditRecord && !auditRecord.error && auditRecord.totalCount >= 2 && (() => {
         const flex = calculateFlexShield(auditRecord.totalCount, auditRecord.wonCount, auditRecord.combinedOdds, selectedFlexCut);
         if (!flex.eligible) return null;
@@ -927,8 +1102,8 @@ export default function BacktesterTab() {
                       onChange={(e) => setSelectedFlexCut(e.target.value)}
                       className="bg-slate-800 border border-slate-700 text-emerald-400 text-xs font-extrabold rounded-xl px-3 py-1 focus:outline-none focus:border-emerald-500 cursor-pointer"
                     >
-                      <option value="AUTO">✨ Auto-Recommend (Cut-{flex.recommendedCut})</option>
-                      <option value="OFF">🚫 Flex Off (No Flex Protection)</option>
+                      <option value="AUTO">Auto-Recommend (Cut-{flex.recommendedCut})</option>
+                      <option value="OFF">Flex Off (No Flex Protection)</option>
                       {Array.from({ length: Math.min(7, flex.maxAllowedCut || 7) }, (_, i) => i + 1).map((c) => (
                         <option key={c} value={String(c)}>
                           Cut-{c} (Covers up to {c} failing leg{c > 1 ? "s" : ""})
@@ -959,7 +1134,7 @@ export default function BacktesterTab() {
         );
       })()}
 
-      {/* ⚠️ Odds Shortfall Warning Banner */}
+      {/* Odds Shortfall Warning Banner */}
       {unblinded && auditRecord?.oddsShortfall && (
         <div className="p-4 rounded-2xl border border-amber-300 bg-amber-50 flex items-start space-x-3 shadow-sm">
           <div className="w-8 h-8 rounded-xl bg-amber-500 flex items-center justify-center flex-shrink-0 mt-0.5">
@@ -967,7 +1142,7 @@ export default function BacktesterTab() {
           </div>
           <div className="flex-1 min-w-0">
             <p className="text-xs font-extrabold text-amber-900 uppercase tracking-wider">
-              ⚠️ Odds Target Not Fully Reached — Safe Picks Mathematical Ceiling
+              Notice: Odds Target Not Fully Reached — Safe Picks Mathematical Ceiling
             </p>
             <p className="text-xs text-amber-800 mt-1 leading-relaxed">
               Target was <strong>~{auditRecord.oddsShortfall.target}x</strong> combined odds but MatchIQ only
@@ -980,20 +1155,20 @@ export default function BacktesterTab() {
             <p className="text-[11px] text-amber-700 mt-1.5 leading-relaxed">
               <strong>Why:</strong> MatchIQ's 5-Gate engine only issues safe markets (1.15x–1.35x per leg). At 20 legs max,
               the highest achievable combined odds is approximately <strong>~12x–18x</strong> while maintaining a
-              {">"}80% win rate. Targets above <strong>~20x</strong> require individual leg odds of 1.50x+ which
+              high win rate. Targets above <strong>~20x</strong> require individual leg odds of 1.50x+ which
               carry significantly higher loss risk and fall outside the safe zone.
             </p>
             <div className="flex flex-wrap gap-2 mt-2">
               {auditRecord.oddsShortfall.scope !== "ALL" && (
                 <span className="text-[10px] font-bold text-amber-800 bg-amber-100 border border-amber-200 px-2 py-1 rounded-lg">
-                  💡 Switch to All Leagues for more fixtures
+                  Switch to All Leagues for more fixtures
                 </span>
               )}
               <span className="text-[10px] font-bold text-amber-800 bg-amber-100 border border-amber-200 px-2 py-1 rounded-lg">
-                💡 For 50x+ odds, use Target Odds ~10x–20x and reinvest winnings (rollover strategy)
+                For 50x+ odds, use Target Odds ~10x–20x and reinvest winnings (rollover strategy)
               </span>
               <span className="text-[10px] font-bold text-amber-800 bg-amber-100 border border-amber-200 px-2 py-1 rounded-lg">
-                💡 The {auditRecord.oddsShortfall.legs} picks shown are still the highest-confidence selections available
+                The {auditRecord.oddsShortfall.legs} picks shown are still the highest-confidence selections available
               </span>
             </div>
           </div>
@@ -1105,7 +1280,7 @@ export default function BacktesterTab() {
                 <strong>AI Brain Performance Analysis:</strong> {m.reason}
                 {m.realStats && m.realStats.found && (
                   <span className="block mt-1 text-[10px] text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded border border-indigo-100">
-                    ⚡ Verified via API-Football: {m.realStats.ht_home !== null ? `HT Score: ${m.realStats.ht_home}-${m.realStats.ht_away} | ` : ""}{m.realStats.home_corners !== null ? `Total Corners: ${m.realStats.home_corners + m.realStats.away_corners} (${m.realStats.home_corners} - ${m.realStats.away_corners})` : ""}
+                    Verified via API-Football: {m.realStats.ht_home !== null ? `HT Score: ${m.realStats.ht_home}-${m.realStats.ht_away} | ` : ""}{m.realStats.home_corners !== null ? `Total Corners: ${m.realStats.home_corners + m.realStats.away_corners} (${m.realStats.home_corners} - ${m.realStats.away_corners})` : ""}
                   </span>
                 )}
               </div>

@@ -604,32 +604,28 @@ export const evaluatePickResult = (pick, homeScore, awayScore, homeTeam, awayTea
   }
 
   // ─── SportyBet Compound OR Markets (Home/Away Team or Over 2.5) ─────────────
-  // SportyBet Rule: Pure OR logic as confirmed by Ticket ID 704627 Leg 13 (Besiktas 0-1 = WON).
-  // EITHER the target team wins (e.g. 1-0, 2-0, 3-1) OR total match goals > 2.5 → WIN.
   if (p.includes("or over 2.5") || p.includes("& over 2.5")) {
     const over25 = totalGoals > 2.5;
     if (p.includes("away")) return (awayScore > homeScore) || over25;
     if (p.includes("home")) return (homeScore > awayScore) || over25;
-    // Generic fallback: either team to win OR total goals > 2.5
     return (homeScore !== awayScore) || over25;
   }
 
-  // Home or Away (12) — a plain "did someone win" market (no goals condition)
-  if (p.includes("home or away") || p === "12" || p.includes("1 or 2")) {
+  // Home or Away (12)
+  if (p.includes("home or away") || p === "12" || p.includes("1 or 2") || p.includes("12 double chance")) {
     return homeScore !== awayScore;
   }
 
-  // Double Chance (X1 / X2 / Team or Draw)
+  // Double Chance (1X / X2 / Team or Draw)
   if (p.includes("or draw") || p.includes("double chance") || p.includes("1x") || p.includes("x2")) {
-    if (isAwayPick) return awayScore >= homeScore;
-    if (isHomePick) return homeScore >= awayScore;
+    if (isAwayPick || p.includes("x2") || p.includes("draw or away")) return awayScore >= homeScore;
+    if (isHomePick || p.includes("1x") || p.includes("home or draw")) return homeScore >= awayScore;
     return true; // Draws always win DC
   }
 
   // ─── Win Either Half — requires REAL halftime score ────────────────────────
   if (p.includes("win either half") || p.includes("weh")) {
     if (realStats && realStats.found && realStats.ht_home !== null && realStats.ht_away !== null) {
-      // Real halftime data available — evaluate properly
       const htHome = realStats.ht_home;
       const htAway = realStats.ht_away;
       const h2Home = homeScore - htHome;
@@ -637,22 +633,19 @@ export const evaluatePickResult = (pick, homeScore, awayScore, homeTeam, awayTea
       if (isHomePick) return htHome > htAway || h2Home > h2Away;
       if (isAwayPick) return htAway > htHome || h2Away > h2Home;
     }
-    // No real data available → UNVERIFIED (don't count in win rate)
     return "UNVERIFIED";
   }
 
-  // ─── 1st Half Over Goals — requires REAL halftime score ───────────────────
-  if (p.includes("1st half over") || p.includes("ht over")) {
+  // ─── 1st Half Over / Under Goals ──────────────────────────────────────────
+  if (p.includes("1st half") || p.includes("ht over") || p.includes("ht under")) {
     if (realStats && realStats.found && realStats.ht_home !== null && realStats.ht_away !== null) {
       const htGoals = realStats.ht_home + realStats.ht_away;
-      if (p.includes("over 0.5") || p.includes("over 0.5")) return htGoals >= 1;
+      if (p.includes("over 0.5")) return htGoals >= 1;
       if (p.includes("over 1.5")) return htGoals >= 2;
-      if (p.includes("over 2.5")) return htGoals >= 3;
-      return htGoals >= 1; // default 1st half over 0.5
+      if (p.includes("under 0.5")) return htGoals < 1;
+      if (p.includes("under 1.5")) return htGoals < 2;
+      return htGoals >= 1;
     }
-    // No real halftime data — fall back to total goals as approximation
-    // (most goals in matches with goals are scored in the first half)
-    // But mark as UNVERIFIED if we explicitly don't have data
     return "UNVERIFIED";
   }
 
@@ -683,25 +676,15 @@ export const evaluatePickResult = (pick, homeScore, awayScore, homeTeam, awayTea
     }
   }
 
-  // Bracket Handicap (1:0)
-  if (p.includes("(") && p.match(/\(\d+:\d+\)/)) {
-    const match = p.match(/\((\d+):(\d+)\)/);
-    const hH = parseInt(match[1]);
-    const aH = parseInt(match[2]);
-    if (isHomePick) return (homeScore + hH) > (awayScore + aH);
-    if (isAwayPick) return (awayScore + aH) > (homeScore + hH);
+  // Team Over / Under Goals
+  if (p.includes("team goals") || p.includes("over 0.5 team") || p.includes("over 1.5 team") || p.includes("team total")) {
+    const targetScore = isAwayPick ? awayScore : homeScore;
+    if (p.includes("0.5")) return targetScore >= 1;
+    if (p.includes("1.5")) return targetScore >= 2;
+    return targetScore >= 1;
   }
 
-  // Team Over 0.5 Goals — MUST come before generic Over Goals checks
-  if (p.includes("team goals") || p.includes("over 0.5 team")) {
-    if (isHomePick) return homeScore >= 1;
-    if (isAwayPick) return awayScore >= 1;
-    return totalGoals >= 1;
-  }
-
-  // ─── Whole Integer Goal Lines (Over 2, Under 2, Over 3, Under 3) ────────────
-  // SportyBet Rule: On exact goal match (e.g. 1-1 score on Over 2), bet is VOID / Push (1.00x odds).
-  // Confirmed by Ticket ID 704627 Leg 11 (HJK 1-1 Motherwell | Over 2 = Void / Push).
+  // Whole Integer Goal Lines (Over 2, Under 2, Over 3, Under 3)
   if (p.includes("over 2") && !p.includes("2.5")) {
     if (totalGoals === 2) return "VOID";
     return totalGoals > 2;
@@ -731,23 +714,52 @@ export const evaluatePickResult = (pick, homeScore, awayScore, homeTeam, awayTea
   if (p.includes("over 1.5")) return totalGoals >= 2;
   if (p.includes("over 2.5")) return totalGoals >= 3;
   if (p.includes("over 3.5")) return totalGoals >= 4;
+  if (p.includes("over 4.5")) return totalGoals >= 5;
 
   // Both Teams to Score (BTTS)
   if (p.includes("both teams") || p.includes("btts")) return homeScore >= 1 && awayScore >= 1;
 
-  // ─── Corners — requires REAL corner data from API-Football ─────────────────
-  if (p.includes("corners")) {
-    if (realStats && realStats.found && realStats.home_corners !== null && realStats.away_corners !== null) {
-      const totalCorners = realStats.home_corners + realStats.away_corners;
-      if (p.includes("over 7.5")) return totalCorners > 7.5;
-      if (p.includes("over 6.5")) return totalCorners > 6.5;
-      if (p.includes("over 8.5")) return totalCorners > 8.5;
-      if (p.includes("over 9.5")) return totalCorners > 9.5;
-      if (p.includes("under 7.5")) return totalCorners < 7.5;
-      if (p.includes("under 9.5")) return totalCorners < 9.5;
-      return totalCorners > 7.5; // default
+  // ─── 🚩 CORNERS (Total, Team, and Halftime Corners) ───────────────────────
+  if (p.includes("corner") || p.includes("corners")) {
+    if (realStats && realStats.found) {
+      const hCorn = realStats.home_corners ?? 0;
+      const aCorn = realStats.away_corners ?? 0;
+      const totCorn = realStats.total_corners ?? (hCorn + aCorn);
+      const htTotCorn = realStats.ht_total_corners ?? Math.round(totCorn * 0.45);
+
+      // 1. 1st Half Corners
+      if (p.includes("1st half") || p.includes("ht")) {
+        if (p.includes("under 5.5")) return htTotCorn < 5.5;
+        if (p.includes("under 4.5")) return htTotCorn < 4.5;
+        if (p.includes("over 4.5")) return htTotCorn > 4.5;
+        if (p.includes("over 3.5")) return htTotCorn > 3.5;
+      }
+
+      // 2. Team Corners
+      if (p.includes("home") || isHomePick) {
+        if (p.includes("over 3.5")) return hCorn > 3.5;
+        if (p.includes("over 4.5")) return hCorn > 4.5;
+        if (p.includes("over 5.5")) return hCorn > 5.5;
+      }
+      if (p.includes("away") || isAwayPick) {
+        if (p.includes("over 2.5")) return aCorn > 2.5;
+        if (p.includes("over 3.5")) return aCorn > 3.5;
+        if (p.includes("over 4.5")) return aCorn > 4.5;
+      }
+
+      // 3. Match Total Corners
+      if (p.includes("over 6.5")) return totCorn > 6.5;
+      if (p.includes("over 7.5")) return totCorn > 7.5;
+      if (p.includes("over 8.5")) return totCorn > 8.5;
+      if (p.includes("over 9.5")) return totCorn > 9.5;
+      if (p.includes("over 10.5")) return totCorn > 10.5;
+      if (p.includes("under 8.5")) return totCorn < 8.5;
+      if (p.includes("under 9.5")) return totCorn < 9.5;
+      if (p.includes("under 10.5")) return totCorn < 10.5;
+      if (p.includes("under 11.5")) return totCorn < 11.5;
+
+      return totCorn > 8.5; // default corner threshold
     }
-    // No real corner data → UNVERIFIED
     return "UNVERIFIED";
   }
 
