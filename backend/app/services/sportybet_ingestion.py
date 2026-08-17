@@ -20,7 +20,7 @@ class SportyBetIngestionService:
     }
 
     _cache: Dict[str, Any] = {}
-    _cache_ttl = 120  # 2 minutes cache for live odds freshness
+    _cache_ttl = 45  # 45 seconds cache for real-time live match board freshness
 
     TOP_TOURNAMENTS = [
         "sr:tournament:17",   # Premier League
@@ -48,7 +48,7 @@ class SportyBetIngestionService:
     ]
 
     @classmethod
-    def fetch_upcoming_fixtures(cls, limit: int = 250, force_refresh: bool = False) -> List[Dict[str, Any]]:
+    def fetch_upcoming_fixtures(cls, limit: int = 0, force_refresh: bool = False) -> List[Dict[str, Any]]:
         """
         Fetches active upcoming football fixtures from SportyBet across all major tournaments.
         """
@@ -61,7 +61,7 @@ class SportyBetIngestionService:
             entry = cls._cache[cache_key]
             if (now - entry["timestamp"]) < cls._cache_ttl and len(entry.get("data", [])) > 0:
                 cached_data = entry["data"]
-                return cached_data[:limit] if limit else cached_data
+                return cached_data[:limit] if (limit and limit > 0) else cached_data
 
         def _fetch_url(url: str) -> List[Dict[str, Any]]:
             try:
@@ -79,6 +79,8 @@ class SportyBetIngestionService:
         fetch_urls = [
             f"{cls.BASE_URL}/wapUpcomingEvents?sportId=sr:sport:1&pageNum=1&pageSize=100",
             f"{cls.BASE_URL}/wapUpcomingEvents?sportId=sr:sport:1&pageNum=2&pageSize=100",
+            f"{cls.BASE_URL}/wapUpcomingEvents?sportId=sr:sport:1&pageNum=3&pageSize=100",
+            f"{cls.BASE_URL}/wapUpcomingEvents?sportId=sr:sport:1&pageNum=4&pageSize=100",
             f"{cls.BASE_URL}/wapUpcomingEvents?sportId=sr:sport:1&timeline=today&pageSize=100",
         ] + [
             f"{cls.BASE_URL}/wapUpcomingEvents?sportId=sr:sport:1&tournamentId={t_id}" for t_id in cls.TOP_TOURNAMENTS

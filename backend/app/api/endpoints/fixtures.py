@@ -454,7 +454,7 @@ async def get_sportybet_today_fixtures(day: str = "today"):
     cache_k = f"sportybet_{day_str}"
     if cache_k in _cache:
         cached_data, cached_at = _cache[cache_k]
-        if time.time() - cached_at < 60:  # 1-minute fresh cache
+        if time.time() - cached_at < 30:  # 30-second fresh live cache
             return cached_data
 
     import datetime
@@ -611,7 +611,7 @@ async def get_sportybet_today_fixtures(day: str = "today"):
     # Fetch live upcoming fixtures from SportyBet Live Ingestion
     raw_sporty_fixtures = []
     try:
-        raw_sporty_fixtures = SportyBetIngestionService.fetch_upcoming_fixtures(limit=120)
+        raw_sporty_fixtures = SportyBetIngestionService.fetch_upcoming_fixtures(limit=0)
     except Exception as exc:
         logger.warning(f"SportyBet live ingestion fetch error: {exc}")
 

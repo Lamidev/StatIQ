@@ -101,7 +101,7 @@ async def build_ai_ticket(req: BuildTicketRequest):
         fixture_pool = [_normalize_fixture_item(f, req.single_league or "PL") for f in req.custom_fixtures]
     else:
         # 1. Fetch live upcoming fixtures directly from SportyBet API
-        raw_sporty_fixtures = SportyBetIngestionService.fetch_upcoming_fixtures(limit=250)
+        raw_sporty_fixtures = SportyBetIngestionService.fetch_upcoming_fixtures(limit=0)
         now_utc = datetime.datetime.now(datetime.timezone.utc)
         today_date = now_utc.date()
 
@@ -175,7 +175,7 @@ async def build_ai_ticket(req: BuildTicketRequest):
 
     # Fallback to general upcoming if league filter was too restrictive
     if not fixture_pool:
-        raw_sporty_fixtures = SportyBetIngestionService.fetch_upcoming_fixtures(limit=100)
+        raw_sporty_fixtures = SportyBetIngestionService.fetch_upcoming_fixtures(limit=0)
         for ev in raw_sporty_fixtures:
             start_ms = ev.get("start_time_ms") or 0
             if start_ms > 0:
