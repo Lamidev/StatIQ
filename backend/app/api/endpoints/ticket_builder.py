@@ -37,6 +37,10 @@ class BuildTicketRequest(BaseModel):
     use_live_odds: bool = True
     custom_fixtures: Optional[List[Dict[str, Any]]] = None
     reshuffle_seed: Optional[int] = None
+    risk_profile: Optional[str] = "BALANCED"  # "ULTRA_CONSERVATIVE", "BALANCED", "AGGRESSIVE"
+    allowed_market_categories: Optional[List[str]] = None
+    excluded_market_categories: Optional[List[str]] = None
+
 
 async def _fetch_fixtures_for_league(comp: str, season: Optional[int] = None) -> List[Dict[str, Any]]:
     """
@@ -216,8 +220,12 @@ async def build_ai_ticket(req: BuildTicketRequest):
         target_mode=req.target_mode,
         target_games=target_games,
         max_league_picks=max_picks,
-        reshuffle_seed=req.reshuffle_seed
+        reshuffle_seed=req.reshuffle_seed,
+        risk_profile=req.risk_profile or "BALANCED",
+        allowed_markets=req.allowed_market_categories,
+        excluded_markets=req.excluded_market_categories,
     )
+
 
     # Trim to exact target_games if in GAMES mode
     if req.target_mode == "GAMES" and len(built_ticket.approved_legs) > target_games:

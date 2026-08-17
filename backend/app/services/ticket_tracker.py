@@ -289,6 +289,35 @@ AUTHORITATIVE_VERIFIED_SCORES = {
     "torino_carrarese": {"home": 2, "away": 0, "ht_home": 1, "ht_away": 0, "status": "CONCLUDED"},
     "udinese_padova": {"home": 2, "away": 1, "ht_home": 1, "ht_away": 0, "status": "CONCLUDED"},
     "fortuna_cambuur": {"home": 3, "away": 1, "status": "CONCLUDED"},
+    "frosinone_juve": {"home": 4, "away": 1, "ht_home": 3, "ht_away": 0, "home_corners": 4, "away_corners": 2, "total_corners": 6, "status": "CONCLUDED"},
+    "frosinone_stabia": {"home": 4, "away": 1, "ht_home": 3, "ht_away": 0, "home_corners": 4, "away_corners": 2, "total_corners": 6, "status": "CONCLUDED"},
+    "sarpsborg_sandefjord": {"home": 1, "away": 2, "ht_home": 1, "ht_away": 1, "home_corners": 4, "away_corners": 6, "total_corners": 10, "status": "CONCLUDED"},
+    "ajax_heerenveen": {"home": 2, "away": 2, "ht_home": 1, "ht_away": 1, "home_corners": 7, "away_corners": 2, "total_corners": 9, "status": "CONCLUDED"},
+    "narpes_sjk": {"home": 2, "away": 2, "ht_home": 0, "ht_away": 1, "status": "CONCLUDED"},
+    "narpes_akatemia": {"home": 2, "away": 2, "ht_home": 0, "ht_away": 1, "status": "CONCLUDED"},
+    "schalke_real": {"home": 0, "away": 3, "ht_home": 0, "ht_away": 2, "status": "CONCLUDED"},
+    "schalke_madrid": {"home": 0, "away": 3, "ht_home": 0, "ht_away": 2, "status": "CONCLUDED"},
+    "supra_ottawa": {"home": 1, "away": 2, "status": "CONCLUDED"},
+    "supra_atletico": {"home": 1, "away": 2, "status": "CONCLUDED"},
+    "colo_ohiggins": {"home": 2, "away": 2, "status": "CONCLUDED"},
+    "cajamarca_universitario": {"home": 2, "away": 3, "status": "CONCLUDED"},
+    "amed_erzurumspor": {"home": 3, "away": 0, "status": "CONCLUDED"},
+    "tirol_salzburg": {"home": 0, "away": 3, "status": "CONCLUDED"},
+    "brann_hamkam": {"home": 3, "away": 0, "status": "CONCLUDED"},
+    "chicago_portland": {"home": 2, "away": 1, "status": "CONCLUDED"},
+    "erbil_kahrabaa": {"home": 2, "away": 0, "status": "CONCLUDED"},
+    "partizan_radnicki": {"home": 0, "away": 1, "status": "CONCLUDED"},
+    "vestmannaeyjar_akranes": {"home": 1, "away": 3, "status": "CONCLUDED"},
+    "cincinnati_ct": {"home": 2, "away": 3, "ht_home": 2, "ht_away": 1, "status": "CONCLUDED"},
+    "cincinnati_united": {"home": 2, "away": 3, "ht_home": 2, "ht_away": 1, "status": "CONCLUDED"},
+    "nasaf_pakhtakor": {"home": 1, "away": 2, "ht_home": 0, "ht_away": 1, "status": "CONCLUDED"},
+    "lens_psg": {"home": 1, "away": 0, "ht_home": 1, "ht_away": 0, "status": "CONCLUDED"},
+    "stalowa_swidnik": {"home": 4, "away": 0, "ht_home": 1, "ht_away": 0, "status": "CONCLUDED"},
+    "liverpool_como": {"home": 2, "away": 0, "ht_home": 2, "ht_away": 0, "status": "CONCLUDED"},
+    "harju_levadia": {"home": 1, "away": 2, "ht_home": 1, "ht_away": 1, "status": "CONCLUDED"},
+    "basel_barcelona": {"home": 2, "away": 5, "ht_home": 1, "ht_away": 1, "status": "CONCLUDED"},
+    "gais_malmo": {"home": 0, "away": 1, "ht_home": 0, "ht_away": 0, "status": "CONCLUDED"},
+    "orobah_abha": {"home": 0, "away": 0, "ht_home": 0, "ht_away": 0, "status": "CONCLUDED"},
 }
 
 def _apply_authoritative_verified_scores(tickets: List[Dict[str, Any]]) -> bool:
@@ -336,10 +365,14 @@ def _apply_authoritative_verified_scores(tickets: List[Dict[str, Any]]) -> bool:
 def evaluate_pick(pick_name: str, home_score: int, away_score: int,
                   home_team: str = "", away_team: str = "",
                   ht_home_score: Optional[int] = None,
-                  ht_away_score: Optional[int] = None) -> str:
+                  ht_away_score: Optional[int] = None,
+                  total_corners: Optional[int] = None,
+                  home_corners: Optional[int] = None,
+                  away_corners: Optional[int] = None,
+                  is_concluded: bool = True) -> str:
     """
-    Return 'WON', 'LOST', or 'VOID' given the final scores.
-    Handles all MatchIQ market types including combo markets.
+    Return 'WON', 'LOST', 'VOID', or 'PENDING' given the final scores & stats.
+    Handles all MatchIQ market types including combo markets, corners, halves, and 1X2.
     """
     if home_score is None or away_score is None:
         return "PENDING"
@@ -350,13 +383,34 @@ def evaluate_pick(pick_name: str, home_score: int, away_score: int,
     total = home_score + away_score
 
     # ── CORNERS MARKETS (Total Corners, Team Corners, 1st Half Corners) ──
-    if "corner" in p:
+    if "corner" in p and "goal" not in p:
+        is_home_c = "home" in p or (ht and ht in p and at not in p)
+        is_away_c = "away" in p or (at and at in p and ht not in p)
+
+        c_val = None
+        if is_home_c and home_corners is not None:
+            c_val = home_corners
+        elif is_away_c and away_corners is not None:
+            c_val = away_corners
+        elif total_corners is not None:
+            c_val = total_corners
+        elif home_corners is not None and away_corners is not None:
+            c_val = home_corners + away_corners
+
         m_ov = re.search(r"over\s*(\d+\.?\d*)", p)
         m_un = re.search(r"under\s*(\d+\.?\d*)", p)
+
         if m_ov:
-            return "WON"
+            line = float(m_ov.group(1))
+            if c_val is not None:
+                return "WON" if c_val > line else "LOST"
+            return "PENDING"
+
         if m_un:
-            return "WON"
+            line = float(m_un.group(1))
+            if c_val is not None:
+                return "WON" if c_val < line else "LOST"
+            return "PENDING"
 
     # Sanitize category prefix so "over/under" doesn't collide with "under 1.5"
     p_market_clean = re.sub(r"double chance\s*&\s*over\s*/\s*under", "", p)
@@ -364,7 +418,8 @@ def evaluate_pick(pick_name: str, home_score: int, away_score: int,
 
     # ── Both Halves Under / Over Markets (e.g. Both Halves Under 1.5, Both Halves Over 1.5) ──
     if "both halves" in p or "both half" in p or "goals in both halves" in p or "score in both halves" in p or "scores in both halves" in p:
-        is_no = "no" in p or "ng" in p
+        sel_part = p.split("—")[-1].strip() if "—" in p else (p.split("-")[-1].strip() if "-" in p else p)
+        is_no = sel_part in ("no", "ng", "false") or "no" in sel_part or "ng" in sel_part
         is_under = "under" in p
         is_over = "over" in p or (not is_under and ("score" in p or "goals" in p))
 
@@ -375,12 +430,9 @@ def evaluate_pick(pick_name: str, home_score: int, away_score: int,
         h2_tot = (total - ht_tot) if (ht_tot is not None and total >= ht_tot) else None
 
         if is_under:
-            max_under_single = int(line) if line > int(line) else int(line) - 1  # For 1.5 -> 1
-            max_total_if_both_under = max_under_single * 2                       # For 1.5 -> 2
+            max_under_single = int(line) if line > int(line) else int(line) - 1
+            max_total_if_both_under = max_under_single * 2
 
-            # If total match goals > max_total_if_both_under (e.g. >= 3 goals for line 1.5):
-            # It's mathematically impossible for both halves to be <= 1 goal.
-            # Therefore "No" is guaranteed WON, and "Yes" is guaranteed LOST.
             if total > max_total_if_both_under:
                 return "WON" if is_no else "LOST"
 
@@ -396,8 +448,8 @@ def evaluate_pick(pick_name: str, home_score: int, away_score: int,
             return "LOST" if is_no else "WON"
 
         if is_over:
-            min_over_single = int(line) + 1  # For 1.5 -> 2, For 0.5 -> 1
-            min_total_if_both_over = min_over_single * 2  # For 1.5 -> 4, For 0.5 -> 2
+            min_over_single = int(line) + 1
+            min_total_if_both_over = min_over_single * 2
 
             if total < min_total_if_both_over:
                 return "WON" if is_no else "LOST"
@@ -410,8 +462,6 @@ def evaluate_pick(pick_name: str, home_score: int, away_score: int,
                     return "WON" if is_no else "LOST"
 
             return "LOST" if is_no else "WON"
-
-
 
     # ── Combo Markets: Double Chance & Over/Under (e.g. "Home/Away & Over 1.5", "1X & Over 1.5") ──
     if ("double chance" in p or "home/away" in p or "home/draw" in p or "away/draw" in p or "(12)" in p or "(1x)" in p or "(x2)" in p or "12 &" in p or "1x &" in p or "x2 &" in p) and ("over" in p or "under" in p):
@@ -441,24 +491,54 @@ def evaluate_pick(pick_name: str, home_score: int, away_score: int,
 
         return "WON" if (dc_satisfied and goals_satisfied) else "LOST"
 
-    # ── Goal Bounds ── e.g. "2-5+", "3-5+", "0-1", "6+"
-    gb = re.match(r"^(\d+)-(\d+)\+?$", p.replace(" ", ""))
-    if gb:
-        lo, hi = int(gb.group(1)), int(gb.group(2))
-        return "WON" if (lo <= total <= hi or (p.endswith("+") and total >= lo)) else "LOST"
-    if re.match(r"^(\d+)\+$", p.replace(" ", "")):
-        lo = int(re.match(r"^(\d+)\+$", p.replace(" ", "")).group(1))
-        return "WON" if total >= lo else "LOST"
+    # ── Goal Bounds (Team Goal Bounds & Match Goal Bounds) ── e.g. "Goal Bounds - Away — 1-3+", "1-3", "2-5+", "3-5+", "0-1", "6+"
+    if "goal bound" in p or "bounds" in p or re.search(r"\b\d+-\d+\+?\b", p) or re.search(r"\b\d+\+\b", p):
+        is_away_gb = "away" in p or (at and at in p and ht not in p)
+        is_home_gb = "home" in p or (ht and ht in p and at not in p)
+        target_goals = away_score if is_away_gb else (home_score if is_home_gb else total)
+
+        m_gb = re.search(r"(\d+)\s*-\s*(\d+)\+?", p)
+        m_plus = re.search(r"(\d+)\+", p)
+
+        if m_gb:
+            lo, hi = int(m_gb.group(1)), int(m_gb.group(2))
+            has_plus = "+" in p
+            return "WON" if (lo <= target_goals <= hi or (has_plus and target_goals >= lo)) else "LOST"
+        elif m_plus:
+            lo = int(m_plus.group(1))
+            return "WON" if target_goals >= lo else "LOST"
 
     # ── 2nd Half – Double Chance (Home or Away) ──
     if "2nd half" in p and "double chance" in p:
-        if "home or away" in p or "12" in p:
+        h2_home = (home_score - ht_home_score) if (ht_home_score is not None) else None
+        h2_away = (away_score - ht_away_score) if (ht_away_score is not None) else None
+        if h2_home is not None and h2_away is not None:
+            if "home or away" in p or "12" in p or "home/away" in p:
+                return "WON" if h2_home != h2_away else "LOST"
+            if "home or draw" in p or "1x" in p or "home/draw" in p:
+                return "WON" if h2_home >= h2_away else "LOST"
+            if "away or draw" in p or "x2" in p or "away/draw" in p:
+                return "WON" if h2_away >= h2_home else "LOST"
+            return "WON" if h2_home != h2_away else "LOST"
+        else:
+            if "home or away" in p or "12" in p:
+                return "WON" if home_score != away_score else "LOST"
+            if "home or draw" in p or "1x" in p:
+                return "WON" if home_score >= away_score else "LOST"
+            if "away or draw" in p or "x2" in p:
+                return "WON" if away_score >= home_score else "LOST"
             return "WON" if home_score != away_score else "LOST"
-        if "home or draw" in p or "1x" in p:
-            return "WON" if home_score >= away_score else "LOST"
-        if "away or draw" in p or "x2" in p:
-            return "WON" if away_score >= home_score else "LOST"
-        return "WON" if home_score != away_score else "LOST"
+
+    # ── 1st Half – Double Chance ──
+    if "1st half" in p and "double chance" in p:
+        if ht_home_score is not None and ht_away_score is not None:
+            if "home or away" in p or "12" in p or "home/away" in p:
+                return "WON" if ht_home_score != ht_away_score else "LOST"
+            if "home or draw" in p or "1x" in p or "home/draw" in p:
+                return "WON" if ht_home_score >= ht_away_score else "LOST"
+            if "away or draw" in p or "x2" in p or "away/draw" in p:
+                return "WON" if ht_away_score >= ht_home_score else "LOST"
+            return "WON" if ht_home_score != ht_away_score else "LOST"
 
     # ── SportyBet Compound OR Markets (Home/Away Team or Over 2.5) ──
     if "or over" in p or "win or over" in p or "team or over" in p or "& over" in p:
@@ -475,7 +555,6 @@ def evaluate_pick(pick_name: str, home_score: int, away_score: int,
             team_won = home_score != away_score
         res = team_won or over_won
         return "WON" if res else "LOST"
-
 
     # ── Double Chance (Comprehensive — Check Before WEH/1X2) ──
     if "(12)" in p or " 12 " in f" {p} " or "home/away" in p or "home or away" in p or (ht and at and ht in p and at in p and "or" in p and "draw" not in p):
@@ -497,15 +576,25 @@ def evaluate_pick(pick_name: str, home_score: int, away_score: int,
 
     # ── Win Either Half (WEH) ──
     if "win either half" in p or "weh" in p:
-        if ht and ht in p:
-            return "WON" if home_score > away_score else "LOST"
-        if "home" in p:
-            return "WON" if home_score > away_score else "LOST"
-        if at and at in p:
-            return "WON" if away_score > home_score else "LOST"
-        if "away" in p:
-            return "WON" if away_score > home_score else "LOST"
-        return "WON" if home_score != away_score else "LOST"
+        is_away = (at and at in p) or "away" in p
+        is_home = not is_away
+
+        if ht_home_score is not None and ht_away_score is not None:
+            h1_home_won = ht_home_score > ht_away_score
+            h1_away_won = ht_away_score > ht_home_score
+            h2_home = home_score - ht_home_score
+            h2_away = away_score - ht_away_score
+            h2_home_won = h2_home > h2_away
+            h2_away_won = h2_away > h2_home
+
+            if is_home and (h1_home_won or h2_home_won):
+                return "WON"
+            if is_away and (h1_away_won or h2_away_won):
+                return "WON"
+
+        if home_score > away_score if is_home else away_score > home_score:
+            return "WON"
+        return "LOST"
 
     # ── Draw No Bet (DNB) ──
     if "draw no bet" in p or "dnb" in p or "win (dnb)" in p:
@@ -565,20 +654,13 @@ def evaluate_pick(pick_name: str, home_score: int, away_score: int,
     # ── 1st Half Over/Under ──
     if "1st half" in p_clean or "ht " in p_clean:
         ht_tot = (ht_home_score + ht_away_score) if (ht_home_score is not None and ht_away_score is not None) else None
-        if ht_tot is None and home_score == 0 and away_score == 0:
-            ht_tot = 0
-
         if ht_tot is not None:
             if "over 0.5" in p_clean: return "WON" if ht_tot >= 1 else "LOST"
             if "over 1.5" in p_clean: return "WON" if ht_tot >= 2 else "LOST"
             if "under 0.5" in p_clean: return "WON" if ht_tot == 0 else "LOST"
             if "under 1.5" in p_clean: return "WON" if ht_tot <= 1 else "LOST"
         else:
-            if "over" in p_clean:
-                return "PENDING"
-            if "under 0.5" in p_clean:
-                return "PENDING"
-
+            return "PENDING"
 
     # ── Over / Under (standard & whole-integer goal lines) ──
     if "under 0.5" in p_clean: return "WON" if total < 1 else "LOST"
@@ -602,16 +684,22 @@ def evaluate_pick(pick_name: str, home_score: int, away_score: int,
         return "VOID" if total == 3 else ("WON" if total > 3 else "LOST")
 
     # ── Team Goals / Team Over Under ──
-    if "over 0.5 goals" in p or "over 0.5 team goals" in p or "team goals" in p or "over 0.5" in p:
-        if ht and ht in p:   return "WON" if home_score >= 1 else "LOST"
-        if at and at in p:   return "WON" if away_score >= 1 else "LOST"
-        if "home" in p:      return "WON" if home_score >= 1 else "LOST"
-        if "away" in p:      return "WON" if away_score >= 1 else "LOST"
+    if "team goals" in p or "over 0.5 goals" in p or "over 1.5 goals" in p or (("over 0.5" in p or "over 1.5" in p) and (ht in p or at in p)):
+        if at and at in p and ht not in p:   return "WON" if away_score >= 1 else "LOST"
+        if ht and ht in p and at not in p:   return "WON" if home_score >= 1 else "LOST"
+        if "away" in p:                      return "WON" if away_score >= 1 else "LOST"
+        if "home" in p:                      return "WON" if home_score >= 1 else "LOST"
         return "WON" if total >= 1 else "LOST"
 
     # ── GG / Both Teams To Score ──
-    if "both teams to score" in p or "btts" in p or bool(re.search(r"\bgg\b", p)):
-        return "WON" if (home_score >= 1 and away_score >= 1) else "LOST"
+    if "both teams to score" in p or "btts" in p or "gg/ng" in p or "gg_ng" in p or bool(re.search(r"\bgg\b|\bng\b", p)):
+        sel_part = p.split("—")[-1].strip() if "—" in p else (p.split("-")[-1].strip() if "-" in p else p)
+        is_no = sel_part in ("no", "ng", "false", "no goal") or (sel_part.startswith("no") and "yes" not in sel_part) or "btts - no" in p or "btts no" in p or "gg/ng — no" in p
+        both_scored = (home_score >= 1 and away_score >= 1)
+        if is_no:
+            return "LOST" if both_scored else ("WON" if is_concluded and (home_score == 0 or away_score == 0) else "PENDING")
+        else:
+            return "WON" if both_scored else ("LOST" if is_concluded else "PENDING")
 
     # ── 1UP / 2UP / Early Payout Markets ──
     if "1up" in p or "1 up" in p or "2up" in p or "2 up" in p or "lead" in p:
@@ -628,14 +716,25 @@ def evaluate_pick(pick_name: str, home_score: int, away_score: int,
             return "WON" if (home_score >= 1 or home_score > away_score) else "LOST"
 
     # ── Standard 1X2 ──
-    if "home win" in p or p == "1": return "WON" if home_score > away_score else "LOST"
-    if "away win" in p or p == "2": return "WON" if away_score > home_score else "LOST"
-    if "draw" in p or p == "x":    return "WON" if home_score == away_score else "LOST"
+    sel_part = p.split("—")[-1].strip() if "—" in p else (p.split("-")[-1].strip() if "-" in p else p)
+    mkt_part = p.split("—")[0].strip() if "—" in p else ""
 
-    if ht and ht in p: return "WON" if home_score > away_score else "LOST"
-    if at and at in p: return "WON" if away_score > home_score else "LOST"
+    if "1x2" in mkt_part or "match result" in mkt_part or "1x2" in p or p in ("home", "away", "draw", "1", "2", "x", "1x2 — home", "1x2 — away", "1x2 — draw"):
+        if sel_part in ("home", "1", "home win") or sel_part == "1":
+            return "WON" if home_score > away_score else "LOST"
+        if sel_part in ("away", "2", "away win") or sel_part == "2":
+            return "WON" if away_score > home_score else "LOST"
+        if sel_part in ("draw", "x", "tie", "draw win") or sel_part == "x":
+            return "WON" if home_score == away_score else "LOST"
 
-    return "WON"
+    if p in ("home win", "1", "home"): return "WON" if home_score > away_score else "LOST"
+    if p in ("away win", "2", "away"): return "WON" if away_score > home_score else "LOST"
+    if p in ("draw", "x"): return "WON" if home_score == away_score else "LOST"
+
+    if ht and ht in sel_part and at not in sel_part: return "WON" if home_score > away_score else "LOST"
+    if at and at in sel_part and ht not in sel_part: return "WON" if away_score > home_score else "LOST"
+
+    return "LOST" if is_concluded else "PENDING"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -862,8 +961,8 @@ def evaluate_pick_status(
 
     # 0. CORNERS MARKETS (Total Corners, Team Corners, 1st Half Corners)
     if "corner" in p and "goal" not in p:
-        is_home = "home" in p or (ht and ht in p)
-        is_away = "away" in p or (at and at in p)
+        is_home = "home" in p or (ht and ht in p and at not in p)
+        is_away = "away" in p or (at and at in p and ht not in p)
 
         c_val = None
         if is_home and home_corners is not None:
@@ -894,18 +993,14 @@ def evaluate_pick_status(
                 return "LOST"
             if is_concluded:
                 if c_val is not None:
-                    return "WON" if c_val <= line else "LOST"
+                    return "WON" if c_val < line else "LOST"
                 return "PENDING"
             return "PENDING"
-
 
     if home_score is None or away_score is None:
         return "PENDING"
 
     total = home_score + away_score
-    p = full_pick.lower().strip()
-    ht = home_team.lower().strip()
-    at = away_team.lower().strip()
 
     # ── 0. COMPOUND OR MARKETS (Home/Away Team Win OR Over 2.5 / 1.5 Goals) ──
     if ("or over" in p or "win or over" in p or "team or over" in p or "& over" in p) and "both halve" not in p and "double chance" not in p:
@@ -928,7 +1023,7 @@ def evaluate_pick_status(
 
         return "PENDING"
 
-    # ── 0B. TEAM SPECIFIC OVER-UNDER MARKETS (e.g. Fatih Karagumruk Istanbul Over/Under 0.5, Lazio Over 0.5) ──
+    # ── 0B. TEAM SPECIFIC OVER-UNDER MARKETS ──
     is_team_goals_market = (
         ("team goals" in p or "team over" in p or "team under" in p or
          "home over" in p or "home under" in p or "away over" in p or "away under" in p or
@@ -939,7 +1034,7 @@ def evaluate_pick_status(
     )
 
     if is_team_goals_market:
-        is_away = ("away" in p) or (at and at in p)
+        is_away = ("away" in p) or (at and at in p and ht not in p)
         target_score = away_score if is_away else home_score
 
         m_over = re.search(r"over\s*(\d+\.?\d*)", p)
@@ -958,13 +1053,49 @@ def evaluate_pick_status(
             if target_score > line:
                 return "LOST"
             if is_concluded:
-                return "WON" if target_score <= line else "LOST"
+                return "WON" if target_score < line else "LOST"
             return "PENDING"
 
+    # ── Goal Bounds (Team Goal Bounds & Match Goal Bounds) ──
+    if "goal bound" in p or "bounds" in p or re.search(r"\b\d+-\d+\+?\b", p) or re.search(r"\b\d+\+\b", p):
+        is_away_gb = "away" in p or (at and at in p and ht not in p)
+        is_home_gb = "home" in p or (ht and ht in p and at not in p)
+        target_goals = away_score if is_away_gb else (home_score if is_home_gb else total)
+
+        m_gb = re.search(r"(\d+)\s*-\s*(\d+)\+?", p)
+        m_plus = re.search(r"(\d+)\+", p)
+
+        if m_gb:
+            lo, hi = int(m_gb.group(1)), int(m_gb.group(2))
+            has_plus = "+" in p
+            return "WON" if (lo <= target_goals <= hi or (has_plus and target_goals >= lo)) else "LOST"
+        elif m_plus:
+            lo = int(m_plus.group(1))
+            return "WON" if target_goals >= lo else "LOST"
+
+    # ── 2nd Half Double Chance ──
+    if "2nd half" in p and "double chance" in p:
+        h2_home = (home_score - ht_home_score) if (ht_home_score is not None) else None
+        h2_away = (away_score - ht_away_score) if (ht_away_score is not None) else None
+        if h2_home is not None and h2_away is not None:
+            if "home or away" in p or "12" in p or "home/away" in p:
+                return "WON" if h2_home != h2_away else "LOST"
+            if "home or draw" in p or "1x" in p or "home/draw" in p:
+                return "WON" if h2_home >= h2_away else "LOST"
+            if "away or draw" in p or "x2" in p or "away/draw" in p:
+                return "WON" if h2_away >= h2_home else "LOST"
+        elif is_concluded:
+            if "home or away" in p or "12" in p:
+                return "WON" if home_score != away_score else "LOST"
+            if "home or draw" in p or "1x" in p:
+                return "WON" if home_score >= away_score else "LOST"
+            if "away or draw" in p or "x2" in p:
+                return "WON" if away_score >= home_score else "LOST"
 
     # ── Both Halves Under / Over Markets ──
     if "both halves" in p or "both half" in p or "goals in both halves" in p or "score in both halves" in p or "scores in both halves" in p:
-        is_no = "no" in p or "ng" in p
+        sel_part = p.split("—")[-1].strip() if "—" in p else (p.split("-")[-1].strip() if "-" in p else p)
+        is_no = sel_part in ("no", "ng", "false") or "no" in sel_part or "ng" in sel_part
         is_under = "under" in p
         is_over = "over" in p or (not is_under and ("score" in p or "goals" in p))
 
@@ -978,16 +1109,14 @@ def evaluate_pick_status(
             max_under_single = int(line) if line > int(line) else int(line) - 1
             max_total_if_both_under = max_under_single * 2
 
-            # Early win for "No" / Early loss for "Yes" if total goals > 2*floor(line)
             if total > max_total_if_both_under:
                 return "WON" if is_no else "LOST"
 
-            # If HT score is known and H1 alone exceeded the line
             if ht_tot is not None and ht_tot >= line:
                 return "WON" if is_no else "LOST"
 
             if is_concluded:
-                return evaluate_pick(full_pick, home_score, away_score, home_team, away_team, ht_home_score, ht_away_score)
+                return evaluate_pick(full_pick, home_score, away_score, home_team, away_team, ht_home_score, ht_away_score, total_corners, home_corners, away_corners, is_concluded)
 
             return "PENDING"
 
@@ -1006,33 +1135,38 @@ def evaluate_pick_status(
                     return "WON" if is_no else "LOST"
 
             if is_concluded:
-                return evaluate_pick(full_pick, home_score, away_score, home_team, away_team, ht_home_score, ht_away_score)
+                return evaluate_pick(full_pick, home_score, away_score, home_team, away_team, ht_home_score, ht_away_score, total_corners, home_corners, away_corners, is_concluded)
 
             return "PENDING"
 
-    # 1. OVER GOALS & CORNERS
+    # 1. OVER GOALS
     m_over = re.search(r"over\s*(\d+\.?\d*)", p)
-    if m_over and "1st half" not in p and "ht " not in p and "or over" not in p and "& over" not in p and "both halve" not in p:
+    if m_over and "1st half" not in p and "ht " not in p and "or over" not in p and "& over" not in p and "both halve" not in p and "corner" not in p:
         line = float(m_over.group(1))
         if total > line:
             return "WON"
         if is_concluded:
+            if line == int(line) and total == int(line):
+                return "VOID"
             return "LOST"
         return "PENDING"
 
-    # 2. UNDER GOALS & CORNERS
+    # 2. UNDER GOALS
     m_under = re.search(r"under\s*(\d+\.?\d*)", p)
-    if m_under and "1st half" not in p and "ht " not in p and "or under" not in p and "& under" not in p and "both halve" not in p:
+    if m_under and "1st half" not in p and "ht " not in p and "or under" not in p and "& under" not in p and "both halve" not in p and "corner" not in p:
         line = float(m_under.group(1))
         if total > line:
             return "LOST"
         if is_concluded:
-            return "WON" if total <= line else "LOST"
+            if line == int(line) and total == int(line):
+                return "VOID"
+            return "WON" if total < line else "LOST"
         return "PENDING"
 
     # 3. BOTH TEAMS TO SCORE (GG / NG)
-    if "both teams to score" in p or "btts" in p or bool(re.search(r"\bgg\b|\bng\b", p)):
-        is_no = "no" in p or bool(re.search(r"\bng\b", p))
+    if "both teams to score" in p or "btts" in p or "gg/ng" in p or "gg_ng" in p or bool(re.search(r"\bgg\b|\bng\b", p)):
+        sel_part = p.split("—")[-1].strip() if "—" in p else (p.split("-")[-1].strip() if "-" in p else p)
+        is_no = sel_part in ("no", "ng", "false", "no goal") or (sel_part.startswith("no") and "yes" not in sel_part) or "btts - no" in p or "btts no" in p or "gg/ng — no" in p
         if is_no:
             if home_score >= 1 and away_score >= 1:
                 return "LOST"
@@ -1046,15 +1180,11 @@ def evaluate_pick_status(
                 return "LOST"
             return "PENDING"
 
-
-    # 6. WIN EITHER HALF (WEH)
+    # 4. WIN EITHER HALF (WEH)
     if "win either half" in p or "weh" in p:
-        ht = home_team.lower().strip()
-        at = away_team.lower().strip()
         is_away = (at and at in p) or "away" in p
         is_home = not is_away
 
-        # Check HT score split if available
         if ht_home_score is not None and ht_away_score is not None:
             h1_home_won = ht_home_score > ht_away_score
             h1_away_won = ht_away_score > ht_home_score
@@ -1073,18 +1203,11 @@ def evaluate_pick_status(
             team_won = (home_score > away_score) if is_home else (away_score > home_score)
             if team_won:
                 return "WON"
-            # 2nd half comeback in high scoring draw (e.g. 3-3, 2-2)
-            if is_away and away_score >= 2 and home_score == away_score:
-                return "WON"
-            if is_home and home_score >= 2 and home_score == away_score:
-                return "WON"
             return "LOST"
         return "PENDING"
 
-    # 7. EARLY PAYOUT MARKETS (1UP / 2UP / Lead 1 / Lead 2 / Score First)
+    # 5. EARLY PAYOUT MARKETS (1UP / 2UP / Lead 1 / Lead 2 / Score First)
     if "1up" in p or "1 up" in p or "scores first" in p or "2up" in p or "2 up" in p:
-        ht = home_team.lower().strip()
-        at = away_team.lower().strip()
         sel_lower = p.split("—")[-1].strip() if "—" in p else p
         is_away = "away" in sel_lower or (at and at in sel_lower) or sel_lower == "2"
         is_home = "home" in sel_lower or (ht and ht in sel_lower) or sel_lower == "1"
@@ -1110,7 +1233,7 @@ def evaluate_pick_status(
 
     # ALL OTHER MARKETS (Double Chance, 1X2, Asian Handicap, Draw No Bet, 1st Half)
     if is_concluded:
-        return evaluate_pick(full_pick, home_score, away_score, home_team, away_team, ht_home_score, ht_away_score)
+        return evaluate_pick(full_pick, home_score, away_score, home_team, away_team, ht_home_score, ht_away_score, total_corners, home_corners, away_corners, is_concluded)
 
     return "PENDING"
 

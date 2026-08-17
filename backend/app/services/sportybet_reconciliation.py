@@ -295,22 +295,22 @@ class SportyBetVerificationEngine(SportsbookProvider):
                 if odds <= 1.0:
                     continue
 
-                # ── 1. Match Winner / 1X2 ─────────────────────────────────────
-                if "1X2" in t_mkt_upper or "MATCH_RESULT" in t_mkt_upper or is_match_result:
-                    if is_match_result:
-                        if favors_home:
-                            if "1" in oc_desc or "HOME" in oc_desc or (h_norm and h_norm in self.normalize_team_name(oc_desc)):
-                                return mkt, oc, "MATCHED_1X2_HOME"
-                        elif favors_away:
-                            if "2" in oc_desc or "AWAY" in oc_desc or (a_norm and a_norm in self.normalize_team_name(oc_desc)):
-                                return mkt, oc, "MATCHED_1X2_AWAY"
-                        elif favors_draw:
-                            if "X" in oc_desc or "DRAW" in oc_desc:
-                                return mkt, oc, "MATCHED_1X2_DRAW"
+                # ── 1. 2nd Half Double Chance ─────────────────────────────────────
+                if ("2ND HALF" in t_mkt_upper or "2H" in t_mkt_upper or "SECOND HALF" in t_mkt_upper) and ("DOUBLE CHANCE" in t_mkt_upper or "DC" in t_mkt_upper or "HOME OR AWAY" in t_sel_upper or "1X" in t_sel_upper or "X2" in t_sel_upper or "12" in t_sel_upper):
+                    if ("2ND HALF" in m_desc or "SECOND HALF" in m_desc or "2H" in m_desc) and ("DOUBLE CHANCE" in m_desc or "DC" in m_desc):
+                        is_12 = "12" in t_sel_upper or "HOME OR AWAY" in t_sel_upper
+                        is_x2 = "X2" in t_sel_upper or "DRAW OR AWAY" in t_sel_upper or "AWAY OR DRAW" in t_sel_upper
+                        is_1x = "1X" in t_sel_upper or "HOME OR DRAW" in t_sel_upper or "HOME/DRAW" in t_sel_upper
+                        if is_1x and ("1X" in oc_desc or "HOME/DRAW" in oc_desc or "1 OR X" in oc_desc or oc_desc == "1X"):
+                            return mkt, oc, "MATCHED_2H_DC_1X"
+                        elif is_x2 and ("X2" in oc_desc or "DRAW/AWAY" in oc_desc or "X OR 2" in oc_desc or oc_desc == "X2"):
+                            return mkt, oc, "MATCHED_2H_DC_X2"
+                        elif is_12 and ("12" in oc_desc or "HOME/AWAY" in oc_desc or "1 OR 2" in oc_desc or oc_desc == "12"):
+                            return mkt, oc, "MATCHED_2H_DC_12"
 
-                # ── 2. Double Chance ──────────────────────────────────────────
-                if "DOUBLE_CHANCE" in t_mkt_upper or "DC" in t_mkt_upper or "DOUBLE" in t_mkt_upper or is_double_chance:
-                    if is_double_chance:
+                # ── 2. Full-Time Double Chance ──────────────────────────────────
+                if ("DOUBLE_CHANCE" in t_mkt_upper or "DC" in t_mkt_upper or "DOUBLE CHANCE" in t_mkt_upper) and not any(h in t_mkt_upper for h in ["1ST", "2ND", "HALF"]):
+                    if is_double_chance and not any(h in m_desc for h in ["1ST", "2ND", "HALF", "&", "CORNER"]):
                         is_1x = "1X" in t_sel_upper or "HOME OR DRAW" in t_sel_upper or "HOME/DRAW" in t_sel_upper or (favors_home and "DRAW" in t_sel_upper)
                         is_x2 = "X2" in t_sel_upper or "DRAW OR AWAY" in t_sel_upper or "DRAW/AWAY" in t_sel_upper or (favors_away and "DRAW" in t_sel_upper)
                         is_12 = "12" in t_sel_upper or "HOME OR AWAY" in t_sel_upper or "HOME/AWAY" in t_sel_upper
@@ -325,9 +325,22 @@ class SportyBetVerificationEngine(SportsbookProvider):
                             if "12" in oc_desc or "HOME/AWAY" in oc_desc or "HOME OR AWAY" in oc_desc or "1 OR 2" in oc_desc:
                                 return mkt, oc, "MATCHED_DC_12"
 
-                # ── 3. Over/Under Goals ───────────────────────────────────────
+                # ── 3. Match Winner / 1X2 ─────────────────────────────────────
+                if "1X2" in t_mkt_upper or "MATCH_RESULT" in t_mkt_upper or is_match_result:
+                    if is_match_result and not any(h in m_desc for h in ["1ST", "2ND", "HALF", "&", "CORNER"]):
+                        if favors_home:
+                            if "1" in oc_desc or "HOME" in oc_desc or (h_norm and h_norm in self.normalize_team_name(oc_desc)):
+                                return mkt, oc, "MATCHED_1X2_HOME"
+                        elif favors_away:
+                            if "2" in oc_desc or "AWAY" in oc_desc or (a_norm and a_norm in self.normalize_team_name(oc_desc)):
+                                return mkt, oc, "MATCHED_1X2_AWAY"
+                        elif favors_draw:
+                            if "X" in oc_desc or "DRAW" in oc_desc:
+                                return mkt, oc, "MATCHED_1X2_DRAW"
+
+                # ── 4. Over/Under Goals ───────────────────────────────────────
                 if "OVER" in combined_target or "UNDER" in combined_target or "GOALS" in combined_target or is_over_under:
-                    if is_over_under or "OVER" in m_desc or "UNDER" in m_desc:
+                    if (is_over_under or "OVER" in m_desc or "UNDER" in m_desc) and not any(h in m_desc for h in ["CORNER", "BOOKING", "CARD", "1ST", "2ND"]):
                         line_match = True
                         if target_line:
                             line_match = (target_line in m_spec) or (target_line in oc_desc) or (target_line in m_desc)
@@ -338,13 +351,14 @@ class SportyBetVerificationEngine(SportsbookProvider):
                             elif "UNDER" in combined_target and "UNDER" in oc_desc:
                                 return mkt, oc, "MATCHED_OVER_UNDER"
 
-                # ── 4. Both Teams To Score (GG/NG) ────────────────────────────
+                # ── 5. Both Teams To Score (GG/NG) ────────────────────────────
                 if "BTTS" in t_mkt_upper or "BOTH_TEAMS" in t_mkt_upper or "GG" in t_mkt_upper or is_btts:
                     if is_btts:
                         if ("YES" in t_sel_upper or "GG" in t_sel_upper) and ("YES" in oc_desc or "GG" in oc_desc):
                             return mkt, oc, "MATCHED_BTTS_YES"
                         if ("NO" in t_sel_upper or "NG" in t_sel_upper) and ("NO" in oc_desc or "NG" in oc_desc):
                             return mkt, oc, "MATCHED_BTTS_NO"
+
 
                 # ── 5. Corners ────────────────────────────────────────────────
                 if "CORNER" in combined_target or is_corners:

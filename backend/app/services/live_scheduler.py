@@ -113,6 +113,37 @@ class LiveTrackingScheduler:
             if not prov_state and af_map and af_map.provider_event_id:
                 prov_state = self.api_football.fetch_fixture_state(provider_event_id=af_map.provider_event_id)
 
+            # Tier 3: Autonomous Gemini Search-Grounded Fallback (Zero-Quota Dependency)
+            # If match is finished or >105 mins elapsed but score or corners remain unverified
+            ko_elapsed_mins = int((now_ts * 1000 - (fix.kickoff_utc.timestamp() * 1000)) / 60000) if fix.kickoff_utc else 0
+            if (not prov_state or prov_state.home_score is None) and (ko_elapsed_mins > 105 or fix.status in ("FINISHED", "CONCLUDED", "FT")):
+                try:
+                    from app.services.gemini_service import GeminiAIService
+                    gemini = GeminiAIService()
+                    ai_res = gemini.reconcile_match_results([{
+                        "fixture_id": fix.id,
+                        "home_team": fix.home_team,
+                        "away_team": fix.away_team,
+                        "competition": fix.competition
+                    }])
+                    if ai_res and len(ai_res) > 0:
+                        first_m = ai_res[0]
+                        if first_m.get("home_score") is not None and first_m.get("away_score") is not None:
+                            fix.status = "FINISHED"
+                            fix.home_score = int(first_m.get("home_score"))
+                            fix.away_score = int(first_m.get("away_score"))
+                            if first_m.get("ht_home_score") is not None:
+                                fix.half_time_home_score = int(first_m.get("ht_home_score"))
+                                fix.half_time_away_score = int(first_m.get("ht_away_score", 0))
+                            if first_m.get("total_corners") is not None:
+                                fix.total_corners = int(first_m.get("total_corners"))
+                                fix.home_corners = int(first_m.get("home_corners", 0))
+                                fix.away_corners = int(first_m.get("away_corners", 0))
+                            fix.updated_at = datetime.now(timezone.utc)
+                            db.flush()
+                except Exception as e:
+                    print(f"[LiveTrackingScheduler] Gemini autonomous reconciliation error for {fix.home_team} vs {fix.away_team}: {e}")
+
             if prov_state:
                 fix.status = prov_state.status
                 fix.minute = prov_state.minute
@@ -136,6 +167,7 @@ class LiveTrackingScheduler:
                 has_live_matches = True
             elif ko_ms and (ko_ms - (now_ts * 1000)) < 15 * 60 * 1000:
                 has_approaching_matches = True
+
 
         # 3. Synchronize selections and evaluate tickets
         for t in tickets:

@@ -58,21 +58,21 @@ class SettlementRouter:
 
     @classmethod
     def _infer_and_evaluate(cls, market_def: Dict[str, Any], ctx: MatchStateContext) -> EvaluationResult:
-        sel_name = str(market_def.get("selection_name") or market_def.get("selection") or "").lower()
-        mkt_name = str(market_def.get("market_name") or "").lower()
+        sel_name = str(market_def.get("selection_name") or market_def.get("selection") or "").strip().lower()
+        mkt_name = str(market_def.get("market_name") or market_def.get("market_type") or "").strip().lower()
         combined = f"{mkt_name} — {sel_name}"
 
         # 1. Combo Market
-        if any(k in combined for k in ("or over", "win or over", "team or over", "& over")):
+        if any(k in combined for k in ("or over", "win or over", "team or over", "& over")) and "both halve" not in combined:
             m_ov = re.search(r"over\s*(\d+\.?\d*)", combined)
             line = float(m_ov.group(1)) if m_ov else 2.5
-            is_away = "away" in combined or (ctx.away_team and ctx.away_team.lower() in combined and ctx.home_team.lower() not in combined)
+            is_away = "away" in sel_name or (ctx.away_team and ctx.away_team.lower() in sel_name and ctx.home_team.lower() not in sel_name)
             target = "AWAY" if is_away else "HOME"
             return evaluate_combo({"combo_type": "OR", "target_team": target, "over_line": line}, ctx)
 
         # 2. Win Either Half
         if "win either half" in combined or "weh" in combined:
-            is_away = "away" in combined or (ctx.away_team and ctx.away_team.lower() in combined and ctx.home_team.lower() not in combined)
+            is_away = "away" in sel_name or (ctx.away_team and ctx.away_team.lower() in sel_name and ctx.home_team.lower() not in sel_name)
             target = "AWAY" if is_away else "HOME"
             return evaluate_win_either_half({"target_team": target}, ctx)
 
@@ -82,12 +82,13 @@ class SettlementRouter:
             m_un = re.search(r"under\s*(\d+\.?\d*)", combined)
             direction = "OVER" if m_ov else "UNDER"
             line = float(m_ov.group(1)) if m_ov else (float(m_un.group(1)) if m_un else 7.5)
-            return evaluate_corners({"direction": direction, "line": line}, ctx)
+            target = "HOME" if "home" in combined else ("AWAY" if "away" in combined else None)
+            return evaluate_corners({"direction": direction, "line": line, "target_team": target}, ctx)
 
-        # 4. BTTS
-        if "both teams to score" in combined or "btts" in combined or "gg" in combined or "ng" in combined:
-            is_yes = "yes" in combined or "gg" in combined
-            return evaluate_btts({"selection": "YES" if is_yes else "NO"}, ctx)
+        # 4. BTTS / GG-NG
+        if "both teams to score" in mkt_name or "btts" in mkt_name or "gg/ng" in mkt_name or "gg_ng" in mkt_name or "goal / no goal" in mkt_name:
+            is_no = sel_name in ("no", "ng", "false", "no goal") or (sel_name.startswith("no") and "yes" not in sel_name)
+            return evaluate_btts({"selection": "NO" if is_no else "YES"}, ctx)
 
         # 5. Over / Under Goals
         m_ov = re.search(r"over\s*(\d+\.?\d*)", combined)
@@ -97,23 +98,26 @@ class SettlementRouter:
             line = float(m_ov.group(1)) if m_ov else float(m_un.group(1))
             return evaluate_total_goals({"direction": direction, "line": line}, ctx)
 
-        # 6. Double Chance
+        # 6. Double Chance (including 1st Half / 2nd Half Double Chance)
         if any(k in combined for k in ("double chance", "(1x)", "(x2)", "(12)", "home or draw", "away or draw", "home or away", "1x", "x2", "12")):
             sel = "1X"
-            if "x2" in combined or "away or draw" in combined: sel = "X2"
-            elif "12" in combined or "home or away" in combined: sel = "12"
-            return evaluate_double_chance({"selection": sel}, ctx)
+            if any(k in sel_name for k in ("x2", "away or draw", "2 or draw", "draw or away", "away/draw")): sel = "X2"
+            elif any(k in sel_name for k in ("12", "home or away", "1 or 2", "home/away")): sel = "12"
+            elif any(k in sel_name for k in ("1x", "home or draw", "1 or draw", "home/draw")): sel = "1X"
+            return evaluate_double_chance({"selection": sel, "market_name": mkt_name}, ctx)
 
         # 7. Handicap
         if "handicap" in combined or "(+" in combined or "(-" in combined:
             m_val = re.search(r"([+-]?\d+\.?\d*)", combined)
             hcp = float(m_val.group(1)) if m_val else 1.5
-            is_away = "away" in combined or (ctx.away_team and ctx.away_team.lower() in combined and ctx.home_team.lower() not in combined)
+            is_away = "away" in sel_name or (ctx.away_team and ctx.away_team.lower() in sel_name and ctx.home_team.lower() not in sel_name)
             return evaluate_handicap({"target_team": "AWAY" if is_away else "HOME", "handicap": hcp}, ctx)
 
         # 8. 1X2 Match Result
-        if ctx.is_concluded:
-            is_away = "away" in combined or (ctx.away_team and ctx.away_team.lower() in combined)
+        if "1x2" in mkt_name or "match result" in mkt_name or mkt_name in ("1x2", "match_result", "") or ctx.is_concluded:
+            if sel_name in ("draw", "x", "tie", "draw win") or "draw" in sel_name:
+                return evaluate_match_result({"selection": "X"}, ctx)
+            is_away = sel_name in ("2", "away", "away win") or (ctx.away_team and ctx.away_team.lower() in sel_name)
             return evaluate_match_result({"selection": "2" if is_away else "1"}, ctx)
 
         return EvaluationResult(status="PENDING", result_text="--")

@@ -275,12 +275,20 @@ export default function TicketBuilderTab() {
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState(null);
   const [result, setResult] = useState(null);
-  const [rolloverResult, setRolloverResult] = useState(null);
-  const [generatedCodes, setGeneratedCodes] = useState({});
+  // Risk Profile & Market Preferences
+  const [riskProfile, setRiskProfile] = useState("BALANCED"); // "ULTRA_CONSERVATIVE", "BALANCED", "AGGRESSIVE"
+  const [selectedMarketCategories, setSelectedMarketCategories] = useState([
+    "DOUBLE_CHANCE",
+    "OVER_UNDER",
+    "TEAM_GOALS",
+    "WIN_EITHER_HALF",
+    "COMBO"
+  ]);
 
   // Audit Logs & Rejected Picks UI State
   const [expandedAuditLogs, setExpandedAuditLogs] = useState({});
   const [showRejectedDrawer, setShowRejectedDrawer] = useState(false);
+
 
   // Code Generation Modal Popup State
   const [codeModalData, setCodeModalData] = useState(null);
@@ -392,8 +400,11 @@ export default function TicketBuilderTab() {
       mode: "ACCUMULATOR",
       use_live_odds: true,
       strict_mode: strictMode,
-      reshuffle_seed: Date.now()
+      reshuffle_seed: Date.now(),
+      risk_profile: riskProfile,
+      allowed_market_categories: selectedMarketCategories
     };
+
 
 
     const res = await buildAiTicket(payload);
@@ -1713,8 +1724,72 @@ export default function TicketBuilderTab() {
                     ))}
                   </div>
                 </div>
+
+                {/* Risk Strategy Profile */}
+                <div className="pt-2">
+                  <label className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider block mb-2">Risk Strategy Profile</label>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                    {[
+                      { id: "ULTRA_CONSERVATIVE", label: "Ultra-Conservative", desc: "Tier-1 cushions only (85%+ win rate: Double Chance, Over 1.5)" },
+                      { id: "BALANCED", label: "Balanced Safety", desc: "Default optimal mix of Tier-1 cushions & high-confidence value" },
+                      { id: "AGGRESSIVE", label: "Aggressive Value", desc: "Targets straight 1X2 wins, Over 2.5 goals & handicaps" },
+                    ].map(r => (
+                      <div
+                        key={r.id}
+                        onClick={() => setRiskProfile(r.id)}
+                        className={`p-3 rounded-xl border cursor-pointer transition-all ${
+                          riskProfile === r.id
+                            ? "bg-slate-900 border-slate-900 text-white shadow-sm"
+                            : "bg-slate-50 border-slate-200 text-slate-800 hover:bg-slate-100"
+                        }`}
+                      >
+                        <p className="text-xs font-extrabold">{r.label}</p>
+                        <p className={`text-[10px] mt-0.5 ${riskProfile === r.id ? "text-slate-400" : "text-slate-500"}`}>{r.desc}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Allowed Market Categories Filter */}
+                <div className="pt-2">
+                  <label className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider block mb-2">Allowed Market Categories</label>
+                  <div className="flex flex-wrap gap-2">
+                    {[
+                      { id: "DOUBLE_CHANCE", label: "Double Chance (1X/12/X2)" },
+                      { id: "OVER_UNDER", label: "Over/Under Goals" },
+                      { id: "TEAM_GOALS", label: "Team Total Goals" },
+                      { id: "WIN_EITHER_HALF", label: "Win Either Half" },
+                      { id: "COMBO", label: "Win or Over 2.5 Combo" },
+                      { id: "HANDICAP", label: "Asian Handicap (+1.5)" },
+                      { id: "1X2", label: "1X2 Match Result" },
+                    ].map(m => {
+                      const isSelected = selectedMarketCategories.includes(m.id);
+                      return (
+                        <button
+                          key={m.id}
+                          type="button"
+                          onClick={() => {
+                            setSelectedMarketCategories(prev =>
+                              isSelected
+                                ? (prev.length > 1 ? prev.filter(x => x !== m.id) : prev)
+                                : [...prev, m.id]
+                            );
+                          }}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all border ${
+                            isSelected
+                              ? "bg-slate-900 text-white border-slate-900"
+                              : "bg-white text-slate-600 border-slate-200 hover:bg-slate-50"
+                          }`}
+                        >
+                          {isSelected ? "✓ " : ""}{m.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
               </div>
             )}
+
           </div>
 
           {/* Wizard Footer — Navigation + Build Button */}

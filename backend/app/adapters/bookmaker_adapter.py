@@ -451,12 +451,98 @@ class SportyBetAdapter(BookmakerAdapter):
         h_words = [w for w in h_lower.split() if len(w) >= 3 and w not in STOP]
         a_words = [w for w in a_lower.split() if len(w) >= 3 and w not in STOP]
 
-        has_home_word = any(w in s_lower for w in h_words)
-        has_away_word = any(w in s_lower for w in a_words)
+        has_home_word = any(w in s_lower or w in m_lower for w in h_words)
+        has_away_word = any(w in s_lower or w in m_lower for w in a_words)
 
         m_list = list(ev_markets.values()) if isinstance(ev_markets, dict) else (ev_markets or [])
 
-        # 1. Double Chance (Market ID: 10)
+        # ── 1. 2nd Half Double Chance ─────────────────────────────────────
+        if ("2nd half" in m_lower or "second half" in m_lower or "2h" in m_lower) and ("double chance" in m_lower or "dc" in m_lower or "1x" in s_lower or "x2" in s_lower or "12" in s_lower or "home or away" in s_lower):
+            is_12 = "12" in s_lower or "home or away" in s_lower
+            is_x2 = "x2" in s_lower or "draw or away" in s_lower or "away or draw" in s_lower
+            target_oc = "10" if is_12 else ("11" if is_x2 else "9")
+            target_code = "12" if is_12 else ("x2" if is_x2 else "1x")
+            for mkt in m_list:
+                m_desc = (mkt.get("desc") or mkt.get("name") or "").lower()
+                m_id = str(mkt.get("id") or mkt.get("market_id") or "")
+                if ("2nd half" in m_desc or "second half" in m_desc) and "double chance" in m_desc:
+                    for oc in (mkt.get("outcomes") or []):
+                        o_desc = (oc.get("desc") or oc.get("name") or "").lower()
+                        o_id = str(oc.get("id") or oc.get("outcome_id") or "")
+                        if o_id == target_oc or target_code in o_desc:
+                            return m_id, o_id, None
+            return "60", target_oc, None
+
+        # ── 2. 1st Half Double Chance ─────────────────────────────────────
+        if ("1st half" in m_lower or "first half" in m_lower or "1h" in m_lower) and ("double chance" in m_lower or "dc" in m_lower):
+            is_12 = "12" in s_lower or "home or away" in s_lower
+            is_x2 = "x2" in s_lower or "draw or away" in s_lower
+            target_oc = "10" if is_12 else ("11" if is_x2 else "9")
+            for mkt in m_list:
+                m_desc = (mkt.get("desc") or mkt.get("name") or "").lower()
+                m_id = str(mkt.get("id") or mkt.get("market_id") or "")
+                if ("1st half" in m_desc or "first half" in m_desc) and "double chance" in m_desc:
+                    for oc in (mkt.get("outcomes") or []):
+                        o_desc = (oc.get("desc") or oc.get("name") or "").lower()
+                        o_id = str(oc.get("id") or oc.get("outcome_id") or "")
+                        if o_id == target_oc or ("12" if is_12 else ("x2" if is_x2 else "1x")) in o_desc:
+                            return m_id, o_id, None
+            return "41", target_oc, None
+
+        # ── 3. Team Goals (Home Total Goals / Away Total Goals) ───────────
+        is_team_goals = ("team goals" in m_lower or "team over" in m_lower or "team under" in m_lower or
+                         "home over" in m_lower or "away over" in m_lower or "home under" in m_lower or "away under" in m_lower or
+                         "home team total" in m_lower or "away team total" in m_lower or
+                         (has_home_word and ("over" in m_lower or "under" in m_lower)) or
+                         (has_away_word and ("over" in m_lower or "under" in m_lower)))
+        if is_team_goals and not any(k in m_lower for k in ["double chance", "win either half"]):
+            is_away = "away" in m_lower or "away" in s_lower or (has_away_word and not has_home_word)
+            target_m_id = "21" if is_away else "20"
+            line_match = re.search(r"(\d+\.5|\d+)", s_lower + " " + m_lower)
+            line_val = line_match.group(1) if line_match else "1.5"
+            is_over = "over" in s_lower or "over" in m_lower
+            target_spec = f"total={line_val}"
+            for mkt in m_list:
+                m_id = str(mkt.get("id") or mkt.get("market_id") or "")
+                if m_id == target_m_id:
+                    for oc in (mkt.get("outcomes") or []):
+                        o_desc = (oc.get("desc") or oc.get("name") or "").lower()
+                        o_id = str(oc.get("id") or oc.get("outcome_id") or "")
+                        if (is_over and ("over" in o_desc or o_id == "12")) or (not is_over and ("under" in o_desc or o_id == "13")):
+                            return target_m_id, o_id, target_spec
+            return target_m_id, "12" if is_over else "13", target_spec
+
+        # ── 4. Win Either Half (Home: 73, Away: 74) ───────────────────────
+        if "either half" in m_lower or "either half" in s_lower or "win either half" in s_lower:
+            is_away = "away" in m_lower or "away" in s_lower or "(2)" in s_lower or (has_away_word and not has_home_word)
+            target_m_id = "74" if is_away else "73"
+            for mkt in m_list:
+                m_id = str(mkt.get("id") or mkt.get("market_id") or "")
+                if m_id == target_m_id:
+                    outcomes = mkt.get("outcomes", [])
+                    if isinstance(outcomes, dict): outcomes = list(outcomes.values())
+                    if outcomes:
+                        return target_m_id, str(outcomes[0].get("id") or outcomes[0].get("outcome_id") or "75"), None
+            return target_m_id, "75", None
+
+
+        # ── 5. Asian Handicap / Handicap ──────────────────────────────────
+        if "handicap" in m_lower or "asian handicap" in m_lower:
+            is_away = "away" in s_lower or "(2)" in s_lower or has_away_word
+            target_m_id = "16"
+            hcp_match = re.search(r"([+-]?\d+\.?\d*)", s_lower + " " + m_lower)
+            hcp_val = hcp_match.group(1) if hcp_match else "+1.5"
+            target_spec = f"hcp={hcp_val}"
+            for mkt in m_list:
+                m_id = str(mkt.get("id") or mkt.get("market_id") or "")
+                if m_id in ("16", "17", "28"):
+                    for oc in (mkt.get("outcomes") or []):
+                        o_id = str(oc.get("id") or oc.get("outcome_id") or "")
+                        if (is_away and o_id in ("3", "away", "2")) or (not is_away and o_id in ("1", "home")):
+                            return m_id, o_id, target_spec
+            return "16", "3" if is_away else "1", target_spec
+
+        # ── 6. Full-Time Double Chance (Market ID: 10) ───────────────────
         if "double chance" in m_lower or "dc" in m_lower or "1x" in s_lower or "x2" in s_lower or "12" in s_lower or "or draw" in s_lower or "home/draw" in s_lower or "home or away" in s_lower:
             is_12 = "12" in s_lower or "home or away" in s_lower or "1 or 2" in s_lower
             is_x2 = "x2" in s_lower or "draw or away" in s_lower or "(x2)" in s_lower or (has_away_word and not has_home_word) or "away or draw" in s_lower
@@ -468,7 +554,7 @@ class SportyBetAdapter(BookmakerAdapter):
             for mkt in m_list:
                 m_desc = (mkt.get("desc") or mkt.get("name") or mkt.get("market_name") or "").lower().strip()
                 m_id = str(mkt.get("id") or mkt.get("market_id") or "")
-                if (m_id == "10" or m_desc == "double chance") and not any(k in m_desc for k in ["&", "over", "under", "gg", "corner"]):
+                if (m_id == "10" or m_desc == "double chance") and not any(k in m_desc for k in ["&", "over", "under", "gg", "corner", "half", "1st", "2nd"]):
                     outcomes = mkt.get("outcomes", [])
                     if isinstance(outcomes, dict): outcomes = list(outcomes.values())
                     for oc in outcomes:
@@ -479,20 +565,7 @@ class SportyBetAdapter(BookmakerAdapter):
 
             return "10", target_oc_id, None
 
-        # 2. Win Either Half (Home: 73, Away: 74)
-        if "either half" in m_lower or "either half" in s_lower or "win either half" in s_lower:
-            is_away = "away" in s_lower or "(2)" in s_lower or (has_away_word and not has_home_word)
-            target_m_id = "74" if is_away else "73"
-            for mkt in m_list:
-                m_id = str(mkt.get("id") or mkt.get("market_id") or "")
-                if m_id == target_m_id:
-                    outcomes = mkt.get("outcomes", [])
-                    if isinstance(outcomes, dict): outcomes = list(outcomes.values())
-                    if outcomes:
-                        return target_m_id, str(outcomes[0].get("id") or outcomes[0].get("outcome_id") or "75"), None
-            return target_m_id, "75", None
-
-        # 3. Over / Under Goals (Market ID: 18)
+        # ── 7. Over / Under Goals (Market ID: 18) ─────────────────────────
         if "over" in m_lower or "under" in m_lower or "over" in s_lower or "under" in s_lower or "goal" in m_lower:
             line_match = re.search(r"(\d+\.5|\d+)", s_lower + " " + m_lower)
             line_val = line_match.group(1) if line_match else "1.5"
@@ -512,7 +585,7 @@ class SportyBetAdapter(BookmakerAdapter):
                             return m_id or "18", o_id, target_spec
             return "18", "12" if is_over else "13", target_spec
 
-        # 4. BTTS / GG / NG (Market ID: 29)
+        # ── 8. BTTS / GG / NG (Market ID: 29) ─────────────────────────────
         if "btts" in m_lower or "gg" in m_lower or "both teams" in m_lower or "gg" in s_lower or "ng" in s_lower:
             is_yes = "yes" in s_lower or "gg" in s_lower
             for mkt in m_list:
@@ -527,12 +600,13 @@ class SportyBetAdapter(BookmakerAdapter):
                             return "29", o_id, None
             return "29", "24" if is_yes else "25", None
 
-        # 5. 1X2 Match Result
+        # ── 9. 1X2 Match Result ───────────────────────────────────────────
         if "draw" in s_lower or s_lower == "x":
             return "1", "2", None
         elif "away" in s_lower or "(2)" in s_lower or (has_away_word and not has_home_word):
             return "1", "3", None
         return "1", "1", None
+
 
 
     def _fetch_event_markets(self, event_id: str, country_code: str = "ng") -> Optional[List[Dict[str, Any]]]:

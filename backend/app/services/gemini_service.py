@@ -151,3 +151,51 @@ Context Data: {json.dumps(context or {}, indent=2)}
 Respond concisely, professionally, and accurately based on data.
 """
         return self._call_gemini_api(prompt)
+
+    def reconcile_match_results(self, matches: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Autonomous Multi-Tier Match Result Reconciler.
+        Given a list of concluded fixtures, queries Gemini with search grounding
+        to retrieve official Full-Time score, Half-Time score, and Total Corners.
+        """
+        if not matches:
+            return []
+
+        prompt = f"""
+You are MatchIQ's Autonomous Match Results & Corners Verification Engine.
+For each of the following football matches, retrieve the official concluded results:
+- Full-Time Score (Home Goals, Away Goals)
+- Half-Time Score (HT Home Goals, HT Away Goals)
+- Total Corners Kicked in the match (Home Corners, Away Corners, Total Corners)
+- Concluded Status (CONCLUDED or POSTPONED or IN_PROGRESS)
+
+MATCHES TO VERIFY:
+{json.dumps(matches, indent=2)}
+
+Respond ONLY with a valid JSON array of objects with no markdown fences, no explanatory text. Format:
+[
+  {{
+    "fixture_id": "...",
+    "home_team": "...",
+    "away_team": "...",
+    "home_score": 2,
+    "away_score": 1,
+    "ht_home_score": 1,
+    "ht_away_score": 0,
+    "home_corners": 6,
+    "away_corners": 4,
+    "total_corners": 10,
+    "status": "CONCLUDED"
+  }}
+]
+"""
+        raw = self._call_gemini_api(prompt)
+        try:
+            clean = re.sub(r"```(?:json)?", "", raw).strip().strip("`").strip()
+            parsed = json.loads(clean)
+            if isinstance(parsed, list):
+                return parsed
+        except Exception as e:
+            logger.warning(f"Failed to parse Gemini match reconciliation response: {e}")
+        return []
+

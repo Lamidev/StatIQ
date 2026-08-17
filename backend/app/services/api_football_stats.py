@@ -100,6 +100,7 @@ async def fetch_match_stats(
         return _stats_cache[cache_k]
 
     headers = {
+        "x-apisports-key": api_key,
         "x-rapidapi-host": "v3.football.api-sports.io",
         "x-rapidapi-key": api_key,
     }
