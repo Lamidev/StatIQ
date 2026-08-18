@@ -47,50 +47,89 @@ class SportyBetIngestionService:
         "sr:tournament:238",  # Portugal Primeira Liga
     ]
 
+    _cache_ttl: int = 300  # 5 minutes cache
+    _is_refreshing: bool = False
+    _shared_client: Optional[httpx.Client] = None
+
+    @classmethod
+    def _get_client(cls) -> httpx.Client:
+        if cls._shared_client is None or cls._shared_client.is_closed:
+            cls._shared_client = httpx.Client(
+                timeout=4.0,
+                headers=cls.HEADERS,
+                limits=httpx.Limits(max_keepalive_connections=50, max_connections=100),
+                follow_redirects=True
+            )
+        return cls._shared_client
+
     @classmethod
     def fetch_upcoming_fixtures(cls, limit: int = 0, force_refresh: bool = False) -> List[Dict[str, Any]]:
         """
         Fetches active upcoming football fixtures from SportyBet across all major tournaments.
+        Uses stale-while-revalidate to ensure instant sub-second response times.
         """
         import concurrent.futures
+        import threading
 
         cache_key = "master_upcoming_pool"
         now = time.time()
 
-        if not force_refresh and cache_key in cls._cache:
+        if cache_key in cls._cache:
             entry = cls._cache[cache_key]
-            if (now - entry["timestamp"]) < cls._cache_ttl and len(entry.get("data", [])) > 0:
-                cached_data = entry["data"]
+            cached_data = entry.get("data", [])
+            is_stale = (now - entry.get("timestamp", 0)) >= cls._cache_ttl
+
+            if cached_data and not force_refresh:
+                if is_stale and not cls._is_refreshing:
+                    # Trigger non-blocking asynchronous background refresh
+                    threading.Thread(target=cls._perform_fetch, daemon=True).start()
                 return cached_data[:limit] if (limit and limit > 0) else cached_data
+
+        return cls._perform_fetch(limit=limit)
+
+    @classmethod
+    def _perform_fetch(cls, limit: int = 0) -> List[Dict[str, Any]]:
+        import concurrent.futures
+        cache_key = "master_upcoming_pool"
+        now = time.time()
+        cls._is_refreshing = True
+
+        client = cls._get_client()
 
         def _fetch_url(url: str) -> List[Dict[str, Any]]:
             try:
-                with httpx.Client(timeout=6.0, headers=cls.HEADERS) as client:
-                    resp = client.get(url)
-                    if resp.status_code == 200:
-                        j = resp.json()
-                        if j.get("bizCode") == 10000:
-                            data = j.get("data", [])
-                            return data if isinstance(data, list) else data.get("events", [])
+                resp = client.get(url)
+                if resp.status_code == 200:
+                    j = resp.json()
+                    if j.get("bizCode") == 10000:
+                        data = j.get("data", [])
+                        return data if isinstance(data, list) else data.get("events", [])
             except Exception as e:
                 logger.debug(f"[SportyBetIngestion] URL fetch error: {e}")
             return []
 
+        # High-density active categories and pagination sweep
+        core_categories = [
+            1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
+            21, 22, 23, 24, 25, 30, 31, 32, 33, 34, 35, 40, 44, 45, 50
+        ]
         fetch_urls = [
-            f"{cls.BASE_URL}/wapUpcomingEvents?sportId=sr:sport:1&pageNum={p}&pageSize=100" for p in range(1, 21)
+            f"{cls.BASE_URL}/wapUpcomingEvents?sportId=sr:sport:1&pageNum={p}&pageSize=100" for p in range(1, 16)
         ] + [
-            f"{cls.BASE_URL}/wapUpcomingEvents?sportId=sr:sport:1&categoryId=sr:category:{cid}&pageNum={p}&pageSize=100"
-            for cid in range(1, 101)
-            for p in (1, 2)
+            f"{cls.BASE_URL}/wapUpcomingEvents?sportId=sr:sport:1&categoryId=sr:category:{cid}&pageNum=1&pageSize=100"
+            for cid in core_categories
         ] + [
             f"{cls.BASE_URL}/wapUpcomingEvents?sportId=sr:sport:1&tournamentId={t_id}" for t_id in cls.TOP_TOURNAMENTS
         ]
 
         all_events = []
-        with concurrent.futures.ThreadPoolExecutor(max_workers=30) as executor:
-            results = list(executor.map(_fetch_url, fetch_urls))
-            for items in results:
-                all_events.extend(items)
+        try:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=25) as executor:
+                results = list(executor.map(_fetch_url, fetch_urls))
+                for items in results:
+                    all_events.extend(items)
+        finally:
+            cls._is_refreshing = False
 
         # Deduplicate events by eventId
         unique_events = []
