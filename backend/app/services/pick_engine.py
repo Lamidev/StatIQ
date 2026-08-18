@@ -25,6 +25,91 @@ from dataclasses import dataclass, field
 from app.predictions.live_calculator import calculate_matchiq_probabilities, get_team_rating
 from app.predictions.leg_odds_calculator import calculate_dynamic_leg_config
 
+def classify_league_tier(comp_name: str) -> tuple[int, str]:
+    """
+    Classifies football competitions into 3 operational priority tiers:
+    - Tier 1 (Score 100 - ELITE): Premier League, UCL, Europa League, Conference League, La Liga, Serie A, Bundesliga, Ligue 1, World Cup, Euros.
+    - Tier 2 (Score 50 - SOLID): Championship, Eredivisie, Liga Portugal, Brasileiro Serie A/B, MLS, Belgian Pro, Scottish Prem, Super Lig, Argentine Primera, Copa Libertadores, Top Domestic Cups.
+    - Tier 3 (Score 10 - REGIONAL/YOUTH): U19, U21, U23, Non-League, Regional/Lower divisions.
+    """
+    c_upper = str(comp_name or "").upper()
+
+    t1_keywords = [
+        "CHAMPIONS LEAGUE", "EUROPA LEAGUE", "CONFERENCE LEAGUE",
+        "PREMIER LEAGUE", "LALIGA", "LA LIGA", "SERIE A", "BUNDESLIGA", "LIGUE 1",
+        "WORLD CUP", "EUROPEAN CHAMPIONSHIP", "COPA AMERICA"
+    ]
+    if any(k in c_upper for k in t1_keywords) and not any(k in c_upper for k in ["U19", "U21", "U23", "WOMEN", "FEMENINO", "LADIES"]):
+        return (100, "TIER_1_ELITE")
+
+    t3_keywords = [
+        "U19", "U21", "U23", "YOUTH", "NEXT GEN", "RESERVE", "REGIONAL",
+        "KOLMONEN", "ISTHMIAN", "NORTHERN PREMIER", "SOUTHERN LEAGUE", "DIVISION 2", "DIVISION 3",
+        "PRIMERA C", "PRIMERA D", "TERCERA", "PROMOTION LEAGUE", "OBERLIGA"
+    ]
+    if any(k in c_upper for k in t3_keywords):
+        return (10, "TIER_3_REGIONAL")
+
+    return (50, "TIER_2_SOLID")
+
+
+def detect_match_archetype(odds_home: float, odds_draw: float, odds_away: float, ou_lines: list, home: str, away: str) -> dict:
+    """
+    Detects tactical match dynamic to intelligently prioritize the safest natural market:
+    - HEAVY_FAVORITE: Fav <= 1.48, Ratio >= 2.8 -> Prioritize Team Over 0.5/1.5, Double Chance 1X/X2, Win Either Half.
+    - HIGH_GOAL_EXPECTANCY: Over 2.5 <= 1.82 or Over 1.5 <= 1.26 -> Prioritize Over 1.5 Goals, Over 2.0.
+    - LOW_GOAL_DEFENSIVE: Under 2.5 <= 1.68 -> Prioritize Under 3.5 Goals, Under 4.5 Goals.
+    - COMPETITIVE_VALUE: Odds ~2.10-3.00 -> Prioritize Double Chance 12 / 1X / X2.
+    """
+    h_odd = float(odds_home or 2.5)
+    a_odd = float(odds_away or 2.5)
+    fav = min(h_odd, a_odd)
+    und = max(h_odd, a_odd)
+    ratio = (und / fav) if fav > 0 else 1.0
+
+    o25_odd, u25_odd, o15_odd = None, None, None
+    for line in (ou_lines or []):
+        l_str = str(line.get("line"))
+        if l_str == "2.5":
+            o25_odd = line.get("over")
+            u25_odd = line.get("under")
+        elif l_str == "1.5":
+            o15_odd = line.get("over")
+
+    if fav <= 1.48 and ratio >= 2.8:
+        return {
+            "archetype": "HEAVY_FAVORITE",
+            "fav_team": home if fav == h_odd else away,
+            "fav_side": "HOME" if fav == h_odd else "AWAY",
+            "dominant_ratio": ratio,
+            "boost_markets": ["team over", "double chance", "win either half"]
+        }
+    elif (o25_odd and float(o25_odd) <= 1.82) or (o15_odd and float(o15_odd) <= 1.26):
+        return {
+            "archetype": "HIGH_GOAL_EXPECTANCY",
+            "fav_team": None,
+            "fav_side": None,
+            "dominant_ratio": ratio,
+            "boost_markets": ["over 1.5", "over 2", "both teams to score"]
+        }
+    elif (u25_odd and float(u25_odd) <= 1.68):
+        return {
+            "archetype": "LOW_GOAL_DEFENSIVE",
+            "fav_team": None,
+            "fav_side": None,
+            "dominant_ratio": ratio,
+            "boost_markets": ["under 3.5", "under 4.5"]
+        }
+    else:
+        return {
+            "archetype": "COMPETITIVE_VALUE",
+            "fav_team": home if h_odd < a_odd else away,
+            "fav_side": "HOME" if h_odd < a_odd else "AWAY",
+            "dominant_ratio": ratio,
+            "boost_markets": ["double chance", "draw no bet"]
+        }
+
+
 @dataclass
 class PickDecision:
     fixture_id: str
@@ -48,6 +133,10 @@ class PickDecision:
     market_id: Optional[str] = None
     outcome_id: Optional[str] = None
     specifier: Optional[str] = None
+    league_tier: str = "TIER_2_SOLID"
+    league_tier_score: int = 50
+    tactical_archetype: str = "COMPETITIVE_VALUE"
+    tactical_score: float = 0.0
 
 
 @dataclass
@@ -706,7 +795,8 @@ class MatchIQPickEngine:
     ) -> List[PickDecision]:
         """
         Generates ALL approved candidate market options for a single fixture across
-        different categories (Double Chance, Over/Under, Team Goals, 1X2).
+        different categories (Double Chance, Over/Under, Team Goals, 1X2), enriched with
+        league tier ranking and tactical match archetype intelligence.
         """
         base_dec = self.evaluate_fixture_markets(
             fixture=fixture,
@@ -725,16 +815,28 @@ class MatchIQPickEngine:
         fix_id = str(fixture.get("fixture_id") or f"FIX_{home}_{away}")
         kickoff = fixture.get("kickoff_datetime")
 
-        # Extract live markets and generate alternate approved candidates
-        raw_markets = fixture.get("markets") or []
-        if isinstance(raw_markets, dict):
-            raw_markets = list(raw_markets.values())
-
-        candidates = [base_dec]
-        seen_selections = {base_dec.selection_name}
-
-        # 1. Inspect Over/Under lines
+        tier_score, tier_label = classify_league_tier(comp)
         ou_lines = fixture.get("ou_lines") or []
+        dc_odds = fixture.get("double_chance") or {}
+        r_home = float(fixture.get("odds_home") or 2.5)
+        r_draw = float(fixture.get("odds_draw") or 3.2)
+        r_away = float(fixture.get("odds_away") or 2.8)
+
+        archetype_info = detect_match_archetype(r_home, r_draw, r_away, ou_lines, home, away)
+        archetype_type = archetype_info["archetype"]
+
+        candidates = []
+        seen_selections = set()
+
+        # Update base decision with tier & archetype context
+        base_dec.league_tier = tier_label
+        base_dec.league_tier_score = tier_score
+        base_dec.tactical_archetype = archetype_type
+        base_dec.tactical_score = 15.0 if any(k in (base_dec.market_name or "").lower() for k in archetype_info["boost_markets"]) else 0.0
+        candidates.append(base_dec)
+        seen_selections.add(base_dec.selection_name)
+
+        # 1. Over/Under Lines (Tactically enriched)
         for ou in ou_lines:
             line_val = str(ou.get("line"))
             o_odd = ou.get("over")
@@ -743,6 +845,7 @@ class MatchIQPickEngine:
                 sel = f"Over {line_val} Goals"
                 if sel not in seen_selections:
                     seen_selections.add(sel)
+                    t_boost = 25.0 if archetype_type == "HIGH_GOAL_EXPECTANCY" else (15.0 if float(line_val) <= 1.5 else 0.0)
                     candidates.append(PickDecision(
                         fixture_id=fix_id, home_team=home, away_team=away, competition=comp,
                         kickoff_datetime=kickoff, market_name="Over/Under Goals", selection_name=sel,
@@ -750,12 +853,14 @@ class MatchIQPickEngine:
                         estimated_odds=float(o_odd), elo_gap=base_dec.elo_gap, tier_context=base_dec.tier_context,
                         approved=True, confidence_tier="HIGH", gate_results={"gate1": "PASS", "gate2": "PASS"},
                         rejection_reason=None, decision_audit_log=[], kelly_quarter_stake_pct=2.5,
-                        raw_match_data=fixture, market_id="18", outcome_id="12", specifier=f"total={line_val}"
+                        raw_match_data=fixture, market_id="18", outcome_id="12", specifier=f"total={line_val}",
+                        league_tier=tier_label, league_tier_score=tier_score, tactical_archetype=archetype_type, tactical_score=t_boost
                     ))
             if u_odd and 1.10 <= float(u_odd) <= 1.45 and float(line_val) >= 3.5:
                 sel = f"Under {line_val} Goals"
                 if sel not in seen_selections:
                     seen_selections.add(sel)
+                    t_boost = 25.0 if archetype_type == "LOW_GOAL_DEFENSIVE" else (15.0 if float(line_val) >= 4.5 else 0.0)
                     candidates.append(PickDecision(
                         fixture_id=fix_id, home_team=home, away_team=away, competition=comp,
                         kickoff_datetime=kickoff, market_name="Over/Under Goals", selection_name=sel,
@@ -763,16 +868,17 @@ class MatchIQPickEngine:
                         estimated_odds=float(u_odd), elo_gap=base_dec.elo_gap, tier_context=base_dec.tier_context,
                         approved=True, confidence_tier="HIGH", gate_results={"gate1": "PASS", "gate2": "PASS"},
                         rejection_reason=None, decision_audit_log=[], kelly_quarter_stake_pct=2.5,
-                        raw_match_data=fixture, market_id="18", outcome_id="13", specifier=f"total={line_val}"
+                        raw_match_data=fixture, market_id="18", outcome_id="13", specifier=f"total={line_val}",
+                        league_tier=tier_label, league_tier_score=tier_score, tactical_archetype=archetype_type, tactical_score=t_boost
                     ))
 
-        # 2. Inspect Double Chance lines
-        dc_odds = fixture.get("double_chance") or {}
+        # 2. Double Chance Lines (Tactically enriched)
         for dc_key, dc_val in dc_odds.items():
             if dc_val and 1.10 <= float(dc_val) <= 1.50:
                 sel_lbl = f"{home} or Draw (1X)" if dc_key == "1X" else (f"{away} or Draw (X2)" if dc_key == "X2" else f"{home} or {away} (12)")
                 if sel_lbl not in seen_selections:
                     seen_selections.add(sel_lbl)
+                    t_boost = 25.0 if archetype_type == "HEAVY_FAVORITE" and ((dc_key == "1X" and r_home < r_away) or (dc_key == "X2" and r_away < r_home)) else 10.0
                     candidates.append(PickDecision(
                         fixture_id=fix_id, home_team=home, away_team=away, competition=comp,
                         kickoff_datetime=kickoff, market_name="Double Chance", selection_name=sel_lbl,
@@ -782,7 +888,8 @@ class MatchIQPickEngine:
                         rejection_reason=None, decision_audit_log=[], kelly_quarter_stake_pct=3.0,
                         raw_match_data=fixture, market_id="10",
                         outcome_id="9" if dc_key == "1X" else ("11" if dc_key == "X2" else "10"),
-                        specifier=None
+                        specifier=None, league_tier=tier_label, league_tier_score=tier_score,
+                        tactical_archetype=archetype_type, tactical_score=t_boost
                     ))
 
         return candidates
@@ -804,7 +911,7 @@ class MatchIQPickEngine:
     ) -> BuiltTicket:
         """
         Evaluates a pool of fixtures through the 5-Gate pipeline and constructs
-        an optimal ticket or rollover plan with dynamic candidate reshuffling.
+        an optimal ticket or rollover plan with Tier-1 priority and tactical market diversity.
         """
         import random
         import time
@@ -828,7 +935,7 @@ class MatchIQPickEngine:
         approved_legs = []
         rejected_picks = []
         summary_logs = [
-            f"MatchIQ Pick Engine Execution ({mode} Mode - {target_mode})",
+            f"StatIQ AI Pick Engine ({mode} Mode - {target_mode})",
             f"Target: {target_games if target_mode == 'GAMES' else f'{target_total_odds:.2f}x'} | Legs: {target_legs_count}",
             f"Risk Profile: {risk_profile} | Min Probability Gate: {int(min_prob_threshold*100)}% | Per-Leg Target: {per_leg_target:.2f}x"
         ]
@@ -855,17 +962,17 @@ class MatchIQPickEngine:
 
         def _dynamic_candidate_score(d: PickDecision) -> float:
             """
-            100% Dynamic Quantitative Scoring Metric.
-            Zero hardcoded club or league strings. Evaluates true dominance purely from live data:
+            Multi-Tier Dynamic Quantitative Scoring Metric:
+            - League Tier Priority (Tier 1 = +100, Tier 2 = +50, Tier 3 = +10)
+            - Tactical Match Archetype Bonus (up to +25)
             - Live Market Dominance Ratio (Underdog Odds / Favorite Odds)
-            - Dynamic ELO / Statistical Rating Gap
-            - Verified Model Win Probability
-            - Market Safety Cushioning Factor (Tier 1 vs Naked 1X2)
+            - Dynamic Elo Rating Gap
+            - Base Model Win Probability
             """
-            # 1. Base Model Probability Core (0 to 100)
+            tier_score = float(getattr(d, "league_tier_score", 50))
+            tactical_bonus = float(getattr(d, "tactical_score", 0.0))
             prob_score = d.model_probability * 100.0
 
-            # 2. Live Market Dominance & Price Asymmetry (Dynamic Powerhouse Metric)
             raw = d.raw_match_data or {}
             r1x2 = raw.get("result_1x2") or {}
             dominance_score = 0.0
@@ -875,76 +982,69 @@ class MatchIQPickEngine:
                 if h_odd > 1.0 and a_odd > 1.0:
                     fav = min(h_odd, a_odd)
                     und = max(h_odd, a_odd)
-                    # When a real favorite dominates (e.g. 1.25 vs 9.0), ratio is huge
                     dominance_ratio = und / fav
                     if fav <= 1.50 and dominance_ratio >= 3.0:
-                        dominance_score = min(75.0, dominance_ratio * 8.0)
+                        dominance_score = min(60.0, dominance_ratio * 7.0)
                     elif fav <= 1.80 and dominance_ratio >= 1.8:
-                        dominance_score = min(40.0, dominance_ratio * 6.0)
+                        dominance_score = min(35.0, dominance_ratio * 5.0)
             except Exception:
                 pass
 
-            # 3. Dynamic ELO / Rating Gap
-            elo_score = min(35.0, max(0.0, abs(float(d.elo_gap or 0.0)) * 0.25))
-
-            # 4. Market Cushion Safety (Tier 1 Double Chance & Compound OR get priority)
-            cushion_bonus = 0.0
-            m_name = (d.market_name or "").lower()
-            if "double chance" in m_name or "or over" in m_name:
-                cushion_bonus = 25.0
-            elif "over 1.5" in (d.selection_name or "").lower():
-                cushion_bonus = 20.0
-            elif "1x2" in m_name:
-                cushion_bonus = 0.0
-
-            return prob_score + dominance_score + elo_score + cushion_bonus
+            elo_score = min(25.0, max(0.0, abs(float(d.elo_gap or 0.0)) * 0.20))
+            return tier_score + tactical_bonus + prob_score + dominance_score + elo_score
 
         if mode == "ROLLOVER":
-            # For Rollover: Strictly prioritize high dominance ratio, wide ELO gap & high win probability
-            approved_decisions.sort(key=_dynamic_candidate_score, reverse=True)
-            
-            # Filter for true dominant fixtures with high statistical cushion
-            top_decisions = [d for d in approved_decisions if _dynamic_candidate_score(d) >= 110.0]
-            pool_candidates = top_decisions if len(top_decisions) >= 2 else approved_decisions[:]
-            
-            # Enable dynamic permutation for regenerate while keeping candidates elite
+            # For Rollover: Strictly prioritize Tier 1 & Tier 2 leagues + high dominance ratio
+            # Filter for Tier 1 & Tier 2 matches first
+            tier1_2 = [d for d in approved_decisions if getattr(d, "league_tier_score", 50) >= 50]
+            base_pool = tier1_2 if len(tier1_2) >= 2 else approved_decisions[:]
+            base_pool.sort(key=_dynamic_candidate_score, reverse=True)
+
             seed_val = reshuffle_seed if reshuffle_seed is not None else int(time.time() * 1000)
             rng = random.Random(seed_val)
-            
-            # Sort by dynamic dominance score and select top elite candidates
-            top_decisions = [d for d in approved_decisions if _dynamic_candidate_score(d) >= 95.0]
-            pool_candidates = top_decisions if len(top_decisions) >= 3 else approved_decisions[:]
-            
-            # Anti-looping shuffle: take broad pool and shuffle with seed
-            elite_subset = pool_candidates[:max(20, len(pool_candidates))]
-            pool_copy = elite_subset[:]
+
+            # High-assurance pool (Dominance Ratio >= 2.2 or Prob >= 82%)
+            top_decisions = [d for d in base_pool if _dynamic_candidate_score(d) >= 120.0 or d.model_probability >= 0.82]
+            pool_candidates = top_decisions if len(top_decisions) >= 2 else base_pool[:]
+
+            pool_copy = pool_candidates[:max(15, len(pool_candidates))]
             rng.shuffle(pool_copy)
 
-            # PRECISE ODDS MATCHING WITH LEAGUE & MARKET DIVERSIFICATION
             selected_decisions: List[PickDecision] = []
             curr_acc_odds = 1.0
+            seen_fixtures_ro = set()
             seen_leagues: Dict[str, int] = {}
             seen_markets: Dict[str, int] = {}
 
+            # Strictly allow safe rollover markets
+            safe_rollover_markets = ["double chance", "over 1.5", "under 4.5", "team over", "draw no bet"]
+
             for d in pool_copy:
+                fix_k = str(d.fixture_id or f"{d.home_team}_{d.away_team}")
+                if fix_k in seen_fixtures_ro:
+                    continue
+
+                m_lower = (d.market_name or "").lower()
+                if not any(k in m_lower for k in safe_rollover_markets):
+                    continue
+
                 comp = str(d.competition or "OTHER")
                 m_type = str(d.market_name or "OTHER")
-                
-                # Prevent league over-concentration (max 1 per league in rollover)
-                if seen_leagues.get(comp, 0) >= 1 and len(pool_copy) > 5:
+
+                if seen_leagues.get(comp, 0) >= 1 and len(pool_copy) > 4:
                     continue
-                # Prevent market over-concentration
                 if seen_markets.get(m_type, 0) >= 2:
                     continue
 
                 selected_decisions.append(d)
+                seen_fixtures_ro.add(fix_k)
                 seen_leagues[comp] = seen_leagues.get(comp, 0) + 1
                 seen_markets[m_type] = seen_markets.get(m_type, 0) + 1
                 curr_acc_odds *= d.estimated_odds
 
                 if curr_acc_odds >= (target_total_odds * 0.95):
                     break
-                if len(selected_decisions) >= 4:
+                if len(selected_decisions) >= 3:
                     break
 
             if not selected_decisions and pool_copy:
@@ -953,10 +1053,21 @@ class MatchIQPickEngine:
             seed_val = reshuffle_seed if reshuffle_seed is not None else int(time.time() * 1000)
             rng = random.Random(seed_val)
 
-            # Form dynamic candidate pool from all approved matches with weighted shuffling
-            elite_candidate_pool = approved_decisions[:]
-            if len(elite_candidate_pool) > 1:
-                rng.shuffle(elite_candidate_pool)
+            # Sort by League Tier and Dynamic Tactical Score
+            approved_decisions.sort(key=_dynamic_candidate_score, reverse=True)
+
+            # Group candidates by Tier: Tier 1 Elite > Tier 2 Solid > Tier 3 Regional
+            t1_pool = [d for d in approved_decisions if getattr(d, "league_tier_score", 50) == 100]
+            t2_pool = [d for d in approved_decisions if getattr(d, "league_tier_score", 50) == 50]
+            t3_pool = [d for d in approved_decisions if getattr(d, "league_tier_score", 50) == 10]
+
+            # Shuffle within tiers to enable organic permutation
+            if len(t1_pool) > 1: rng.shuffle(t1_pool)
+            if len(t2_pool) > 1: rng.shuffle(t2_pool)
+            if len(t3_pool) > 1: rng.shuffle(t3_pool)
+
+            # Prioritized Candidate Pool: Tier 1 first, then Tier 2, fallback to Tier 3
+            elite_candidate_pool = t1_pool + t2_pool + t3_pool
 
             selected_decisions: List[PickDecision] = []
             target_legs_count = leg_config["ideal_legs"]
@@ -979,7 +1090,6 @@ class MatchIQPickEngine:
                     m_key = str(d.selection_name or d.market_name)
                     m_type = str(d.market_name or "OTHER")
 
-                    # Dynamic Diversity Rules: limit exact duplicate selection strings and market saturation
                     if seen_markets.get(m_type, 0) >= max_per_market_type and len(elite_candidate_pool) >= 15:
                         continue
                     if seen_markets.get(m_key, 0) >= 2 and len(elite_candidate_pool) >= 8:
@@ -991,7 +1101,7 @@ class MatchIQPickEngine:
                     seen_markets[m_type] = seen_markets.get(m_type, 0) + 1
                     seen_markets[m_key] = seen_markets.get(m_key, 0) + 1
                     curr_odds *= d.estimated_odds
-                    
+
                     if curr_odds >= (target_total_odds * 0.95):
                         break
                     if len(candidate_combo) >= 25:
@@ -999,7 +1109,7 @@ class MatchIQPickEngine:
 
                 selected_decisions = candidate_combo if candidate_combo else elite_candidate_pool[:target_legs_count]
             else:
-                # GAMES mode: sample target_legs_count diverse games from randomized pool
+                # GAMES mode: sample target_legs_count diverse games from randomized prioritized pool
                 for d in elite_candidate_pool:
                     fix_k = str(d.fixture_id or f"{d.home_team}_{d.away_team}")
                     if fix_k in seen_fixtures:
@@ -1022,7 +1132,7 @@ class MatchIQPickEngine:
 
                     if len(selected_decisions) >= target_legs_count:
                         break
-                
+
                 if len(selected_decisions) < target_legs_count:
                     for d in elite_candidate_pool:
                         fix_k = str(d.fixture_id or f"{d.home_team}_{d.away_team}")
