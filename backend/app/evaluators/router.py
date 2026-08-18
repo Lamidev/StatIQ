@@ -62,13 +62,59 @@ class SettlementRouter:
         mkt_name = str(market_def.get("market_name") or market_def.get("market_type") or "").strip().lower()
         combined = f"{mkt_name} — {sel_name}"
 
-        # 1. Combo Market
-        if any(k in combined for k in ("or over", "win or over", "team or over", "& over")) and "both halve" not in combined:
-            m_ov = re.search(r"over\s*(\d+\.?\d*)", combined)
-            line = float(m_ov.group(1)) if m_ov else 2.5
-            is_away = "away" in sel_name or (ctx.away_team and ctx.away_team.lower() in sel_name and ctx.home_team.lower() not in sel_name)
-            target = "AWAY" if is_away else "HOME"
-            return evaluate_combo({"combo_type": "OR", "target_team": target, "over_line": line}, ctx)
+        # 1. Combo Markets: Double Chance & Over/Under, 1X2 & Over/Under, Win or Over
+        is_dc_combo = ("double chance" in mkt_name or "dc" in mkt_name or "home/draw" in sel_name or "draw/away" in sel_name or "home/away" in sel_name or "1x" in sel_name or "x2" in sel_name or "12" in sel_name) and ("over" in combined or "under" in combined)
+        is_1x2_combo = ("1x2 &" in combined or "match result &" in combined or ("& over" in combined or "& under" in combined)) and "both halve" not in combined
+        is_generic_or_combo = any(k in combined for k in ("or over", "win or over", "team or over")) and "both halve" not in combined
+
+        if is_dc_combo or is_1x2_combo or is_generic_or_combo:
+            # Determine target team
+            target = "HOME"
+            if any(k in sel_name for k in ("x2", "draw/away", "away/draw", "draw or away", "away or draw", "2 or draw", "x or 2")):
+                target = "X2"
+            elif any(k in sel_name for k in ("1x", "home/draw", "draw/home", "home or draw", "draw or home", "1 or draw", "1 or x")):
+                target = "1X"
+            elif any(k in sel_name for k in ("12", "home/away", "away/home", "home or away", "1 or 2")):
+                target = "12"
+            elif any(k in sel_name for k in ("away", " 2 ", "(2)")) or (ctx.away_team and ctx.away_team.lower() in sel_name and ctx.home_team.lower() not in sel_name):
+                target = "AWAY"
+            elif any(k in sel_name for k in ("draw", " x ", "(x)")):
+                target = "DRAW"
+            else:
+                target = "HOME"
+
+            # Determine over/under direction and line from selection text first, then combined
+            sel_ov = re.search(r"over\s*(\d+\.?\d*)", sel_name)
+            sel_un = re.search(r"under\s*(\d+\.?\d*)", sel_name)
+            comb_ov = re.search(r"over\s*(\d+\.?\d*)", combined)
+            comb_un = re.search(r"under\s*(\d+\.?\d*)", combined)
+
+            if sel_un:
+                direction = "UNDER"
+                line = float(sel_un.group(1))
+            elif sel_ov:
+                direction = "OVER"
+                line = float(sel_ov.group(1))
+            elif "under" in sel_name and comb_un:
+                direction = "UNDER"
+                line = float(comb_un.group(1))
+            elif comb_ov:
+                direction = "OVER"
+                line = float(comb_ov.group(1))
+            elif comb_un:
+                direction = "UNDER"
+                line = float(comb_un.group(1))
+            else:
+                direction = "OVER"
+                line = 1.5
+
+            combo_type = "OR" if is_generic_or_combo else "AND"
+            return evaluate_combo({
+                "combo_type": combo_type,
+                "target_team": target,
+                "goal_direction": direction,
+                "goal_line": line
+            }, ctx)
 
         # 2. Win Either Half
         if "win either half" in combined or "weh" in combined:
@@ -99,11 +145,11 @@ class SettlementRouter:
             return evaluate_total_goals({"direction": direction, "line": line}, ctx)
 
         # 6. Double Chance (including 1st Half / 2nd Half Double Chance)
-        if any(k in combined for k in ("double chance", "(1x)", "(x2)", "(12)", "home or draw", "away or draw", "home or away", "1x", "x2", "12")):
+        if any(k in combined for k in ("double chance", "(1x)", "(x2)", "(12)", "home or draw", "away or draw", "home or away", "1x", "x2", "12", "draw or away", "draw or home")):
             sel = "1X"
-            if any(k in sel_name for k in ("x2", "away or draw", "2 or draw", "draw or away", "away/draw")): sel = "X2"
-            elif any(k in sel_name for k in ("12", "home or away", "1 or 2", "home/away")): sel = "12"
-            elif any(k in sel_name for k in ("1x", "home or draw", "1 or draw", "home/draw")): sel = "1X"
+            if any(k in sel_name for k in ("x2", "away or draw", "2 or draw", "draw or away", "away/draw", "draw/away")): sel = "X2"
+            elif any(k in sel_name for k in ("12", "home or away", "1 or 2", "home/away", "away/home")): sel = "12"
+            elif any(k in sel_name for k in ("1x", "home or draw", "1 or draw", "home/draw", "draw/home", "draw or home")): sel = "1X"
             return evaluate_double_chance({"selection": sel, "market_name": mkt_name}, ctx)
 
         # 7. Handicap

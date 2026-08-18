@@ -9,6 +9,7 @@ import AccessControlTab from "./components/AccessControlTab";
 import PasskeyAuthGate from "./components/PasskeyAuthGate";
 
 import { fetchTrackedTickets } from "./api/client";
+import { evaluateTicketStatus } from "./utils/ticketEvaluator";
 
 export default function App() {
   const [activeTab, setActiveTab] = useState("fixtures");
@@ -20,7 +21,17 @@ export default function App() {
     try {
       const data = await fetchTrackedTickets();
       const list = Array.isArray(data) ? data : data.tickets || [];
-      setActiveTickets(list.filter((t) => t.status === "RUNNING"));
+      const evaluated = list.map((t) => {
+        const evalStatus = evaluateTicketStatus(t);
+        return {
+          ...t,
+          status: evalStatus.status,
+          isWon: evalStatus.isWon,
+          isLost: evalStatus.isLost,
+          isLive: evalStatus.isLive,
+        };
+      });
+      setActiveTickets(evaluated.filter((t) => t.status === "RUNNING" || t.status === "PENDING" || !t.status));
     } catch (e) {
       // fallback
     }

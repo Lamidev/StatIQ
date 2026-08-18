@@ -346,6 +346,13 @@ AUTHORITATIVE_VERIFIED_SCORES = {
     "liverpool_como": {"home": 2, "away": 0, "ht_home": 2, "ht_away": 0, "status": "CONCLUDED"},
     "harju_levadia": {"home": 1, "away": 2, "ht_home": 1, "ht_away": 1, "status": "CONCLUDED"},
     "basel_barcelona": {"home": 2, "away": 5, "ht_home": 1, "ht_away": 1, "status": "CONCLUDED"},
+    "casa_pia_benfica": {"home": 0, "away": 7, "ht_home": 0, "ht_away": 2, "status": "CONCLUDED"},
+    "casa_pia_lisbon_benfica": {"home": 0, "away": 7, "ht_home": 0, "ht_away": 2, "status": "CONCLUDED"},
+    "ab_argir_klaksvik": {"home": 3, "away": 4, "ht_home": 1, "ht_away": 2, "status": "CONCLUDED"},
+    "argir_klaksvik": {"home": 3, "away": 4, "ht_home": 1, "ht_away": 2, "status": "CONCLUDED"},
+    "argir_ki_klaksvik": {"home": 3, "away": 4, "ht_home": 1, "ht_away": 2, "status": "CONCLUDED"},
+    "varhaug_stabaek": {"home": 2, "away": 0, "status": "CONCLUDED"},
+    "varhaug_stabaek_fotball_2": {"home": 2, "away": 0, "status": "CONCLUDED"},
     "gais_malmo": {"home": 0, "away": 1, "ht_home": 0, "ht_away": 0, "status": "CONCLUDED"},
     "orobah_abha": {"home": 0, "away": 0, "ht_home": 0, "ht_away": 0, "status": "CONCLUDED"},
 }
@@ -493,31 +500,48 @@ def evaluate_pick(pick_name: str, home_score: int, away_score: int,
 
             return "LOST" if is_no else "WON"
 
-    # ── Combo Markets: Double Chance & Over/Under (e.g. "Home/Away & Over 1.5", "1X & Over 1.5") ──
-    if ("double chance" in p or "home/away" in p or "home/draw" in p or "away/draw" in p or "(12)" in p or "(1x)" in p or "(x2)" in p or "12 &" in p or "1x &" in p or "x2 &" in p) and ("over" in p or "under" in p):
-        m_ov = re.search(r"over\s*(\d+\.?\d*)", p)
-        m_un = re.search(r"under\s*(\d+\.?\d*)", p)
+    # ── Combo Markets: Double Chance & Over/Under and 1X2 & Over/Under ──
+    is_dc_combo = ("double chance" in p or "dc" in p or "home/draw" in p or "draw/away" in p or "away/draw" in p or "home/away" in p or "(1x)" in p or "(x2)" in p or "(12)" in p or "1x &" in p or "x2 &" in p or "12 &" in p or "draw or away" in p or "home or draw" in p) and ("over" in p or "under" in p)
+    is_1x2_combo = ("1x2" in p or "match result" in p or "home &" in p or "away &" in p or "draw &" in p) and ("& over" in p or "& under" in p)
 
+    if (is_dc_combo or is_1x2_combo) and "both halve" not in p:
+        sel_part = p.split("—")[-1].strip() if "—" in p else (p.split("-")[-1].strip() if "-" in p else p)
+        
+        # 1. Team condition
         dc_satisfied = False
-        if "home/away" in p or "(12)" in p or " 12 " in f" {p} " or "home or away" in p:
-            dc_satisfied = (home_score != away_score)
-        elif "home/draw" in p or "(1x)" in p or " 1x " in f" {p} " or "home or draw" in p:
-            dc_satisfied = (home_score >= away_score)
-        elif "away/draw" in p or "(x2)" in p or " x2 " in f" {p} " or "away or draw" in p:
+        if any(k in sel_part for k in ("x2", "draw/away", "away/draw", "draw or away", "away or draw", "2 or draw", "x or 2")) or "(x2)" in p or " x2 " in f" {p} ":
             dc_satisfied = (away_score >= home_score)
+        elif any(k in sel_part for k in ("1x", "home/draw", "home or draw", "draw/home", "draw or home", "1 or draw", "1 or x")) or "(1x)" in p or " 1x " in f" {p} ":
+            dc_satisfied = (home_score >= away_score)
+        elif any(k in sel_part for k in ("12", "home/away", "home or away", "away/home", "1 or 2")) or "(12)" in p or " 12 " in f" {p} ":
+            dc_satisfied = (home_score != away_score)
+        elif any(k in sel_part for k in ("away", " 2 ", "(2)")) or (at and at in sel_part and ht not in sel_part):
+            dc_satisfied = (away_score > home_score)
+        elif any(k in sel_part for k in ("draw", " x ", "(x)")):
+            dc_satisfied = (home_score == away_score)
+        elif any(k in sel_part for k in ("home", " 1 ", "(1)")) or (ht and ht in sel_part and at not in sel_part):
+            dc_satisfied = (home_score > away_score)
         else:
-            if ht and ht in p and "away" not in p:
-                dc_satisfied = (home_score >= away_score)
-            elif at and at in p and "home" not in p:
-                dc_satisfied = (away_score >= home_score)
-            else:
-                dc_satisfied = (home_score != away_score)
+            dc_satisfied = (home_score >= away_score) if (ht and ht in p) else ((away_score >= home_score) if (at and at in p) else (home_score != away_score))
 
-        goals_satisfied = True
-        if m_ov:
-            goals_satisfied = (total > float(m_ov.group(1)))
-        elif m_un:
-            goals_satisfied = (total < float(m_un.group(1)))
+        # 2. Goals condition (strictly check sel_part first to prevent 'over/under' colliding)
+        m_sel_un = re.search(r"under\s*(\d+\.?\d*)", sel_part)
+        m_sel_ov = re.search(r"over\s*(\d+\.?\d*)", sel_part)
+        m_comb_un = re.search(r"under\s*(\d+\.?\d*)", p)
+        m_comb_ov = re.search(r"over\s*(\d+\.?\d*)", p)
+
+        if m_sel_un:
+            goals_satisfied = (total < float(m_sel_un.group(1)))
+        elif m_sel_ov:
+            goals_satisfied = (total > float(m_sel_ov.group(1)))
+        elif "under" in sel_part and m_comb_un:
+            goals_satisfied = (total < float(m_comb_un.group(1)))
+        elif m_comb_ov:
+            goals_satisfied = (total > float(m_comb_ov.group(1)))
+        elif m_comb_un:
+            goals_satisfied = (total < float(m_comb_un.group(1)))
+        else:
+            goals_satisfied = (total > 1.5)
 
         return "WON" if (dc_satisfied and goals_satisfied) else "LOST"
 
@@ -1032,8 +1056,22 @@ def evaluate_pick_status(
 
     total = home_score + away_score
 
-    # ── 0. COMPOUND OR MARKETS (Home/Away Team Win OR Over 2.5 / 1.5 Goals) ──
-    if ("or over" in p or "win or over" in p or "team or over" in p or "& over" in p) and "both halve" not in p and "double chance" not in p:
+    # ── 0. COMBO MARKETS (Double Chance & Over/Under, 1X2 & Over/Under) ──
+    is_dc_combo = ("double chance" in p or "dc" in p or "home/draw" in p or "draw/away" in p or "away/draw" in p or "home/away" in p or "(1x)" in p or "(x2)" in p or "(12)" in p or "1x &" in p or "x2 &" in p or "12 &" in p or "draw or away" in p or "home or draw" in p) and ("over" in p or "under" in p)
+    is_1x2_combo = ("1x2" in p or "match result" in p or "home &" in p or "away &" in p or "draw &" in p) and ("& over" in p or "& under" in p)
+
+    if (is_dc_combo or is_1x2_combo) and "both halve" not in p:
+        if is_concluded:
+            return evaluate_pick(full_pick, home_score, away_score, home_team, away_team, ht_home_score, ht_away_score, total_corners, home_corners, away_corners, is_concluded)
+        # Check early loss for Under markets in combos
+        sel_part = p.split("—")[-1].strip() if "—" in p else (p.split("-")[-1].strip() if "-" in p else p)
+        m_sel_un = re.search(r"under\s*(\d+\.?\d*)", sel_part)
+        if m_sel_un and total >= float(m_sel_un.group(1)):
+            return "LOST"
+        return "PENDING"
+
+    # ── 0A. SPORTYBET COMPOUND OR MARKETS (Home/Away Team Win OR Over 2.5 Goals) ──
+    if any(k in p for k in ("or over", "win or over", "team or over")) and "both halve" not in p and not is_dc_combo:
         m_ov = re.search(r"over\s*(\d+\.?\d*)", p)
         line = float(m_ov.group(1)) if m_ov else 2.5
         if total > line:
@@ -2076,6 +2114,61 @@ def sync_tracked_tickets_with_live_apis(db: Optional[Session] = None) -> List[Di
                         print(f"[TicketTracker] Concluded sweep error for {code}:", stale_err)
         except Exception as sweep_err:
             print("[TicketTracker] Concluded results sweep exception:", sweep_err)
+
+        # ── PASS 3: Autonomous Gemini Search-Grounded Match Result Recovery ────
+        try:
+            unresolved_matches = []
+            now_ms3 = time.time() * 1000
+            for t in tickets:
+                if t.get("status") == "RUNNING":
+                    for sel in t.get("selections", []):
+                        if sel.get("home_score") is None or sel.get("score") in ("--", "-- --", "", None):
+                            ko_ms = sel.get("start_time_ms") or 0
+                            if (ko_ms > 0 and (now_ms3 - ko_ms) > 105 * 60 * 1000) or str(sel.get("match_status") or "").upper() in ("CONCLUDED", "FINISHED", "FT"):
+                                h = sel.get("home_team", "")
+                                a = sel.get("away_team", "")
+                                if h and a:
+                                    unresolved_matches.append({
+                                        "fixture_id": sel.get("game_id") or f"{h}_{a}",
+                                        "home_team": h,
+                                        "away_team": a,
+                                        "competition": sel.get("competition", "")
+                                    })
+
+            if unresolved_matches:
+                from app.services.gemini_service import GeminiAIService
+                gemini = GeminiAIService()
+                ai_results = gemini.reconcile_match_results(unresolved_matches[:10])
+                if ai_results:
+                    for res_m in ai_results:
+                        rh = str(res_m.get("home_team", "")).lower().strip()
+                        ra = str(res_m.get("away_team", "")).lower().strip()
+                        h_goals = res_m.get("home_score")
+                        a_goals = res_m.get("away_score")
+                        ht_h = res_m.get("ht_home_score")
+                        ht_a = res_m.get("ht_away_score")
+                        tot_c = res_m.get("total_corners")
+                        h_c = res_m.get("home_corners")
+                        a_c = res_m.get("away_corners")
+                        if h_goals is not None and a_goals is not None:
+                            for t in tickets:
+                                for sel in t.get("selections", []):
+                                    sh = str(sel.get("home_team", "")).lower().strip()
+                                    sa = str(sel.get("away_team", "")).lower().strip()
+                                    if (sh in rh or rh in sh or any(w in rh for w in sh.split() if len(w) > 3)) and \
+                                       (sa in ra or ra in sa or any(w in ra for w in sa.split() if len(w) > 3)):
+                                        sel["home_score"] = int(h_goals)
+                                        sel["away_score"] = int(a_goals)
+                                        sel["score"] = f"{h_goals} - {a_goals}"
+                                        sel["match_status"] = "CONCLUDED"
+                                        sel["is_live"] = False
+                                        if ht_h is not None: sel["ht_home_score"] = int(ht_h)
+                                        if ht_a is not None: sel["ht_away_score"] = int(ht_a)
+                                        if tot_c is not None: sel["total_corners"] = int(tot_c)
+                                        if h_c is not None: sel["home_corners"] = int(h_c)
+                                        if a_c is not None: sel["away_corners"] = int(a_c)
+        except Exception as ai_err:
+            print("[TicketTracker] Gemini AI score recovery warning:", ai_err)
 
         # Persist full tickets list to DB
         save_tracked_tickets(tickets, db=db)

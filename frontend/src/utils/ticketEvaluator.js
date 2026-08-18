@@ -435,8 +435,74 @@ export function evaluatePickLive(sel) {
     }
   }
 
-  // 4. SPORTYBET COMPOUND OR MARKETS (e.g. Home Team or Over 2.5, Udinese Win or Over 2.5 Goals)
-  if (fullText.includes("or over") || fullText.includes("win or over") || fullText.includes("team or over") || fullText.includes("& over")) {
+  // 4. COMBO MARKETS: Double Chance & Over/Under and 1X2 & Over/Under
+  const isDcCombo = (fullText.includes("double chance") || fullText.includes("dc") || fullText.includes("home/draw") || fullText.includes("draw/away") || fullText.includes("away/draw") || fullText.includes("home/away") || fullText.includes("(1x)") || fullText.includes("(x2)") || fullText.includes("(12)") || fullText.includes("1x &") || fullText.includes("x2 &") || fullText.includes("12 &") || fullText.includes("draw or away") || fullText.includes("home or draw")) && (fullText.includes("over") || fullText.includes("under"));
+  const is1x2Combo = (fullText.includes("1x2") || fullText.includes("match result") || fullText.includes("home &") || fullText.includes("away &") || fullText.includes("draw &")) && (fullText.includes("& over") || fullText.includes("& under"));
+
+  if ((isDcCombo || is1x2Combo) && !fullText.includes("both halve")) {
+    let dcSatisfied = false;
+    if (fullText.includes("x2") || fullText.includes("draw/away") || fullText.includes("away/draw") || fullText.includes("draw or away") || fullText.includes("away or draw") || fullText.includes("2 or draw")) {
+      dcSatisfied = awayScore >= homeScore;
+    } else if (fullText.includes("1x") || fullText.includes("home/draw") || fullText.includes("draw/home") || fullText.includes("home or draw") || fullText.includes("draw or home") || fullText.includes("1 or draw")) {
+      dcSatisfied = homeScore >= awayScore;
+    } else if (fullText.includes("12") || fullText.includes("home/away") || fullText.includes("away/home") || fullText.includes("home or away") || fullText.includes("1 or 2")) {
+      dcSatisfied = homeScore !== awayScore;
+    } else if (fullText.includes("away") || fullText.includes(" 2 ") || fullText.includes("(2)")) {
+      dcSatisfied = awayScore > homeScore;
+    } else if (fullText.includes("draw") || fullText.includes(" x ") || fullText.includes("(x)")) {
+      dcSatisfied = homeScore === awayScore;
+    } else if (fullText.includes("home") || fullText.includes(" 1 ") || fullText.includes("(1)")) {
+      dcSatisfied = homeScore > awayScore;
+    } else {
+      dcSatisfied = homeScore >= awayScore;
+    }
+
+    const selUnderM = pickLower.match(/under\s*(\d+\.?\d*)/);
+    const selOverM = pickLower.match(/over\s*(\d+\.?\d*)/);
+    const combUnderM = fullText.match(/under\s*(\d+\.?\d*)/);
+    const combOverM = fullText.match(/over\s*(\d+\.?\d*)/);
+
+    let goalsSatisfied = false;
+    let line = 1.5;
+    let isUnder = false;
+
+    if (selUnderM) {
+      line = parseFloat(selUnderM[1]);
+      isUnder = true;
+      goalsSatisfied = totalGoals < line;
+    } else if (selOverM) {
+      line = parseFloat(selOverM[1]);
+      goalsSatisfied = totalGoals > line;
+    } else if (pickLower.includes("under") && combUnderM) {
+      line = parseFloat(combUnderM[1]);
+      isUnder = true;
+      goalsSatisfied = totalGoals < line;
+    } else if (combOverM) {
+      line = parseFloat(combOverM[1]);
+      goalsSatisfied = totalGoals > line;
+    } else if (combUnderM) {
+      line = parseFloat(combUnderM[1]);
+      isUnder = true;
+      goalsSatisfied = totalGoals < line;
+    } else {
+      goalsSatisfied = totalGoals > 1.5;
+    }
+
+    if (isConcluded) {
+      return (dcSatisfied && goalsSatisfied)
+        ? { status: "WON", resultText: pickName || "Won" }
+        : { status: "LOST", resultText: "Lost" };
+    }
+
+    if (isUnder && totalGoals >= line) {
+      return { status: "LOST", resultText: `Over ${line}` };
+    }
+
+    return { status: "PENDING", resultText: "--" };
+  }
+
+  // 4A. SPORTYBET COMPOUND OR MARKETS (e.g. Home Team or Over 2.5, Udinese Win or Over 2.5 Goals)
+  if ((fullText.includes("or over") || fullText.includes("win or over") || fullText.includes("team or over")) && !isDcCombo) {
     const mOver = fullText.match(/over\s*(\d+\.?\d*)/);
     const line = mOver ? parseFloat(mOver[1]) : 2.5;
     if (totalGoals > line) {
