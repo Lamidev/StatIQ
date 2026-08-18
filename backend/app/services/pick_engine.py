@@ -646,7 +646,8 @@ class MatchIQPickEngine:
         # -------------------------------------------------------------
         # GATE 5: Accumulator Correlation & Diversity Filter
         # -------------------------------------------------------------
-        current_league_count = league_pick_counts.get(comp, 0)
+        lpc = league_pick_counts if league_pick_counts is not None else {}
+        current_league_count = lpc.get(comp, 0)
         if current_league_count >= max_league_picks:
             gate_results["gate5"] = "FAIL"
             reason = f"League diversity limit reached ({current_league_count} picks already from {comp})"
@@ -746,20 +747,18 @@ class MatchIQPickEngine:
         # First pass: evaluate all fixtures through 5-Gate Pipeline
         all_decisions: List[PickDecision] = []
         for fix in fixture_pool:
-            comp = fix.get("competition_code") or fix.get("league") or "PL"
+            comp = fix.get("competition") or fix.get("competition_code") or fix.get("league") or fix.get("country") or "Football"
             dec = self.evaluate_fixture_markets(
                 fixture=fix,
                 per_leg_target_odds=per_leg_target,
                 min_prob_threshold=min_prob_threshold,
-                league_pick_counts=league_pick_counts,
-                max_league_picks=max_league_picks,
+                league_pick_counts={},
+                max_league_picks=999,
                 risk_profile=risk_profile,
                 allowed_markets=allowed_markets,
                 excluded_markets=excluded_markets,
             )
             all_decisions.append(dec)
-            if dec.approved:
-                league_pick_counts[comp] = league_pick_counts.get(comp, 0) + 1
 
         # Separate approved and rejected decisions
         approved_decisions = [d for d in all_decisions if d.approved]
@@ -824,75 +823,95 @@ class MatchIQPickEngine:
             seed_val = reshuffle_seed if reshuffle_seed is not None else int(time.time() * 1000)
             rng = random.Random(seed_val)
             
-            # Take top qualified candidates and shuffle for variation
-            elite_subset = pool_candidates[:max(8, len(pool_candidates))]
+            # Sort by dynamic dominance score and select top elite candidates
+            top_decisions = [d for d in approved_decisions if _dynamic_candidate_score(d) >= 95.0]
+            pool_candidates = top_decisions if len(top_decisions) >= 3 else approved_decisions[:]
+            
+            # Anti-looping shuffle: take broad pool and shuffle with seed
+            elite_subset = pool_candidates[:max(20, len(pool_candidates))]
             pool_copy = elite_subset[:]
             rng.shuffle(pool_copy)
 
-
-            # PRECISE ODDS MATCHING: Accumulate high-assurance legs until product closely matches target_total_odds
+            # PRECISE ODDS MATCHING WITH LEAGUE & MARKET DIVERSIFICATION
             selected_decisions: List[PickDecision] = []
             curr_acc_odds = 1.0
+            seen_leagues: Dict[str, int] = {}
+            seen_markets: Dict[str, int] = {}
+
             for d in pool_copy:
-                if len(selected_decisions) >= 1 and curr_acc_odds >= (target_total_odds * 0.92):
-                    break
+                comp = str(d.competition or "OTHER")
+                m_type = str(d.market_name or "OTHER")
+                
+                # Prevent league over-concentration (max 1 per league in rollover)
+                if seen_leagues.get(comp, 0) >= 1 and len(pool_copy) > 5:
+                    continue
+                # Prevent market over-concentration
+                if seen_markets.get(m_type, 0) >= 2:
+                    continue
+
                 selected_decisions.append(d)
+                seen_leagues[comp] = seen_leagues.get(comp, 0) + 1
+                seen_markets[m_type] = seen_markets.get(m_type, 0) + 1
                 curr_acc_odds *= d.estimated_odds
-                if curr_acc_odds >= (target_total_odds * 0.98):
+
+                if curr_acc_odds >= (target_total_odds * 0.95):
                     break
-                if len(selected_decisions) >= 4:  # Keep daily rollover tight (max 3-4 ultra-safe legs)
+                if len(selected_decisions) >= 4:
                     break
+
             if not selected_decisions and pool_copy:
                 selected_decisions.append(pool_copy[0])
         else:
             seed_val = reshuffle_seed if reshuffle_seed is not None else int(time.time() * 1000)
             rng = random.Random(seed_val)
 
-            # Sort approved decisions by Dynamic Quantitative Dominance Score
-            approved_decisions.sort(key=_dynamic_candidate_score, reverse=True)
-            
-            # Form broader dynamic candidate pool from all approved matches
+            # Form dynamic candidate pool from all approved matches with weighted shuffling
             elite_candidate_pool = approved_decisions[:]
             if len(elite_candidate_pool) > 1:
-                # Randomize ordering with weighted bias towards top scores based on seed
                 rng.shuffle(elite_candidate_pool)
 
             selected_decisions: List[PickDecision] = []
-            market_counts: Dict[str, int] = {}
             target_legs_count = leg_config["ideal_legs"]
-            max_per_market = 2 if target_legs_count <= 8 else 3
+
+            seen_leagues: Dict[str, int] = {}
+            seen_markets: Dict[str, int] = {}
 
             if target_mode == "ODDS":
-                # Dynamic Beam Selection: Build diverse combinations guided by the reshuffle seed
                 candidate_combo = []
                 curr_odds = 1.0
-                m_counts: Dict[str, int] = {}
 
                 for d in elite_candidate_pool:
-                    m_key = d.selection_name
-                    if "Under 4.5" in m_key or "Over 0.5" in m_key:
-                        if m_counts.get(m_key, 0) >= 2:
-                            continue
-                    
+                    comp = str(d.competition or "OTHER")
+                    m_key = str(d.selection_name or d.market_name)
+
+                    # Dynamic Diversity Rules: limit exact duplicate selection strings
+                    if seen_markets.get(m_key, 0) >= 3 and len(elite_candidate_pool) >= 8:
+                        continue
+
                     candidate_combo.append(d)
-                    m_counts[m_key] = m_counts.get(m_key, 0) + 1
+                    seen_leagues[comp] = seen_leagues.get(comp, 0) + 1
+                    seen_markets[m_key] = seen_markets.get(m_key, 0) + 1
                     curr_odds *= d.estimated_odds
                     
                     if curr_odds >= (target_total_odds * 0.95):
                         break
-                    if len(candidate_combo) >= 20:
+                    if len(candidate_combo) >= 25:
                         break
 
                 selected_decisions = candidate_combo if candidate_combo else elite_candidate_pool[:target_legs_count]
             else:
                 # GAMES mode: sample target_legs_count diverse games from randomized pool
                 for d in elite_candidate_pool:
-                    m_key = d.selection_name
-                    if "Under 4.5" in m_key or "Over 0.5" in m_key:
-                        if market_counts.get(m_key, 0) >= max_per_market:
-                            continue
+                    comp = str(d.competition or "OTHER")
+                    m_key = str(d.selection_name or d.market_name)
+
+                    if seen_markets.get(m_key, 0) >= 3 and len(elite_candidate_pool) >= target_legs_count * 2:
+                        continue
+
                     selected_decisions.append(d)
-                    market_counts[m_key] = market_counts.get(m_key, 0) + 1
+                    seen_leagues[comp] = seen_leagues.get(comp, 0) + 1
+                    seen_markets[m_key] = seen_markets.get(m_key, 0) + 1
+
                     if len(selected_decisions) >= target_legs_count:
                         break
                 

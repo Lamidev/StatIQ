@@ -86,6 +86,72 @@ def _normalize_fixture_item(m: Dict[str, Any], default_comp: str) -> Dict[str, A
         "ai_prob_over_2_5": m.get("ai_prob_over_2_5"),
     }
 
+def _extract_live_market_data(ev: Dict[str, Any]) -> tuple:
+    raw_mkts = ev.get("markets", {})
+    if isinstance(raw_mkts, dict):
+        raw_mkts = list(raw_mkts.values())
+    
+    dc_map = {}
+    ou_list = []
+    
+    o_h = float(ev.get("odds_home") or 2.0)
+    o_d = float(ev.get("odds_draw") or 3.2)
+    o_a = float(ev.get("odds_away") or 3.0)
+    
+    import re
+    for m in (raw_mkts or []):
+        if not isinstance(m, dict):
+            continue
+        m_id = str(m.get("market_id") or m.get("id") or "")
+        m_desc = str(m.get("market_name") or m.get("desc") or m.get("name") or "").lower()
+        spec = str(m.get("specifier") or "")
+        outcomes = m.get("outcomes", [])
+        if isinstance(outcomes, dict):
+            outcomes = list(outcomes.values())
+            
+        # Double Chance
+        if m_id == "10" or ("double chance" in m_desc and not any(k in m_desc for k in ["&", "over", "under"])):
+            for o in outcomes:
+                o_id = str(o.get("outcome_id") or o.get("id") or "")
+                o_desc = str(o.get("selection_name") or o.get("desc") or "").upper()
+                try:
+                    ov = float(o.get("odds") or o.get("oddsValue") or 0.0)
+                    if ov >= 1.02:
+                        if o_id == "9" or "1X" in o_desc: dc_map["1X"] = ov
+                        elif o_id == "11" or "X2" in o_desc: dc_map["X2"] = ov
+                        elif o_id == "10" or "12" in o_desc: dc_map["12"] = ov
+                except Exception:
+                    pass
+                    
+        # Over/Under Goals
+        if m_id == "18" or ("over/under" in m_desc and not any(k in m_desc for k in ["&", "1x2", "dc"])):
+            line_m = re.search(r"total=(\d+\.?\d*)", spec) or re.search(r"(\d+\.?\d*)", m_desc)
+            line_str = line_m.group(1) if line_m else "1.5"
+            o_val = None
+            u_val = None
+            for o in outcomes:
+                o_desc = str(o.get("selection_name") or o.get("desc") or "").lower()
+                o_id = str(o.get("outcome_id") or o.get("id") or "")
+                try:
+                    ov = float(o.get("odds") or o.get("oddsValue") or 0.0)
+                    if ov >= 1.02:
+                        if "over" in o_desc or o_id == "12": o_val = ov
+                        elif "under" in o_desc or o_id == "13": u_val = ov
+                except Exception:
+                    pass
+            if o_val or u_val:
+                ou_list.append({"line": line_str, "over": o_val, "under": u_val})
+                
+    # Accurate overround margin conversion if specific submarket not expanded in list
+    if "1X" not in dc_map and o_h > 1.0 and o_d > 1.0:
+        dc_map["1X"] = round(1.0 / max(0.01, (1.0 / o_h + 1.0 / o_d) * 1.08), 2)
+    if "X2" not in dc_map and o_a > 1.0 and o_d > 1.0:
+        dc_map["X2"] = round(1.0 / max(0.01, (1.0 / o_a + 1.0 / o_d) * 1.08), 2)
+    if "12" not in dc_map and o_h > 1.0 and o_a > 1.0:
+        dc_map["12"] = round(1.0 / max(0.01, (1.0 / o_h + 1.0 / o_a) * 1.08), 2)
+        
+    return dc_map, ou_list
+
 @router.post("/build")
 async def build_ai_ticket(req: BuildTicketRequest):
     """
@@ -155,6 +221,8 @@ async def build_ai_ticket(req: BuildTicketRequest):
                 "away": ev.get("odds_away", 3.0)
             }
 
+            dc_data, ou_data = _extract_live_market_data(ev)
+
             fixture_pool.append({
                 "fixture_id": ev.get("event_id"),
                 "event_id": ev.get("event_id"),
@@ -163,13 +231,14 @@ async def build_ai_ticket(req: BuildTicketRequest):
                 "external_fixture_id": ev.get("event_id"),
                 "home_team": h,
                 "away_team": a,
+                "competition": comp_name,
                 "competition_code": comp_name,
                 "kickoff_datetime": ev.get("kickoff_time") or (match_dt.strftime("%Y-%m-%d %H:%M:%S") if start_ms > 0 else today_str),
                 "start_time_ms": start_ms,
                 "markets": ev.get("markets", {}),
                 "result_1x2": r1x2_ev,
-                "ou_lines": [],
-                "double_chance": {},
+                "ou_lines": ou_data,
+                "double_chance": dc_data,
             })
 
 
@@ -184,6 +253,8 @@ async def build_ai_ticket(req: BuildTicketRequest):
                     if match_dt.date() != today_date:
                         continue
 
+            dc_data, ou_data = _extract_live_market_data(ev)
+
             fixture_pool.append({
                 "fixture_id": ev.get("event_id"),
                 "event_id": ev.get("event_id"),
@@ -192,6 +263,7 @@ async def build_ai_ticket(req: BuildTicketRequest):
                 "external_fixture_id": ev.get("event_id"),
                 "home_team": ev.get("home_team"),
                 "away_team": ev.get("away_team"),
+                "competition": ev.get("competition") or "Football",
                 "competition_code": ev.get("competition") or "Football",
                 "kickoff_datetime": ev.get("kickoff_time") or today_str,
                 "start_time_ms": start_ms,
@@ -201,8 +273,8 @@ async def build_ai_ticket(req: BuildTicketRequest):
                     "draw": ev.get("odds_draw", 3.2),
                     "away": ev.get("odds_away", 3.0)
                 },
-                "ou_lines": [],
-                "double_chance": {},
+                "ou_lines": ou_data,
+                "double_chance": dc_data,
             })
 
 

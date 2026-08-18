@@ -77,17 +77,17 @@ class SportyBetIngestionService:
             return []
 
         fetch_urls = [
-            f"{cls.BASE_URL}/wapUpcomingEvents?sportId=sr:sport:1&pageNum=1&pageSize=100",
-            f"{cls.BASE_URL}/wapUpcomingEvents?sportId=sr:sport:1&pageNum=2&pageSize=100",
-            f"{cls.BASE_URL}/wapUpcomingEvents?sportId=sr:sport:1&pageNum=3&pageSize=100",
-            f"{cls.BASE_URL}/wapUpcomingEvents?sportId=sr:sport:1&pageNum=4&pageSize=100",
-            f"{cls.BASE_URL}/wapUpcomingEvents?sportId=sr:sport:1&timeline=today&pageSize=100",
+            f"{cls.BASE_URL}/wapUpcomingEvents?sportId=sr:sport:1&pageNum={p}&pageSize=100" for p in range(1, 21)
+        ] + [
+            f"{cls.BASE_URL}/wapUpcomingEvents?sportId=sr:sport:1&categoryId=sr:category:{cid}&pageNum={p}&pageSize=100"
+            for cid in range(1, 101)
+            for p in (1, 2)
         ] + [
             f"{cls.BASE_URL}/wapUpcomingEvents?sportId=sr:sport:1&tournamentId={t_id}" for t_id in cls.TOP_TOURNAMENTS
         ]
 
         all_events = []
-        with concurrent.futures.ThreadPoolExecutor(max_workers=min(12, len(fetch_urls))) as executor:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=30) as executor:
             results = list(executor.map(_fetch_url, fetch_urls))
             for items in results:
                 all_events.extend(items)

@@ -620,11 +620,23 @@ async def get_sportybet_today_fixtures(day: str = "today"):
     now_utc = datetime.datetime.now(datetime.timezone.utc)
     now_ts = now_utc.timestamp()
 
-    # Process Strictly Live Dynamic SportyBet Events
+    # Process Strictly Live Dynamic SportyBet Events for target day
     for ev in raw_sporty_fixtures:
         ev_status = str(ev.get("status") or "").upper().strip()
         if ev_status in ["LIVE", "STARTED", "1H", "2H", "HT", "FINISHED", "ENDED", "CANCELLED", "POSTPONED", "ABANDONED"]:
             continue
+
+        # Strict Date Filtering for Today / Tomorrow
+        if day_str in ("today", "tomorrow"):
+            st_ms = ev.get("start_time_ms") or 0
+            if st_ms > 0:
+                ev_date = datetime.datetime.fromtimestamp(st_ms / 1000.0, tz=datetime.timezone.utc).strftime("%Y-%m-%d")
+                if ev_date != target_date_str:
+                    continue
+            else:
+                ko = str(ev.get("kickoff_time") or "")
+                if ko and not ko.startswith(target_date_str) and len(ko) > 10:
+                    continue
 
         h = ev.get("home_team") or "Home"
         a = ev.get("away_team") or "Away"
@@ -636,7 +648,7 @@ async def get_sportybet_today_fixtures(day: str = "today"):
         country_name = ev.get("country") or "International"
 
         kickoff_str = ev.get("kickoff_time") or "18:00"
-        iso_str = f"{now_utc.strftime('%Y-%m-%d')}T{kickoff_str}:00Z" if len(kickoff_str) == 5 else kickoff_str
+        iso_str = f"{target_date_str}T{kickoff_str}:00Z" if len(kickoff_str) == 5 else kickoff_str
 
         o_h = float(ev.get("odds_home") or 2.0)
         o_d = float(ev.get("odds_draw") or 3.2)
