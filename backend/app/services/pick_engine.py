@@ -850,9 +850,8 @@ class MatchIQPickEngine:
                 if c.approved:
                     all_candidate_decisions.append(c)
 
-        approved_decisions = all_candidate_decisions
-
-        rejected_decisions = [d for d in all_decisions if not d.approved]
+        approved_decisions = [d for d in all_candidate_decisions if d.approved]
+        rejected_decisions = [d for d in all_candidate_decisions if not d.approved]
 
         def _dynamic_candidate_score(d: PickDecision) -> float:
             """

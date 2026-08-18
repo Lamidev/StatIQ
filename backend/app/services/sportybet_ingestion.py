@@ -245,6 +245,59 @@ class SportyBetIngestionService:
                     elif desc in ("AWAY", "2"):
                         odds_away = ov
 
+            # Extract structured double_chance and ou_lines for immediate use by pick engine
+            dc_map = {}
+            ou_list = []
+            import re
+
+            for m in raw_markets:
+                m_id = str(m.get("id") or "")
+                m_desc = str(m.get("desc") or m.get("name") or "").lower()
+                spec = str(m.get("specifier") or "")
+                outcomes = m.get("outcomes", [])
+                if isinstance(outcomes, dict):
+                    outcomes = list(outcomes.values())
+
+                # Double Chance (Market 10)
+                if m_id == "10" or ("double chance" in m_desc and not any(k in m_desc for k in ["&", "over", "under", "gg", "corner"])):
+                    for o in outcomes:
+                        o_id = str(o.get("id") or o.get("outcome_id") or "")
+                        o_desc = str(o.get("desc") or o.get("name") or "").upper()
+                        try:
+                            ov = float(o.get("odds") or o.get("oddsValue") or 0.0)
+                            if ov >= 1.02:
+                                if o_id == "9" or "1X" in o_desc: dc_map["1X"] = ov
+                                elif o_id == "11" or "X2" in o_desc: dc_map["X2"] = ov
+                                elif o_id == "10" or "12" in o_desc: dc_map["12"] = ov
+                        except Exception:
+                            pass
+
+                # Over/Under Goals (Market 18)
+                if m_id == "18" or ("over/under" in m_desc and not any(k in m_desc for k in ["&", "1x2", "dc", "corner", "booking"])):
+                    line_m = re.search(r"total=(\d+\.?\d*)", spec) or re.search(r"(\d+\.?\d*)", m_desc)
+                    line_str = line_m.group(1) if line_m else "1.5"
+                    o_val, u_val = None, None
+                    for o in outcomes:
+                        o_desc = str(o.get("desc") or o.get("name") or "").lower()
+                        o_id = str(o.get("id") or o.get("outcome_id") or "")
+                        try:
+                            ov = float(o.get("odds") or o.get("oddsValue") or 0.0)
+                            if ov >= 1.02:
+                                if "over" in o_desc or o_id == "12": o_val = ov
+                                elif "under" in o_desc or o_id == "13": u_val = ov
+                        except Exception:
+                            pass
+                    if o_val or u_val:
+                        ou_list.append({"line": line_str, "over": o_val, "under": u_val})
+
+            # Accurate overround margin conversion if specific submarket not expanded in list
+            if "1X" not in dc_map and odds_home > 1.0 and odds_draw > 1.0:
+                dc_map["1X"] = round(1.0 / max(0.01, (1.0 / odds_home + 1.0 / odds_draw) * 1.08), 2)
+            if "X2" not in dc_map and odds_away > 1.0 and odds_draw > 1.0:
+                dc_map["X2"] = round(1.0 / max(0.01, (1.0 / odds_away + 1.0 / odds_draw) * 1.08), 2)
+            if "12" not in dc_map and odds_home > 1.0 and odds_away > 1.0:
+                dc_map["12"] = round(1.0 / max(0.01, (1.0 / odds_home + 1.0 / odds_away) * 1.08), 2)
+
             results.append({
                 "id": f"fx_{game_id}" if game_id else f"fx_{event_id.replace(':', '_')}",
                 "event_id": event_id,
@@ -259,6 +312,8 @@ class SportyBetIngestionService:
                 "odds_draw": odds_draw,
                 "odds_away": odds_away,
                 "markets": markets_dict,
+                "double_chance": dc_map,
+                "ou_lines": ou_list,
                 "provider": "SPORTYBET"
             })
 
