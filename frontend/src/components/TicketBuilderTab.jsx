@@ -5,6 +5,36 @@ import { Copy, Info, Calendar, Send, ShieldCheck, RefreshCw, CheckCircle2, Exter
 import { generateSafePick, buildSafeTicket, scoreFixtures } from "../utils/pickEngine";
 import { calculateFlexShield } from "../utils/flexCalculator";
 
+const AVAILABLE_LEAGUES = [
+  { code: "PL", name: "Premier League", country: "England" },
+  { code: "PD", name: "La Liga", country: "Spain" },
+  { code: "SA", name: "Serie A", country: "Italy" },
+  { code: "BL1", name: "Bundesliga", country: "Germany" },
+  { code: "FL1", name: "Ligue 1", country: "France" },
+  { code: "DED", name: "Eredivisie", country: "Netherlands" },
+  { code: "PPL", name: "Liga Portugal", country: "Portugal" },
+  { code: "TUR", name: "Süper Lig", country: "Turkey" },
+  { code: "BEL", name: "Pro League", country: "Belgium" },
+  { code: "AUT", name: "Bundesliga", country: "Austria" },
+  { code: "SAU", name: "Pro League", country: "Saudi Arabia" },
+  { code: "SCO", name: "Premiership", country: "Scotland" },
+  { code: "SUI", name: "Super League", country: "Switzerland" },
+  { code: "CRO", name: "HNL", country: "Croatia" },
+  { code: "DEN", name: "Superliga", country: "Denmark" },
+  { code: "GRE", name: "Super League", country: "Greece" },
+  { code: "NOR", name: "Eliteserien", country: "Norway" },
+  { code: "SWE", name: "Allsvenskan", country: "Sweden" },
+  { code: "POL", name: "Ekstraklasa", country: "Poland" },
+  { code: "BRA", name: "Serie A", country: "Brazil" },
+  { code: "MLS", name: "MLS", country: "USA" },
+  { code: "RUS", name: "Premier League", country: "Russia" },
+  { code: "UKR", name: "Premier League", country: "Ukraine" },
+  { code: "ROU", name: "Superliga", country: "Romania" },
+  { code: "ELC", name: "Championship", country: "England" },
+  { code: "UCL", name: "Champions League", country: "Europe" },
+  { code: "UEL", name: "Europa League", country: "Europe" },
+];
+
 export default function TicketBuilderTab() {
   const [builderMode, setBuilderMode] = useState("TODAY_GAMES"); // "TODAY_GAMES", "ACCUMULATOR", or "ROLLOVER"
 
@@ -12,11 +42,14 @@ export default function TicketBuilderTab() {
   const [leagueScope, setLeagueScope] = useState("MULTI");
   const [singleLeague, setSingleLeague] = useState("PL");
   const [gameweek, setGameweek] = useState(1);
+  const ALL_TOP_LEAGUE_CODES = AVAILABLE_LEAGUES.map(l => l.code);
+  const TOP_5_LEAGUE_CODES = ["PL", "PD", "SA", "BL1", "FL1"];
+
   const [targetOdds, setTargetOdds] = useState(2.0);
   const [targetMode, setTargetMode] = useState("ODDS"); // "ODDS" or "GAMES"
   const [targetGames, setTargetGames] = useState(10);
   const [customGamesInput, setCustomGamesInput] = useState("10");
-  const [selectedLeagues, setSelectedLeagues] = useState(["ALL"]);
+  const [selectedLeagues, setSelectedLeagues] = useState(ALL_TOP_LEAGUE_CODES);
   const [dateWindow, setDateWindow] = useState("TODAY");
   const [selectedFlexCut, setSelectedFlexCut] = useState("OFF");
   const [customOdds, setCustomOdds] = useState("500");
@@ -411,14 +444,21 @@ export default function TicketBuilderTab() {
     const res = await buildAiTicket(payload);
     setLoading(false);
 
-    if (!res || res.status === "TIMEOUT" || res.status === "HTTP_ERROR" || res.status === "ERROR") {
+    if (!res || res.status === "TIMEOUT" || res.status === "HTTP_ERROR" || res.status === "ERROR" || res.status === "NO_FIXTURES") {
       setErrorMsg(
-        res?.status === "TIMEOUT"
+        res?.message ||
+        res?.ticket?.error ||
+        (res?.status === "TIMEOUT"
           ? "Request timed out (>25s). The engine is busy — please try again."
           : res?.status === "HTTP_ERROR"
           ? `Backend error (HTTP ${res.http_status}). Ensure backend is running.`
-          : "MatchIQ 5-Gate Pick Engine failed to build ticket. Check backend logs."
+          : "MatchIQ 5-Gate Pick Engine failed to build ticket. Check backend logs.")
       );
+      return;
+    }
+
+    if (!res.ticket || !res.ticket.approved_legs || res.ticket.approved_legs.length === 0) {
+      setErrorMsg(res?.ticket?.error || res?.message || "No suitable matches found for the selected leagues and timeframe.");
       return;
     }
 
@@ -460,21 +500,28 @@ export default function TicketBuilderTab() {
       target_odds: dailyTargetOdds,
       target_mode: "ODDS",
       mode: "ROLLOVER",
-      date_window: "TODAY",
+      selected_leagues: selectedLeagues,
+      date_window: dateWindow,
       league_scope: "MULTI",
       single_league: "PL",
       gameweek: gameweek,
-      use_live_odds: useLiveOdds,
-      kickoff_scope: "TODAY",
+      use_live_odds: true,
+      kickoff_scope: dateWindow,
       strict_mode: strictMode,
-      reshuffle_seed: Date.now()
+      reshuffle_seed: Date.now(),
+      risk_profile: riskProfile,
+      allowed_market_categories: selectedMarketCategories
     };
 
     const res = await buildAiTicket(payload);
     setLoading(false);
 
-    if (!res || !res.ticket || !res.ticket.approved_legs || res.ticket.approved_legs.length === 0) {
-      setErrorMsg("No suitable ultra-safe matches found for today. Try adjusting target odds.");
+    if (!res || res.status === "NO_FIXTURES" || !res.ticket || !res.ticket.approved_legs || res.ticket.approved_legs.length === 0) {
+      setErrorMsg(
+        res?.message ||
+        res?.ticket?.error ||
+        "No suitable ultra-safe matches found for the selected leagues and timeframe. Try adjusting your league selection or schedule window."
+      );
       return;
     }
 
@@ -1514,18 +1561,9 @@ export default function TicketBuilderTab() {
                 <div className="flex items-center gap-2 flex-wrap">
                   <button
                     type="button"
-                    onClick={() => setSelectedLeagues(["ALL"])}
+                    onClick={() => setSelectedLeagues(TOP_5_LEAGUE_CODES)}
                     className={`px-3 py-1.5 rounded-lg text-xs font-extrabold transition-all ${
-                      selectedLeagues.includes("ALL") ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-700 hover:bg-slate-200"
-                    }`}
-                  >
-                    All Top Leagues
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setSelectedLeagues(["PL", "PD", "SA", "BL1", "FL1"])}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-extrabold transition-all ${
-                      !selectedLeagues.includes("ALL") && ["PL", "PD", "SA", "BL1", "FL1"].every(l => selectedLeagues.includes(l)) && selectedLeagues.length === 5
+                      TOP_5_LEAGUE_CODES.every(l => selectedLeagues.includes(l)) && selectedLeagues.length === TOP_5_LEAGUE_CODES.length
                         ? "bg-slate-900 text-white"
                         : "bg-slate-100 text-slate-700 hover:bg-slate-200"
                     }`}
@@ -1534,8 +1572,32 @@ export default function TicketBuilderTab() {
                   </button>
                   <button
                     type="button"
+                    onClick={() => setSelectedLeagues(ALL_TOP_LEAGUE_CODES)}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-extrabold transition-all ${
+                      ALL_TOP_LEAGUE_CODES.every(l => selectedLeagues.includes(l)) && selectedLeagues.length === ALL_TOP_LEAGUE_CODES.length
+                        ? "bg-slate-900 text-white"
+                        : "bg-slate-100 text-slate-700 hover:bg-slate-200"
+                    }`}
+                  >
+                    All Top Leagues
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedLeagues(["ALL_WORLDWIDE"])}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-extrabold transition-all ${
+                      selectedLeagues.includes("ALL_WORLDWIDE")
+                        ? "bg-slate-900 text-white"
+                        : "bg-slate-100 text-slate-700 hover:bg-slate-200"
+                    }`}
+                  >
+                    Worldwide (All Matches)
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => setSelectedLeagues([])}
-                    className="px-3 py-1.5 rounded-lg text-xs font-bold text-slate-500 hover:bg-slate-100"
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                      selectedLeagues.length === 0 ? "bg-slate-900 text-white" : "text-slate-500 hover:bg-slate-100"
+                    }`}
                   >
                     Clear Selection
                   </button>
@@ -1543,30 +1605,14 @@ export default function TicketBuilderTab() {
 
                 {/* League Multi-Select Chips */}
                 <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
-                  {[
-                    { code: "PL", name: "Premier League", country: "England" },
-                    { code: "PD", name: "La Liga", country: "Spain" },
-                    { code: "SA", name: "Serie A", country: "Italy" },
-                    { code: "BL1", name: "Bundesliga", country: "Germany" },
-                    { code: "FL1", name: "Ligue 1", country: "France" },
-                    { code: "ELC", name: "Championship", country: "England" },
-                    { code: "DED", name: "Eredivisie", country: "Netherlands" },
-                    { code: "PPL", name: "Liga Portugal", country: "Portugal" },
-                    { code: "BL2", name: "2. Bundesliga", country: "Germany" },
-                    { code: "SD", name: "LaLiga 2", country: "Spain" },
-                    { code: "TUR", name: "Süper Lig", country: "Turkey" },
-                    { code: "COP", name: "Coppa Italia", country: "Italy" },
-                  ].map((lg) => {
-                    const isSelected = selectedLeagues.includes("ALL") || selectedLeagues.includes(lg.code);
+                  {AVAILABLE_LEAGUES.map((lg) => {
+                    const isSelected = selectedLeagues.includes(lg.code);
                     return (
                       <div
                         key={lg.code}
                         onClick={() => {
-                          if (selectedLeagues.includes("ALL")) {
-                            setSelectedLeagues([lg.code]);
-                          } else if (selectedLeagues.includes(lg.code)) {
-                            const next = selectedLeagues.filter(c => c !== lg.code);
-                            setSelectedLeagues(next.length === 0 ? ["ALL"] : next);
+                          if (selectedLeagues.includes(lg.code)) {
+                            setSelectedLeagues(selectedLeagues.filter(c => c !== lg.code));
                           } else {
                             setSelectedLeagues([...selectedLeagues, lg.code]);
                           }
@@ -1867,24 +1913,27 @@ export default function TicketBuilderTab() {
 
       {/* MODE 3: DAILY HIGH-ASSURANCE ROLLOVER ENGINE */}
       {builderMode === "ROLLOVER" && (
-        <div className="bg-white p-6 rounded-2xl border border-slate-200 space-y-4 shadow-sm">
+        <div className="bg-white p-6 rounded-2xl border border-slate-200 space-y-6 shadow-sm">
+          {/* Target & Stake Header */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
-              <label className="text-xs font-semibold text-slate-700 block mb-1">1. Target Rollover Odds (Today)</label>
+              <label className="text-xs font-semibold text-slate-700 block mb-1">1. Target Rollover Odds</label>
               <select
                 value={dailyTargetOdds}
                 onChange={(e) => setDailyTargetOdds(parseFloat(e.target.value))}
                 className="w-full bg-slate-50 border border-slate-200 text-xs font-bold text-slate-900 rounded-xl px-3 py-2"
               >
-                <option value={1.30}>~1.30 Daily Odds (Ultra High Assurance 90%+)</option>
-                <option value={1.50}>~1.50 Daily Odds (Balanced Safe 85%+)</option>
-                <option value={1.80}>~1.80 Daily Odds</option>
-                <option value={2.00}>~2.00 Daily Odds</option>
+                <option value={1.30}>~1.30 Rollover Odds (Ultra High Assurance 90%+)</option>
+                <option value={1.50}>~1.50 Rollover Odds (Balanced Safe 85%+)</option>
+                <option value={1.80}>~1.80 Rollover Odds (High Confidence)</option>
+                <option value={2.00}>~2.00 Rollover Odds (Standard 2x Rollover)</option>
+                <option value={2.50}>~2.50 Rollover Odds (Dynamic Value)</option>
+                <option value={3.00}>~3.00 Rollover Odds (High Growth)</option>
               </select>
             </div>
 
             <div>
-              <label className="text-xs font-semibold text-slate-700 block mb-1">2. Today's Starting Stake (NGN)</label>
+              <label className="text-xs font-semibold text-slate-700 block mb-1">2. Starting Stake (NGN)</label>
               <input
                 type="number"
                 value={startingStake}
@@ -1895,14 +1944,197 @@ export default function TicketBuilderTab() {
             </div>
           </div>
 
+          {/* League Multi-Select for Rollover */}
+          <div className="space-y-3 pt-2 border-t border-slate-100">
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              <div>
+                <label className="text-xs font-extrabold text-slate-900 block">3. Select Leagues for Rollover</label>
+                <p className="text-[11px] text-slate-400">Strictly filters matches to chosen leagues only.</p>
+              </div>
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <button
+                  type="button"
+                  onClick={() => setSelectedLeagues(TOP_5_LEAGUE_CODES)}
+                  className={`px-2.5 py-1 rounded-lg text-[11px] font-extrabold transition-all ${
+                    TOP_5_LEAGUE_CODES.every(l => selectedLeagues.includes(l)) && selectedLeagues.length === TOP_5_LEAGUE_CODES.length
+                      ? "bg-slate-900 text-white"
+                      : "bg-slate-100 text-slate-700 hover:bg-slate-200"
+                  }`}
+                >
+                  Top 5 European
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSelectedLeagues(ALL_TOP_LEAGUE_CODES)}
+                  className={`px-2.5 py-1 rounded-lg text-[11px] font-extrabold transition-all ${
+                    ALL_TOP_LEAGUE_CODES.every(l => selectedLeagues.includes(l)) && selectedLeagues.length === ALL_TOP_LEAGUE_CODES.length
+                      ? "bg-slate-900 text-white"
+                      : "bg-slate-100 text-slate-700 hover:bg-slate-200"
+                  }`}
+                >
+                  All Top Leagues
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSelectedLeagues(["ALL_WORLDWIDE"])}
+                  className={`px-2.5 py-1 rounded-lg text-[11px] font-extrabold transition-all ${
+                    selectedLeagues.includes("ALL_WORLDWIDE")
+                      ? "bg-slate-900 text-white"
+                      : "bg-slate-100 text-slate-700 hover:bg-slate-200"
+                  }`}
+                >
+                  Worldwide (All Matches)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSelectedLeagues([])}
+                  className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all ${
+                    selectedLeagues.length === 0 ? "bg-slate-900 text-white" : "text-slate-500 hover:bg-slate-100"
+                  }`}
+                >
+                  Clear Selection
+                </button>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
+              {AVAILABLE_LEAGUES.map((lg) => {
+                const isSelected = selectedLeagues.includes(lg.code);
+                return (
+                  <div
+                    key={lg.code}
+                    onClick={() => {
+                      if (selectedLeagues.includes(lg.code)) {
+                        setSelectedLeagues(selectedLeagues.filter(c => c !== lg.code));
+                      } else {
+                        setSelectedLeagues([...selectedLeagues, lg.code]);
+                      }
+                    }}
+                    className={`px-3 py-2 rounded-xl border cursor-pointer transition-all flex items-center justify-between ${
+                      isSelected
+                        ? "bg-slate-900 border-slate-900 text-white shadow-sm"
+                        : "bg-white border-slate-200 text-slate-700 hover:border-slate-300"
+                    }`}
+                  >
+                    <div className="min-w-0 pr-1">
+                      <p className="text-xs font-extrabold truncate">{lg.name}</p>
+                      <p className="text-[10px] text-slate-400 truncate">{lg.country}</p>
+                    </div>
+                    <div className={`w-3.5 h-3.5 rounded border flex items-center justify-center flex-shrink-0 ${
+                      isSelected ? "bg-white border-white text-slate-900" : "border-slate-300"
+                    }`}>
+                      {isSelected && <div className="w-1.5 h-1.5 rounded-sm bg-slate-900" />}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Match Schedule Window for Rollover */}
+          <div className="space-y-2 pt-2 border-t border-slate-100">
+            <label className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider block">4. Match Schedule Window</label>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+              {[
+                { id: "TODAY", label: "Today's Games", sub: todayData ? `${todayData.total_matches} SportyBet matches` : "Matches playing today" },
+                { id: "NEXT_24H", label: "Next 24 Hours", sub: "Upcoming 24h slate" },
+                { id: "WEEKEND", label: "Weekend Combined", sub: "Saturday & Sunday" },
+                { id: "NEXT_7D", label: "Upcoming 7 Days", sub: "Full week fixture pool" },
+              ].map(w => (
+                <div
+                  key={w.id}
+                  onClick={() => setDateWindow(w.id)}
+                  className={`p-3 rounded-xl border cursor-pointer transition-all ${
+                    dateWindow === w.id
+                      ? "bg-slate-900 border-slate-900 text-white shadow-sm"
+                      : "bg-slate-50 border-slate-200 text-slate-800 hover:bg-slate-100"
+                  }`}
+                >
+                  <p className="text-xs font-extrabold">{w.label}</p>
+                  <p className={`text-[10px] mt-0.5 ${dateWindow === w.id ? "text-slate-400" : "text-slate-500"}`}>{w.sub}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Risk Strategy Profile for Rollover */}
+          <div className="space-y-2 pt-2 border-t border-slate-100">
+            <label className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider block">5. Risk Strategy Profile</label>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+              {[
+                { id: "ULTRA_CONSERVATIVE", label: "Ultra-Conservative", desc: "Tier-1 cushions only (80%+ win rate: Double Chance, Over 1.5)" },
+                { id: "BALANCED", label: "Balanced Safety", desc: "Default optimal mix of Tier-1 cushions & high-confidence value" },
+                { id: "AGGRESSIVE", label: "Aggressive Value", desc: "Targets straight 1X2 wins, Over 2.5 goals & handicaps" },
+              ].map(r => (
+                <div
+                  key={r.id}
+                  onClick={() => setRiskProfile(r.id)}
+                  className={`p-3 rounded-xl border cursor-pointer transition-all ${
+                    riskProfile === r.id
+                      ? "bg-slate-900 border-slate-900 text-white shadow-sm"
+                      : "bg-slate-50 border-slate-200 text-slate-800 hover:bg-slate-100"
+                  }`}
+                >
+                  <p className="text-xs font-extrabold">{r.label}</p>
+                  <p className={`text-[10px] mt-0.5 ${riskProfile === r.id ? "text-slate-400" : "text-slate-500"}`}>{r.desc}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Allowed Market Categories for Rollover */}
+          <div className="space-y-2 pt-2 border-t border-slate-100">
+            <label className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider block">6. Allowed Market Categories</label>
+            <div className="flex flex-wrap gap-2">
+              {[
+                { id: "DOUBLE_CHANCE", label: "Double Chance (1X/12/X2)" },
+                { id: "OVER_UNDER", label: "Over/Under Goals" },
+                { id: "TEAM_GOALS", label: "Team Total Goals" },
+                { id: "1X2", label: "1X2 Match Result" },
+              ].map(m => {
+                const isSelected = selectedMarketCategories.includes(m.id);
+                return (
+                  <button
+                    key={m.id}
+                    type="button"
+                    onClick={() => {
+                      setSelectedMarketCategories(prev =>
+                        isSelected
+                          ? (prev.length > 1 ? prev.filter(x => x !== m.id) : prev)
+                          : [...prev, m.id]
+                      );
+                    }}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all border ${
+                      isSelected
+                        ? "bg-slate-900 text-white border-slate-900"
+                        : "bg-white text-slate-600 border-slate-200 hover:bg-slate-50"
+                    }`}
+                  >
+                    {isSelected ? "✓ " : ""}{m.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {errorMsg && (
+            <div className="bg-amber-50 border border-amber-200 p-4 rounded-xl flex items-start gap-2.5 text-xs text-amber-800">
+              <AlertCircle className="w-4 h-4 text-amber-600 flex-shrink-0 mt-0.5" />
+              <div>
+                <p className="font-extrabold">Notice</p>
+                <p className="mt-0.5">{errorMsg}</p>
+              </div>
+            </div>
+          )}
+
           <div className="pt-2">
             <button
               onClick={handleBuildRollover}
               disabled={loading}
-              className="w-full py-3 rounded-xl btn-black text-xs font-extrabold uppercase tracking-wider flex items-center justify-center space-x-2 shadow-sm cursor-pointer"
+              className="w-full py-3.5 rounded-xl btn-black text-xs font-extrabold uppercase tracking-wider flex items-center justify-center space-x-2 shadow-sm cursor-pointer"
             >
               {loading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
-              <span>{loading ? "Analyzing Today's Unstarted Fixtures..." : "Generate Today's High-Assurance Rollover Slip"}</span>
+              <span>{loading ? "Analyzing SportyBet Live Fixtures..." : "Generate High-Assurance Rollover Slip"}</span>
             </button>
           </div>
         </div>
@@ -2247,6 +2479,10 @@ export default function TicketBuilderTab() {
                           "bg-amber-100 text-amber-800"
                         }`}>
                           {tier}
+                        </span>
+                        {/* Win Probability badge */}
+                        <span className="text-[9px] font-extrabold px-2 py-0.2 rounded bg-teal-50 text-teal-800 border border-teal-200 uppercase">
+                          Win Prob: {Math.round(probVal * 100)}%
                         </span>
                       </div>
                       <span className="text-sm font-extrabold text-slate-900 block">

@@ -152,6 +152,239 @@ def _extract_live_market_data(ev: Dict[str, Any]) -> tuple:
         
     return dc_map, ou_list
 
+def _is_league_match(comp_name: str, country_name: str, code_key: str) -> bool:
+    comp = (comp_name or "").strip().lower()
+    country = (country_name or "").strip().lower()
+    code = (code_key or "").upper()
+
+    if code == "PL":
+        # English Premier League only
+        if country and country not in ["england", "great britain", "uk", ""]:
+            return False
+        if any(x in comp for x in ["victoria", "ghana", "egypt", "kuwait", "wales", "russia", "crimea", "israel", "kazakhstan", "northern ireland", "south africa", "ukraine", "bhutan", "women", "femenino", "u21", "u19", "u18", "reserve", "division"]):
+            return False
+        return "premier league" in comp
+
+    elif code == "PD":
+        # Spanish LaLiga (Primera Division) only
+        if country and country not in ["spain", ""]:
+            return False
+        if any(x in comp for x in ["laliga 2", "la liga 2", "segunda", "hypermotion", "women", "femenino", "u19", "rfef", "federacion", "tercera"]):
+            return False
+        return "laliga" in comp or "la liga" in comp or "primera division" in comp
+
+    elif code == "SA":
+        # Italian Serie A only
+        if country and country not in ["italy", ""]:
+            return False
+        if any(x in comp for x in ["brasileiro", "brazil", "ecuador", "colombia", "women", "femenino", "serie b", "serie c", "primavera", "u20", "u19"]):
+            return False
+        return "serie a" in comp and (country in ["italy", ""] or "italy" in comp)
+
+    elif code == "BL1":
+        # German Bundesliga only
+        if country and country not in ["germany", ""]:
+            return False
+        if any(x in comp for x in ["2. bundesliga", "2.bundesliga", "austria", "österreich", "women", "femenino", "2. liga", "u19", "u17", "regionalliga"]):
+            return False
+        return "bundesliga" in comp and (country in ["germany", ""] or "germany" in comp)
+
+    elif code == "FL1":
+        # French Ligue 1 only
+        if country and country not in ["france", ""]:
+            return False
+        if any(x in comp for x in ["ligue 2", "algeria", "ivory coast", "tunisia", "women", "femenino", "national", "u19"]):
+            return False
+        return "ligue 1" in comp and (country in ["france", ""] or "france" in comp)
+
+    elif code == "ELC":
+        # English Championship
+        if country and country not in ["england", "uk", "great britain", ""]:
+            return False
+        if any(x in comp for x in ["scotland", "scottish", "women", "u21", "u19"]):
+            return False
+        return "championship" in comp
+
+    elif code == "DED":
+        # Dutch Eredivisie only
+        if country and country not in ["netherlands", "holland", ""]:
+            return False
+        if any(x in comp for x in ["women", "vrouwen", "eerste", "division", "u21", "reserve"]):
+            return False
+        return "eredivisie" in comp
+
+    elif code == "PPL":
+        # Portuguese Primeira Liga / Liga Portugal top flight only
+        if country and country not in ["portugal", ""]:
+            return False
+        if any(x in comp for x in ["women", "liga 2", "liga portugal 2", "segunda", "liga 3", "liga portugal 3", "u23", "u19", "taça", "taca"]):
+            return False
+        return "primeira liga" in comp or ("liga portugal" in comp and not any(k in comp for k in [" 2", " 3", " b"]))
+
+    elif code == "BL2":
+        # German 2. Bundesliga
+        if country and country not in ["germany", ""]:
+            return False
+        return "2. bundesliga" in comp or "2.bundesliga" in comp
+
+    elif code == "SD":
+        # Spanish LaLiga 2 / Hypermotion / Segunda
+        if country and country not in ["spain", ""]:
+            return False
+        return "laliga 2" in comp or "la liga 2" in comp or "segunda division" in comp or "hypermotion" in comp
+
+    elif code == "TUR":
+        # Turkish Süper Lig
+        if country and country not in ["turkey", "türkiye", "turkiye", ""]:
+            return False
+        if any(x in comp for x in ["2. lig", "3. lig", "women", "bayanlar", "u19"]):
+            return False
+        return "super lig" in comp or "süper lig" in comp or "superlig" in comp or "1. lig" in comp
+
+    elif code == "BEL":
+        # Belgian Pro League / First Division A
+        if country and country not in ["belgium", "belgique", ""]:
+            return False
+        if any(x in comp for x in ["women", "u21", "1b", "challenger"]):
+            return False
+        return "pro league" in comp or "first division a" in comp or "jupiler" in comp
+
+    elif code == "AUT":
+        # Austrian Bundesliga
+        if country and country not in ["austria", "österreich", ""]:
+            return False
+        if any(x in comp for x in ["2. liga", "regionalliga", "women", "frauen"]):
+            return False
+        return "bundesliga" in comp or "admiral" in comp
+
+    elif code == "SAU":
+        # Saudi Pro League & First Division
+        if country and country not in ["saudi arabia", "saudi", ""]:
+            return False
+        if any(x in comp for x in ["division 2", "division 3", "women", "u19"]):
+            return False
+        return "pro league" in comp or "roshn" in comp or "division 1" in comp or "saudi" in comp
+
+    elif code == "SCO":
+        # Scottish Premiership & Championship
+        if country and country not in ["scotland", ""]:
+            return False
+        if any(x in comp for x in ["women", "league one", "league two"]):
+            return False
+        return "premiership" in comp or "premier league" in comp or "championship" in comp
+
+    elif code in ["ROU", "ROM"]:
+        # Romanian Superliga / Liga 1
+        if country and country not in ["romania", "rumänien", ""]:
+            return False
+        if any(x in comp for x in ["liga 2", "liga 3", "women", "u19"]):
+            return False
+        return "superliga" in comp or "liga 1" in comp or "liga i" in comp
+
+    elif code == "SUI":
+        # Swiss Super League
+        if country and country not in ["switzerland", "suisse", "schweiz", ""]:
+            return False
+        if any(x in comp for x in ["challenge", "promotion", "women"]):
+            return False
+        return "super league" in comp or "credit suisse" in comp
+
+    elif code == "CRO":
+        # Croatian HNL / Prva HNL
+        if country and country not in ["croatia", "hrvatska", ""]:
+            return False
+        if any(x in comp for x in ["2. hnl", "women", "u19"]):
+            return False
+        return "hnl" in comp or "prva liga" in comp
+
+    elif code == "DEN":
+        # Danish Superliga
+        if country and country not in ["denmark", "danmark", ""]:
+            return False
+        if any(x in comp for x in ["1. division", "2. division", "women"]):
+            return False
+        return "superliga" in comp or "superligaen" in comp
+
+    elif code == "GRE":
+        # Greek Super League
+        if country and country not in ["greece", ""]:
+            return False
+        if any(x in comp for x in ["super league 2", "women", "u19"]):
+            return False
+        return "super league" in comp
+
+    elif code == "NOR":
+        # Norwegian Eliteserien
+        if country and country not in ["norway", "norge", ""]:
+            return False
+        if any(x in comp for x in ["1. divisjon", "obos", "women", "kvinner"]):
+            return False
+        return "eliteserien" in comp
+
+    elif code == "SWE":
+        # Swedish Allsvenskan
+        if country and country not in ["sweden", "sverige", ""]:
+            return False
+        if any(x in comp for x in ["superettan", "ettan", "women", "damallsvenskan"]):
+            return False
+        return "allsvenskan" in comp
+
+    elif code == "POL":
+        # Polish Ekstraklasa
+        if country and country not in ["poland", "polska", ""]:
+            return False
+        if any(x in comp for x in ["i liga", "ii liga", "women"]):
+            return False
+        return "ekstraklasa" in comp
+
+    elif code == "BRA":
+        # Brazilian Serie A (Brasileirão)
+        if country and country not in ["brazil", "brasil", ""]:
+            return False
+        if any(x in comp for x in ["serie b", "serie c", "serie d", "u20", "u19", "carioca", "paulista", "mineiro", "gaucho", "women", "feminino"]):
+            return False
+        return "serie a" in comp or "brasileiro" in comp or "brasileirão" in comp
+
+    elif code == "MLS":
+        # American Major League Soccer
+        if country and country not in ["usa", "united states", ""]:
+            return False
+        if any(x in comp for x in ["next pro", "usl", "nwsl", "women"]):
+            return False
+        return "major league soccer" in comp or "mls" in comp
+
+    elif code == "RUS":
+        # Russian Premier League
+        if country and country not in ["russia", ""]:
+            return False
+        if any(x in comp for x in ["fnl", "first league", "women"]):
+            return False
+        return "premier league" in comp or "rpl" in comp
+
+    elif code == "UKR":
+        # Ukrainian Premier League
+        if country and country not in ["ukraine", ""]:
+            return False
+        if any(x in comp for x in ["persha", "druha", "women"]):
+            return False
+        return "premier league" in comp or "upl" in comp
+
+    elif code == "COP":
+        # Italian Coppa Italia
+        return "coppa italia" in comp or (country == "italy" and ("cup" in comp or "coppa" in comp))
+
+    elif code == "UCL":
+        return "champions league" in comp and ("uefa" in comp or comp == "champions league" or "ucl" in comp)
+
+    elif code == "UEL":
+        return "europa league" in comp and "conference" not in comp
+
+    elif code == "UECL":
+        return "conference league" in comp
+
+    return code.lower() in comp
+
+
 @router.post("/build")
 async def build_ai_ticket(req: BuildTicketRequest):
     """
@@ -160,6 +393,12 @@ async def build_ai_ticket(req: BuildTicketRequest):
     """
     now = datetime.datetime.now(datetime.timezone.utc)
     today_str = now.strftime("%Y-%m-%d")
+
+    ALL_KNOWN_LEAGUES = [
+        "PL", "PD", "SA", "BL1", "FL1", "DED", "PPL", "TUR", "BEL", "AUT",
+        "SAU", "SCO", "SUI", "CRO", "DEN", "GRE", "NOR", "SWE", "POL", "BRA",
+        "MLS", "RUS", "UKR", "ROU", "ELC", "UCL", "UEL", "UECL"
+    ]
 
     fixture_pool = []
 
@@ -174,44 +413,62 @@ async def build_ai_ticket(req: BuildTicketRequest):
         for ev in raw_sporty_fixtures:
             h = ev.get("home_team") or "Home"
             a = ev.get("away_team") or "Away"
-            comp_name = ev.get("competition") or ev.get("country") or "Football"
+            comp_name = (ev.get("competition") or "Football").strip()
+            country_name = (ev.get("country") or "").strip()
             start_ms = ev.get("start_time_ms") or 0
+            match_dt = datetime.datetime.fromtimestamp(start_ms / 1000.0, tz=datetime.timezone.utc) if start_ms > 0 else now_utc
 
-            # 1. Strict Date Window Filter (Default is TODAY - only matches playing today)
+            # 0. STRICT UNSTARTED PRE-MATCH FILTER:
+            # Must NOT have already started, be live, or kick off within 3 minutes
+            status_str = str(ev.get("status") or ev.get("match_status") or ev.get("match_status_code") or "").upper()
+            if status_str in ["LIVE", "STARTED", "1H", "2H", "HT", "FINISHED", "ENDED", "CANCELLED", "POSTPONED", "ABANDONED", "CLOSED", "CONCLUDED"]:
+                continue
+
             if start_ms > 0:
-                match_dt = datetime.datetime.fromtimestamp(start_ms / 1000.0, tz=datetime.timezone.utc)
+                diff_sec = (match_dt - now_utc).total_seconds()
+                if diff_sec < 180:  # If kickoff was in the past or within next 3 minutes, skip!
+                    continue
+
+            # 1. Strict Date Window Filter
+            if start_ms > 0:
                 win = (req.date_window or "TODAY").upper()
                 if win in ("TODAY", "TODAYS_GAMES", "TODAY_ONLY", "DAILY", ""):
                     if match_dt.date() != today_date:
                         continue
-                elif win == "TOMORROW":
+                elif win in ("TOMORROW", "NEXT_DAY"):
                     if (match_dt.date() - today_date).days != 1:
                         continue
-                elif win == "WEEKEND":
-                    if match_dt.weekday() not in (4, 5, 6):
+                elif win in ("NEXT_24H", "24H"):
+                    diff_sec = (match_dt - now_utc).total_seconds()
+                    if diff_sec < 180 or diff_sec > 86400:
+                        continue
+                elif win in ("WEEKEND", "WEEKEND_COMBINED", "SAT_SUN"):
+                    diff_days = (match_dt.date() - today_date).days
+                    # Must be upcoming within 6 days and fall on Fri (weekday 4), Sat (5), or Sun (6)
+                    if diff_days < 0 or diff_days > 6 or match_dt.weekday() not in (4, 5, 6):
+                        continue
+                elif win in ("NEXT_7D", "7D", "WEEK"):
+                    diff_sec = (match_dt - now_utc).total_seconds()
+                    if diff_sec < 180 or diff_sec > (7 * 86400):
                         continue
 
-            # 2. League Filter if user selected specific leagues
-            if req.selected_leagues and len(req.selected_leagues) > 0 and "ALL" not in req.selected_leagues and "ALL TOP LEAGUES" not in [x.upper() for x in req.selected_leagues]:
+            # 2. Strict League Filter
+            selected_lgs = req.selected_leagues or []
+            if any(x.upper() in ["ALL_WORLDWIDE", "WORLDWIDE", "ALL_MATCHES"] for x in selected_lgs):
+                # Allow all matches from SportyBet fixture pool (filtered by 7-gate pick engine)
+                pass
+            else:
+                if not selected_lgs or "ALL" in selected_lgs or "ALL TOP LEAGUES" in [x.upper() for x in selected_lgs]:
+                    target_league_codes = ALL_KNOWN_LEAGUES
+                else:
+                    target_league_codes = selected_lgs
+
                 match_league = False
-                for sel_lg in req.selected_leagues:
-                    if sel_lg.lower() in comp_name.lower() or comp_name.lower() in sel_lg.lower():
+                for sel_lg in target_league_codes:
+                    if _is_league_match(comp_name, country_name, sel_lg):
                         match_league = True
                         break
-                    CODE_MAP = {
-                        "PL": "Premier League",
-                        "PD": "LaLiga",
-                        "SA": "Serie A",
-                        "BL1": "Bundesliga",
-                        "FL1": "Ligue 1",
-                        "ELC": "Championship",
-                        "DED": "Eredivisie",
-                        "PPL": "Liga Portugal",
-                    }
-                    mapped_name = CODE_MAP.get(sel_lg.upper(), "")
-                    if mapped_name and mapped_name.lower() in comp_name.lower():
-                        match_league = True
-                        break
+
                 if not match_league:
                     continue
 
@@ -233,6 +490,7 @@ async def build_ai_ticket(req: BuildTicketRequest):
                 "away_team": a,
                 "competition": comp_name,
                 "competition_code": comp_name,
+                "country": country_name,
                 "kickoff_datetime": ev.get("kickoff_time") or (match_dt.strftime("%Y-%m-%d %H:%M:%S") if start_ms > 0 else today_str),
                 "start_time_ms": start_ms,
                 "markets": ev.get("markets", {}),
@@ -241,41 +499,30 @@ async def build_ai_ticket(req: BuildTicketRequest):
                 "double_chance": dc_data,
             })
 
-
-    # Fallback to general upcoming if league filter was too restrictive
+    # If no fixtures match the user's specific filter, return clear feedback rather than giving arbitrary games
     if not fixture_pool:
-        raw_sporty_fixtures = SportyBetIngestionService.fetch_upcoming_fixtures(limit=0)
-        for ev in raw_sporty_fixtures:
-            start_ms = ev.get("start_time_ms") or 0
-            if start_ms > 0:
-                match_dt = datetime.datetime.fromtimestamp(start_ms / 1000.0, tz=datetime.timezone.utc)
-                if (req.date_window or "TODAY").upper() in ("TODAY", "TODAYS_GAMES", "TODAY_ONLY", "DAILY", ""):
-                    if match_dt.date() != today_date:
-                        continue
-
-            dc_data, ou_data = _extract_live_market_data(ev)
-
-            fixture_pool.append({
-                "fixture_id": ev.get("event_id"),
-                "event_id": ev.get("event_id"),
-                "game_id": ev.get("game_id"),
-                "provider_event_id": ev.get("event_id"),
-                "external_fixture_id": ev.get("event_id"),
-                "home_team": ev.get("home_team"),
-                "away_team": ev.get("away_team"),
-                "competition": ev.get("competition") or "Football",
-                "competition_code": ev.get("competition") or "Football",
-                "kickoff_datetime": ev.get("kickoff_time") or today_str,
-                "start_time_ms": start_ms,
-                "markets": ev.get("markets", {}),
-                "result_1x2": {
-                    "home": ev.get("odds_home", 2.0),
-                    "draw": ev.get("odds_draw", 3.2),
-                    "away": ev.get("odds_away", 3.0)
-                },
-                "ou_lines": ou_data,
-                "double_chance": dc_data,
-            })
+        selected_desc = ", ".join(req.selected_leagues) if (req.selected_leagues and "ALL" not in req.selected_leagues) else "All Leagues"
+        window_desc = req.date_window or "Today"
+        return {
+            "status": "NO_FIXTURES",
+            "message": f"No unstarted SportyBet fixtures found for {selected_desc} in the '{window_desc}' window. Try selecting 'Weekend Combined' or 'All Top Leagues'.",
+            "ticket": {
+                "mode": req.mode.upper(),
+                "target_mode": req.target_mode,
+                "target_odds": req.target_odds,
+                "accumulated_odds": 1.0,
+                "combined_probability": 0.0,
+                "confidence_tier": "NONE",
+                "recommended_stake_pct": 0,
+                "approved_legs": [],
+                "rejected_picks": [],
+                "total_evaluated": 0,
+                "error": f"No unstarted fixtures found for {selected_desc} in the '{window_desc}' timeframe.",
+                "booking_code": None,
+                "share_url": None,
+                "date_window": req.date_window
+            }
+        }
 
 
 
@@ -324,6 +571,10 @@ async def build_ai_ticket(req: BuildTicketRequest):
         except Exception as e:
             logger.warning(f"SportyBet booking code generation error: {e}")
 
+    notice = None
+    if req.target_mode == "GAMES" and len(built_ticket.approved_legs) < target_games:
+        notice = f"Found all {len(built_ticket.approved_legs)} top-flight matches currently playing for {req.date_window}. To build a {target_games}-game ticket, select 'Weekend Combined' or 'Upcoming 7 Days'."
+
     return {
         "status": "SUCCESS",
         "ticket": {
@@ -345,6 +596,7 @@ async def build_ai_ticket(req: BuildTicketRequest):
             "share_url": share_url or (f"https://www.sportybet.com/ng/?shareCode={booking_code}" if booking_code else None),
             "flex_cut": req.flex_cut,
             "date_window": req.date_window,
+            "notice": notice,
         }
     }
 

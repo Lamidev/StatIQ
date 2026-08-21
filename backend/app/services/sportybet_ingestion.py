@@ -83,7 +83,13 @@ class SportyBetIngestionService:
                 if is_stale and not cls._is_refreshing:
                     # Trigger non-blocking asynchronous background refresh
                     threading.Thread(target=cls._perform_fetch, daemon=True).start()
-                return cached_data[:limit] if (limit and limit > 0) else cached_data
+                now_ms = time.time() * 1000.0
+                active_cached = [
+                    ev for ev in cached_data 
+                    if (ev.get("start_time_ms") or 0) > (now_ms + 180000)
+                    and str(ev.get("status") or "").upper() not in ["LIVE", "STARTED", "1H", "2H", "HT", "FINISHED", "ENDED", "CANCELLED", "POSTPONED", "ABANDONED"]
+                ]
+                return active_cached[:limit] if (limit and limit > 0) else active_cached
 
         return cls._perform_fetch(limit=limit)
 
@@ -108,10 +114,13 @@ class SportyBetIngestionService:
                 logger.debug(f"[SportyBetIngestion] URL fetch error: {e}")
             return []
 
-        # High-density active categories and pagination sweep
+        # High-density active categories across all major football nations on SportyBet
         core_categories = [
-            1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
-            21, 22, 23, 24, 25, 30, 31, 32, 33, 34, 35, 40, 44, 45, 50
+            1, 4, 5, 7, 8, 9, 10, 11, 12, 13, 14, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26,
+            30, 31, 32, 33, 34, 35, 44, 46, 47, 48, 49, 51, 52, 57, 66, 67, 77, 78, 85, 86,
+            91, 92, 97, 99, 102, 122, 130, 131, 134, 148, 152, 155, 158, 159, 160, 163, 165,
+            201, 252, 257, 270, 274, 278, 280, 281, 289, 291, 296, 297, 299, 305, 310, 322,
+            329, 339, 352, 353, 365, 367, 379, 385, 386, 388, 389, 393
         ]
         fetch_urls = [
             f"{cls.BASE_URL}/wapUpcomingEvents?sportId=sr:sport:1&pageNum={p}&pageSize=100" for p in range(1, 16)
@@ -124,7 +133,7 @@ class SportyBetIngestionService:
 
         all_events = []
         try:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=25) as executor:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=50) as executor:
                 results = list(executor.map(_fetch_url, fetch_urls))
                 for items in results:
                     all_events.extend(items)
@@ -159,9 +168,9 @@ class SportyBetIngestionService:
         now_ms = time.time() * 1000.0
 
         for ev in events:
-            # STRICT RULE: Any match that has already started or is in-play must be drafted out
+            # STRICT RULE: Any match that has already started or is within 5 minutes of kickoff must be drafted out
             start_ms = ev.get("estimateStartTime") or ev.get("startTime") or 0
-            if start_ms > 0 and start_ms <= (now_ms + 30000):  # Exclude if within 30s or past
+            if start_ms > 0 and start_ms <= (now_ms + 300000):  # Exclude if within 5 mins or past
                 continue
 
             status_str = str(ev.get("status") or ev.get("match_status") or "").upper()

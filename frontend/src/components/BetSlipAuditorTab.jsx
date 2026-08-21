@@ -10,7 +10,7 @@ export default function BetSlipAuditorTab({ onNavigateHistory, onTicketLocked })
   const [ticketData, setTicketData] = useState(null);
 
   // Re-Editor Options
-  const [mode, setMode] = useState("SWAP"); // "SWAP" or "REMOVE"
+  const [mode, setMode] = useState("AUDITOR"); // "AUDITOR" or "REMOVE"
   const [targetOdds, setTargetOdds] = useState(0); // 0 = Keep All Loaded Ticket Games
   const [targetMode, setTargetMode] = useState("ODDS"); // "ODDS" or "GAMES"
   const [targetGames, setTargetGames] = useState(10);
@@ -848,7 +848,7 @@ export default function BetSlipAuditorTab({ onNavigateHistory, onTicketLocked })
                   </div>
 
                   {/* Mode Cards */}
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div
                       onClick={() => setMode("AUDITOR")}
                       className={`p-4 rounded-2xl border cursor-pointer transition-all ${
@@ -859,41 +859,20 @@ export default function BetSlipAuditorTab({ onNavigateHistory, onTicketLocked })
                     >
                       <div className="flex items-center justify-between mb-2">
                         <div className="flex items-center gap-2">
-                          <div className={`w-7 h-7 rounded-lg flex items-center justify-center ${mode === "AUDITOR" ? "bg-emerald-100" : "bg-slate-100"}`}>
-                            <ShieldCheck className={`w-4 h-4 ${mode === "AUDITOR" ? "text-emerald-600" : "text-slate-400"}`} />
+                          <div className={`w-8 h-8 rounded-xl flex items-center justify-center ${mode === "AUDITOR" ? "bg-emerald-600 text-white" : "bg-slate-100 text-slate-500"}`}>
+                            <ShieldCheck className="w-4 h-4" />
                           </div>
-                          <span className="font-extrabold text-slate-900 text-xs">Auditor</span>
+                          <div>
+                            <span className="font-extrabold text-slate-900 text-sm block">Auditor Mode</span>
+                            <span className="text-[10px] text-emerald-600 font-bold uppercase tracking-wider">100% Same Games</span>
+                          </div>
                         </div>
                         {mode === "AUDITOR" && (
-                          <span className="text-[9px] font-black uppercase bg-emerald-600 text-white px-2 py-0.5 rounded-full">Active</span>
+                          <span className="text-[9px] font-black uppercase bg-emerald-600 text-white px-2.5 py-0.5 rounded-full">Active</span>
                         )}
                       </div>
                       <p className="text-[11px] text-slate-500 leading-snug">
-                        Edits only your ticket's games. Upgrades picks to safest options. <strong className="text-slate-700">Zero external games.</strong>
-                      </p>
-                    </div>
-
-                    <div
-                      onClick={() => setMode("SWAP")}
-                      className={`p-4 rounded-2xl border cursor-pointer transition-all ${
-                        mode === "SWAP"
-                          ? "border-indigo-600 bg-indigo-50/50 ring-2 ring-indigo-600 shadow-sm"
-                          : "border-slate-200 bg-white hover:border-slate-300 hover:shadow-sm"
-                      }`}
-                    >
-                      <div className="flex items-center justify-between mb-2">
-                        <div className="flex items-center gap-2">
-                          <div className={`w-7 h-7 rounded-lg flex items-center justify-center ${mode === "SWAP" ? "bg-indigo-100" : "bg-slate-100"}`}>
-                            <RefreshCw className={`w-4 h-4 ${mode === "SWAP" ? "text-indigo-600" : "text-slate-400"}`} />
-                          </div>
-                          <span className="font-extrabold text-slate-900 text-xs">Hybrid</span>
-                        </div>
-                        {mode === "SWAP" && (
-                          <span className="text-[9px] font-black uppercase bg-indigo-600 text-white px-2 py-0.5 rounded-full">Active</span>
-                        )}
-                      </div>
-                      <p className="text-[11px] text-slate-500 leading-snug">
-                        Keeps safe picks. Swaps risky games with high-confidence picks from top European leagues.
+                        Keeps all of your ticket's games. Upgrades risky straight picks into mathematically cushioned market lines with high probability.
                       </p>
                     </div>
 
@@ -907,17 +886,20 @@ export default function BetSlipAuditorTab({ onNavigateHistory, onTicketLocked })
                     >
                       <div className="flex items-center justify-between mb-2">
                         <div className="flex items-center gap-2">
-                          <div className={`w-7 h-7 rounded-lg flex items-center justify-center ${mode === "REMOVE" ? "bg-rose-100" : "bg-slate-100"}`}>
-                            <Trash2 className={`w-4 h-4 ${mode === "REMOVE" ? "text-rose-600" : "text-slate-400"}`} />
+                          <div className={`w-8 h-8 rounded-xl flex items-center justify-center ${mode === "REMOVE" ? "bg-rose-600 text-white" : "bg-slate-100 text-slate-500"}`}>
+                            <Trash2 className="w-4 h-4" />
                           </div>
-                          <span className="font-extrabold text-slate-900 text-xs">Remove</span>
+                          <div>
+                            <span className="font-extrabold text-slate-900 text-sm block">Risk Purge Mode</span>
+                            <span className="text-[10px] text-rose-600 font-bold uppercase tracking-wider">Drop Risky Legs</span>
+                          </div>
                         </div>
                         {mode === "REMOVE" && (
-                          <span className="text-[9px] font-black uppercase bg-rose-600 text-white px-2 py-0.5 rounded-full">Active</span>
+                          <span className="text-[9px] font-black uppercase bg-rose-600 text-white px-2.5 py-0.5 rounded-full">Active</span>
                         )}
                       </div>
                       <p className="text-[11px] text-slate-500 leading-snug">
-                        Drops risky games, keeps only model-confirmed picks. No replacements added.
+                        Audits every leg and strictly purges low-confidence picks with audit justification. Leaves only your model-confirmed core winners.
                       </p>
                     </div>
                   </div>
@@ -1368,13 +1350,17 @@ export default function BetSlipAuditorTab({ onNavigateHistory, onTicketLocked })
                   >
                     <div>
                       <div className="flex items-center gap-2 mb-1">
-                        {item.action === "REPLACEMENT" ? (
-                          <span className="bg-indigo-600 text-white px-2 py-0.5 rounded text-[10px] font-extrabold uppercase">
-                            Swapped Replacement (MatchIQ Pick)
+                        {item.action === "AUDITED_UPGRADED" ? (
+                          <span className="bg-emerald-600 text-white px-2 py-0.5 rounded text-[10px] font-extrabold uppercase">
+                            Audited & Upgraded Pick
+                          </span>
+                        ) : item.action === "AUDITED_CONFIRMED" ? (
+                          <span className="bg-teal-600 text-white px-2 py-0.5 rounded text-[10px] font-extrabold uppercase">
+                            5-Gate Confirmed Pick
                           </span>
                         ) : (
-                          <span className="bg-emerald-600 text-white px-2 py-0.5 rounded text-[10px] font-extrabold uppercase">
-                            Kept Original Pick
+                          <span className="bg-slate-900 text-white px-2 py-0.5 rounded text-[10px] font-extrabold uppercase">
+                            Kept High-Confidence Pick
                           </span>
                         )}
                         <span className="text-slate-400 font-medium text-[11px]">

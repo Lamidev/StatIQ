@@ -447,12 +447,19 @@ class SportyBetAdapter(BookmakerAdapter):
         h_lower = (home_target or "").lower().strip()
         a_lower = (away_target or "").lower().strip()
 
-        STOP = {"fc", "sc", "cd", "ud", "ca", "rc", "ac", "fk", "bk", "sk", "ff", "sad", "club", "team", "the", "de", "cf"}
+        STOP = {"fc", "sc", "cd", "ud", "ca", "rc", "ac", "fk", "bk", "sk", "ff", "sad", "club", "team", "the", "de", "cf", "nk", "ks", "sv"}
         h_words = [w for w in h_lower.split() if len(w) >= 3 and w not in STOP]
         a_words = [w for w in a_lower.split() if len(w) >= 3 and w not in STOP]
 
-        has_home_word = any(w in s_lower or w in m_lower for w in h_words)
-        has_away_word = any(w in s_lower or w in m_lower for w in a_words)
+        # Extract strictly unique words for Home vs Away (exclude shared city/club words like 'zagreb', 'manchester', 'madrid', 'milan', 'istanbul')
+        h_unique = [w for w in h_words if w not in a_words]
+        a_unique = [w for w in a_words if w not in h_words]
+
+        h_check = h_unique if h_unique else h_words
+        a_check = a_unique if a_unique else a_words
+
+        has_home_word = any(w in s_lower or w in m_lower for w in h_check)
+        has_away_word = any(w in s_lower or w in m_lower for w in a_check)
 
         m_list = list(ev_markets.values()) if isinstance(ev_markets, dict) else (ev_markets or [])
 
@@ -503,7 +510,7 @@ class SportyBetAdapter(BookmakerAdapter):
                            "away or over" in s_lower or "away or over" in m_lower)
         if is_team_goals and not any(k in m_lower for k in ["double chance", "win either half"]) and not _is_either_half and not _is_compound_or:
             is_away = "away" in m_lower or "away" in s_lower or (has_away_word and not has_home_word)
-            target_m_id = "21" if is_away else "20"
+            target_m_id = "20" if is_away else "19"
             line_match = re.search(r"(\d+\.5|\d+)", s_lower + " " + m_lower)
             line_val = line_match.group(1) if line_match else "1.5"
             is_over = "over" in s_lower or "over" in m_lower
@@ -752,7 +759,7 @@ class SportyBetAdapter(BookmakerAdapter):
 
 
         for s in selections:
-            raw_event_id = str(s.get("provider_event_id") or s.get("event_id") or s.get("eventId") or s.get("game_id") or s.get("external_fixture_id") or s.get("fixture_id") or "").strip()
+            raw_event_id = str(s.get("event_id") or s.get("provider_event_id") or s.get("_sportybet_event_id") or s.get("eventId") or s.get("external_fixture_id") or s.get("fixture_id") or s.get("game_id") or s.get("gameId") or "").strip()
             home_target = (s.get("home_team") or s.get("fixture") or "").lower().strip()
 
             away_target = (s.get("away_team") or "").lower().strip()
@@ -793,10 +800,44 @@ class SportyBetAdapter(BookmakerAdapter):
 
             item_payload = None
             if direct_mkt_id and direct_oc_id:
+                clean_oc_id = str(direct_oc_id)
+                clean_mkt_id = str(direct_mkt_id)
+
+                # Fix legacy string market IDs if encountered
+                if clean_mkt_id == "TEAM_OU":
+                    if "H_" in clean_oc_id or "home" in sel_text.lower():
+                        clean_mkt_id = "19"
+                    else:
+                        clean_mkt_id = "20"
+                    clean_oc_id = "12"
+
+                # Strict 1X2 validation guard: Away Win (2) must be outcome 3, Draw (X) must be outcome 2, Home (1) must be outcome 1
+                if clean_mkt_id == "1":
+                    s_lower = sel_text.lower()
+                    if "(2)" in s_lower or "away" in s_lower or "to win (2)" in s_lower:
+                        clean_oc_id = "3"
+                    elif "draw" in s_lower or "(x)" in s_lower:
+                        clean_oc_id = "2"
+                    elif "(1)" in s_lower or "home" in s_lower or "to win (1)" in s_lower:
+                        clean_oc_id = "1"
+
+                # If boutique market (Win Either Half / Combo) is not offered on this specific match, fallback to Double Chance
+                event_obj = events_by_id.get(target_event_id)
+                ev_markets = event_obj.get("markets", []) if event_obj else []
+                if isinstance(ev_markets, dict):
+                    ev_markets = list(ev_markets.values())
+                ev_market_ids = {str(m.get("id") or m.get("market_id") or "") for m in ev_markets if isinstance(m, dict)}
+
+                if ev_market_ids and clean_mkt_id not in ev_market_ids and clean_mkt_id in ("73", "74", "62", "16"):
+                    m_id_fb, o_id_fb, spec_fb = self._resolve_market_payload(ev_markets, mkt_text, sel_text, home_target, away_target)
+                    clean_mkt_id = m_id_fb
+                    clean_oc_id = o_id_fb
+                    direct_spec = spec_fb
+
                 item_payload = {
                     "eventId": target_event_id,
-                    "marketId": str(direct_mkt_id),
-                    "outcomeId": str(direct_oc_id)
+                    "marketId": clean_mkt_id,
+                    "outcomeId": clean_oc_id
                 }
                 if direct_spec:
                     item_payload["specifier"] = str(direct_spec)

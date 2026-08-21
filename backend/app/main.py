@@ -77,16 +77,16 @@ def start_background_ticket_sync_worker():
     import gc
 
     def _auto_sync_loop():
-        print("[TicketTrackerWorker] Dynamic live score polling daemon active (gentle background sync).")
+        print("[TicketTrackerWorker] Dynamic live score polling daemon active (rapid 15s background sync).")
         # Give server time to finish cold start and health checks before initial sync
-        time.sleep(15)
+        time.sleep(5)
         while True:
             try:
                 sync_tracked_tickets_with_live_apis(db=None)
                 gc.collect()
             except Exception as e:
                 print("[TicketTrackerWorker] Auto-sync loop exception:", e)
-            time.sleep(60)
+            time.sleep(15)
 
     worker = threading.Thread(target=_auto_sync_loop, daemon=True)
     worker.start()

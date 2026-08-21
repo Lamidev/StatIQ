@@ -35,7 +35,7 @@ class ReEditRequest(BaseModel):
     target_odds: float = 5.0
     target_mode: Optional[str] = "ODDS"  # "ODDS" or "GAMES"
     target_games: Optional[int] = 10     # Up to 50 max games on SportyBet
-    mode: str = "SWAP"  # "SWAP", "REMOVE", "AUDITOR"
+    mode: str = "AUDITOR"                # "AUDITOR", "REMOVE"
     reshuffle_seed: Optional[int] = None
     strict_mode: bool = False
 

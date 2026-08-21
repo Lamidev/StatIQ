@@ -25,30 +25,73 @@ from dataclasses import dataclass, field
 from app.predictions.live_calculator import calculate_matchiq_probabilities, get_team_rating
 from app.predictions.leg_odds_calculator import calculate_dynamic_leg_config
 
-def classify_league_tier(comp_name: str) -> tuple[int, str]:
+def classify_league_tier(comp_name: str, country: str = "") -> tuple[int, str]:
     """
     Classifies football competitions into 3 operational priority tiers:
-    - Tier 1 (Score 100 - ELITE): Premier League, UCL, Europa League, Conference League, La Liga, Serie A, Bundesliga, Ligue 1, World Cup, Euros.
-    - Tier 2 (Score 50 - SOLID): Championship, Eredivisie, Liga Portugal, Brasileiro Serie A/B, MLS, Belgian Pro, Scottish Prem, Super Lig, Argentine Primera, Copa Libertadores, Top Domestic Cups.
-    - Tier 3 (Score 10 - REGIONAL/YOUTH): U19, U21, U23, Non-League, Regional/Lower divisions.
+    - Tier 1 (Score 100 - ELITE): Premier League (England), UCL, Europa League, Conference League,
+      La Liga (Spain Primera), Serie A (Italy), Bundesliga (Germany), Ligue 1 (France), World Cup, Euros.
+    - Tier 2 (Score 50 - SOLID): Championship, Eredivisie, Liga Portugal, 2. Bundesliga, LaLiga 2/Hypermotion,
+      Serie B, Ligue 2, Brasileiro Serie A, MLS, Belgian Pro, Scottish Prem, Super Lig, Argentine Primera, Top Domestic Cups.
+    - Tier 3 (Score 10 - REGIONAL/YOUTH): U19, U20, U21, U23, Youth, Reserves, Non-League, Regional/Lower divisions.
     """
-    c_upper = str(comp_name or "").upper()
+    c_upper = str(comp_name or "").strip().upper()
+    country_upper = str(country or "").strip().upper()
 
-    t1_keywords = [
-        "CHAMPIONS LEAGUE", "EUROPA LEAGUE", "CONFERENCE LEAGUE",
-        "PREMIER LEAGUE", "LALIGA", "LA LIGA", "SERIE A", "BUNDESLIGA", "LIGUE 1",
-        "WORLD CUP", "EUROPEAN CHAMPIONSHIP", "COPA AMERICA"
-    ]
-    if any(k in c_upper for k in t1_keywords) and not any(k in c_upper for k in ["U19", "U21", "U23", "WOMEN", "FEMENINO", "LADIES"]):
-        return (100, "TIER_1_ELITE")
-
+    # 1. Youth, Women, Regional & Lower divisions are strictly Tier 3
     t3_keywords = [
-        "U19", "U21", "U23", "YOUTH", "NEXT GEN", "RESERVE", "REGIONAL",
+        "U19", "U20", "U21", "U23", "U18", "U17", "YOUTH", "NEXT GEN", "RESERVE", "REGIONAL",
         "KOLMONEN", "ISTHMIAN", "NORTHERN PREMIER", "SOUTHERN LEAGUE", "DIVISION 2", "DIVISION 3",
-        "PRIMERA C", "PRIMERA D", "TERCERA", "PROMOTION LEAGUE", "OBERLIGA"
+        "DIVISION 4", "PRIMERA C", "PRIMERA D", "TERCERA", "PROMOTION LEAGUE", "OBERLIGA",
+        "WOMEN", "FEMENINO", "FEMININE", "FRAUEN", "DONNE", "LADIES", "VROUWEN", "PRIMAVERA",
+        "CARICOCA", "CARIOCA", "PAULISTA", "GAUCHO", "MINEIRO"
     ]
     if any(k in c_upper for k in t3_keywords):
         return (10, "TIER_3_REGIONAL")
+
+    # 2. Second divisions / secondary tiers are explicitly Tier 2 (Score 50)
+    t2_explicit = [
+        "HYPERMOTION", "LALIGA 2", "LA LIGA 2", "SEGUNDA", "2. BUNDESLIGA", "2.BUNDESLIGA",
+        "LIGUE 2", "SERIE B", "SERIE C", "CHAMPIONSHIP", "EREDIVISIE", "PRIMEIRA LIGA", "LIGA PORTUGAL",
+        "SUPER LIG", "SÜPER LIG", "SUPERLIG", "PREMIERSHIP", "PRO LEAGUE", "BRASILEIRO",
+        "LEAGUE ONE", "LEAGUE TWO", "COPA DEL REY", "FA CUP", "EFL CUP", "DFB POKAL", "COPPA ITALIA", "COUPE DE FRANCE"
+    ]
+    if any(k in c_upper for k in t2_explicit):
+        return (50, "TIER_2_SOLID")
+
+    # 3. Top 5 European Leagues & Continental Elite (Strict verification)
+    # English Premier League
+    if "PREMIER LEAGUE" in c_upper:
+        if country_upper in ["ENGLAND", "UK", "GREAT BRITAIN", ""] and not any(x in c_upper for x in ["VICTORIA", "GHANA", "EGYPT", "KUWAIT", "WALES", "RUSSIA", "CRIMEA", "ISRAEL", "KAZAKHSTAN", "NORTHERN IRELAND", "SOUTH AFRICA", "UKRAINE", "BHUTAN"]):
+            return (100, "TIER_1_ELITE")
+        return (50, "TIER_2_SOLID")
+
+    # Spanish LaLiga
+    if any(x in c_upper for x in ["LALIGA", "LA LIGA", "PRIMERA DIVISION"]):
+        if country_upper in ["SPAIN", ""] and not any(x in c_upper for x in ["HYPERMOTION", "2", "SEGUNDA", "RFEF", "FEDERACION"]):
+            return (100, "TIER_1_ELITE")
+        return (50, "TIER_2_SOLID")
+
+    # Italian Serie A
+    if "SERIE A" in c_upper:
+        if country_upper in ["ITALY", ""] and not any(x in c_upper for x in ["BRAZIL", "BRASILEIRO", "ECUADOR", "COLOMBIA"]):
+            return (100, "TIER_1_ELITE")
+        return (50, "TIER_2_SOLID")
+
+    # German Bundesliga
+    if "BUNDESLIGA" in c_upper:
+        if country_upper in ["GERMANY", ""] and not any(x in c_upper for x in ["2.", "AUSTRIA", "ÖSTERREICH"]):
+            return (100, "TIER_1_ELITE")
+        return (50, "TIER_2_SOLID")
+
+    # French Ligue 1
+    if "LIGUE 1" in c_upper:
+        if country_upper in ["FRANCE", ""] and not any(x in c_upper for x in ["ALGERIA", "IVORY COAST", "TUNISIA"]):
+            return (100, "TIER_1_ELITE")
+        return (50, "TIER_2_SOLID")
+
+    # UEFA Continental Tournaments
+    if any(k in c_upper for k in ["CHAMPIONS LEAGUE", "EUROPA LEAGUE", "CONFERENCE LEAGUE", "WORLD CUP", "EUROPEAN CHAMPIONSHIP", "COPA AMERICA"]):
+        return (100, "TIER_1_ELITE")
 
     return (50, "TIER_2_SOLID")
 
@@ -205,7 +248,7 @@ class MatchIQPickEngine:
     """
     Core engine enforcing strict 5-gate pipeline validation.
     """
-    def __init__(self, use_live_odds: bool = False):
+    def __init__(self, use_live_odds: bool = True):
         self.use_live_odds = use_live_odds
 
     def _get_structural_safety(self, market_name: str) -> float:
@@ -263,7 +306,8 @@ class MatchIQPickEngine:
         """
         home = fixture.get("home_team") or fixture.get("home") or "Home Team"
         away = fixture.get("away_team") or fixture.get("away") or "Away Team"
-        comp = fixture.get("competition_code") or fixture.get("league") or "PL"
+        comp = fixture.get("competition_code") or fixture.get("competition") or fixture.get("league") or "Football"
+        country = fixture.get("country") or ""
         fix_id = str(fixture.get("fixture_id") or fixture.get("external_id") or f"FIX_{home}_{away}")
         kickoff = fixture.get("kickoff_datetime")
 
@@ -389,7 +433,7 @@ class MatchIQPickEngine:
 
         candidate_markets = []
 
-        if "HOME" in allowed_directions and (ph + pd) >= 0.55 and (h_odd is None or h_odd <= 3.20):
+        if "HOME" in allowed_directions and (ph + pd) >= 0.58 and (h_odd is None or h_odd <= 2.60):
             dc_1x_odds = dc_odds.get("1X") or round(max(1.04, 1.0 / (ph + pd + 0.04)), 2)
             candidate_markets.append({
                 "market": "Double Chance",
@@ -400,7 +444,7 @@ class MatchIQPickEngine:
                 "category": "DOUBLE_CHANCE"
             })
 
-        if "AWAY" in allowed_directions and (pa + pd) >= 0.55 and (a_odd is None or a_odd <= 3.20):
+        if "AWAY" in allowed_directions and (pa + pd) >= 0.58 and (a_odd is None or a_odd <= 2.60):
             dc_x2_odds = dc_odds.get("X2") or round(max(1.04, 1.0 / (pa + pd + 0.04)), 2)
             candidate_markets.append({
                 "market": "Double Chance",
@@ -661,10 +705,24 @@ class MatchIQPickEngine:
             )
 
         effective_threshold = min(min_prob_threshold, 0.72)
+        soft_threshold = effective_threshold * 0.88  # 12% soft tolerance before hard reject
         valid_g2_candidates = [m for m in candidate_markets if m["prob"] >= effective_threshold]
         if not valid_g2_candidates:
-            # Fall back to best available structural market for this match
-            valid_g2_candidates = candidate_markets
+            # Soft fallback: allow candidates within 12% below threshold
+            valid_g2_candidates = [m for m in candidate_markets if m["prob"] >= soft_threshold]
+        # Hard reject: if still nothing above soft floor, reject this fixture entirely
+        if not valid_g2_candidates:
+            gate_results["gate2"] = "FAIL"
+            reason = f"All candidates below soft probability floor ({soft_threshold*100:.0f}%); fixture rejected to protect win rate"
+            audit_log.append(f"REJECTED at GATE 2 (hard floor): {reason}")
+            return PickDecision(
+                fixture_id=fix_id, home_team=home, away_team=away, competition=comp,
+                kickoff_datetime=kickoff, market_name="None", selection_name="None",
+                model_probability=0.0, estimated_odds=1.0, elo_gap=elo_gap,
+                tier_context=tier_context, approved=False, confidence_tier="REJECTED",
+                gate_results=gate_results, rejection_reason=reason,
+                decision_audit_log=audit_log, kelly_quarter_stake_pct=0.0
+            )
 
         max_p = max(m["prob"] for m in candidate_markets)
 
@@ -757,11 +815,11 @@ class MatchIQPickEngine:
         # Determine Confidence Tier
         prob = best_cand["prob"]
         m_score = best_cand["score"]
-        if prob >= 0.88 and m_score >= 0.82:
+        if prob >= 0.88 and m_score >= 0.83:
             confidence_tier = "ELITE"
-        elif prob >= 0.80 and m_score >= 0.74:
+        elif prob >= 0.82 and m_score >= 0.76:
             confidence_tier = "HIGH"
-        elif prob >= 0.70 and m_score >= 0.64:
+        elif prob >= 0.75 and m_score >= 0.66:
             confidence_tier = "SOLID"
         else:
             confidence_tier = "SPECULATIVE"
@@ -795,9 +853,380 @@ class MatchIQPickEngine:
     ) -> List[PickDecision]:
         """
         Generates ALL approved candidate market options for a single fixture across
-        different categories (Double Chance, Over/Under, Team Goals, 1X2), enriched with
-        league tier ranking and tactical match archetype intelligence.
+        different categories (Double Chance, Over/Under, Team Goals, 1X2), strictly filtered
+        by allowed market categories, risk profile thresholds, and enriched with league tier ranking.
         """
+        home = fixture.get("home_team") or fixture.get("home") or "Home Team"
+        away = fixture.get("away_team") or fixture.get("away") or "Away Team"
+        comp = fixture.get("competition_code") or fixture.get("competition") or fixture.get("league") or "Football"
+        country = fixture.get("country") or ""
+        fix_id = str(fixture.get("fixture_id") or fixture.get("external_id") or f"FIX_{home}_{away}")
+        kickoff = fixture.get("kickoff_datetime")
+
+        tier_score, tier_label = classify_league_tier(comp, country)
+
+        # Risk Profile Parameters
+        rp = (risk_profile or "BALANCED").upper()
+        if rp == "ULTRA_CONSERVATIVE":
+            prob_floor = 0.80
+            min_odds_floor = 1.15
+            max_odds_cap = 1.38
+        elif rp == "AGGRESSIVE":
+            prob_floor = 0.56
+            min_odds_floor = 1.28
+            max_odds_cap = 2.85
+        else:  # BALANCED
+            prob_floor = 0.68
+            min_odds_floor = 1.18
+            max_odds_cap = 1.75
+
+        # Allowed / Excluded Categories Check
+        allowed_list = [x.upper() for x in allowed_markets] if (allowed_markets and len(allowed_markets) > 0 and "ALL" not in [x.upper() for x in allowed_markets]) else ["DOUBLE_CHANCE", "OVER_UNDER", "TEAM_GOALS", "1X2"]
+        excluded_list = [x.upper() for x in excluded_markets] if excluded_markets else []
+
+        def _cat_allowed(cat: str) -> bool:
+            return cat.upper() in allowed_list and cat.upper() not in excluded_list
+
+        ou_lines = fixture.get("ou_lines") or []
+        dc_odds = fixture.get("double_chance") or {}
+        r1x2 = dict(fixture.get("result_1x2") or {})
+        r_home = float(r1x2.get("home") or r1x2.get("1") or fixture.get("odds_home") or 2.5)
+        r_draw = float(r1x2.get("draw") or r1x2.get("X") or fixture.get("odds_draw") or 3.2)
+        r_away = float(r1x2.get("away") or r1x2.get("2") or fixture.get("odds_away") or 2.8)
+
+        # Derived implied probabilities
+        margin = (1.0 / r_home) + (1.0 / r_draw) + (1.0 / r_away) if (r_home > 1.0 and r_draw > 1.0 and r_away > 1.0) else 1.0
+        ph = round((1.0 / r_home) / margin, 3) if r_home > 1.0 else 0.40
+        pd = round((1.0 / r_draw) / margin, 3) if r_draw > 1.0 else 0.28
+        pa = round((1.0 / r_away) / margin, 3) if r_away > 1.0 else 0.32
+
+        elo_gap = 200.0 if (r_home <= 1.45 and r_away >= 3.8) else (-200.0 if (r_away <= 1.45 and r_home >= 3.8) else 0.0)
+        tier_context = "HOME_DOMINANT" if r_home < r_away else ("AWAY_DOMINANT" if r_away < r_home else "COMPETITIVE")
+
+        # Detect 50/50 Balanced Match
+        is_even_match = abs(ph - pa) <= 0.12 and pd >= 0.26
+
+        archetype_info = detect_match_archetype(r_home, r_draw, r_away, ou_lines, home, away)
+        archetype_type = archetype_info["archetype"]
+
+        # Inspect real open markets from SportyBet
+        raw_markets = fixture.get("markets") or []
+        if isinstance(raw_markets, dict):
+            raw_markets = list(raw_markets.values())
+        raw_market_ids = {str(m.get("id") or m.get("market_id") or "") for m in raw_markets if isinstance(m, dict)}
+        has_mkt_filter = len(raw_market_ids) > 0
+
+        candidates: List[PickDecision] = []
+        seen_selections = set()
+
+        # 1. Double Chance Lines
+        if _cat_allowed("DOUBLE_CHANCE") and (not has_mkt_filter or "10" in raw_market_ids):
+            # Ensure dc_odds has values
+            dc_work = dict(dc_odds)
+            if "1X" not in dc_work and r_home > 1.0 and r_draw > 1.0:
+                dc_work["1X"] = round(1.0 / max(0.01, (ph + pd) * 1.04), 2)
+            if "X2" not in dc_work and r_away > 1.0 and r_draw > 1.0:
+                dc_work["X2"] = round(1.0 / max(0.01, (pa + pd) * 1.04), 2)
+            if "12" not in dc_work and r_home > 1.0 and r_away > 1.0:
+                dc_work["12"] = round(1.0 / max(0.01, (ph + pa) * 1.04), 2)
+
+            for dc_key, dc_val in dc_work.items():
+                # TACTICAL RULE: Ban "12" on 50/50 evenly balanced matches due to high draw frequency (~30%)
+                if is_even_match and dc_key == "12":
+                    continue
+
+                if dc_val and min_odds_floor <= float(dc_val) <= max_odds_cap:
+                    if dc_key == "1X":
+                        prob = min(0.96, ph + pd)
+                        sel_lbl = f"{home} or Draw (1X)"
+                        out_id = "9"
+                    elif dc_key == "X2":
+                        prob = min(0.96, pa + pd)
+                        sel_lbl = f"{away} or Draw (X2)"
+                        out_id = "11"
+                    else:
+                        prob = min(0.96, ph + pa)
+                        sel_lbl = f"{home} or {away} (12)"
+                        out_id = "10"
+
+                    if prob >= prob_floor and sel_lbl not in seen_selections:
+                        seen_selections.add(sel_lbl)
+                        t_boost = 25.0 if (archetype_type == "HEAVY_FAVORITE" and ((dc_key == "1X" and r_home < r_away) or (dc_key == "X2" and r_away < r_home))) else 10.0
+                        candidates.append(PickDecision(
+                            fixture_id=fix_id, home_team=home, away_team=away, competition=comp,
+                            kickoff_datetime=kickoff, market_name="Double Chance", selection_name=sel_lbl,
+                            model_probability=round(prob, 3), estimated_odds=float(dc_val),
+                            elo_gap=elo_gap, tier_context=tier_context,
+                            approved=True, confidence_tier="ELITE" if prob >= 0.88 else "HIGH",
+                            gate_results={"gate1": "PASS", "gate2": "PASS"}, rejection_reason=None,
+                            decision_audit_log=[], kelly_quarter_stake_pct=3.0,
+                            raw_match_data=fixture, market_id="10", outcome_id=out_id, specifier=None,
+                            league_tier=tier_label, league_tier_score=tier_score,
+                            tactical_archetype=archetype_type, tactical_score=t_boost
+                        ))
+
+        # 2. Asian Handicaps (+1.5 for 50/50 games, -1.0 for Heavy Favorites)
+        if _cat_allowed("HANDICAP") and (has_mkt_filter and "16" in raw_market_ids):
+            if is_even_match:
+                # Home +1.5 Asian Handicap (wins on Home win, draw, or 1-goal loss)
+                prob_h_p15 = min(0.93, 0.60 + (ph * 0.40) + (pd * 0.35))
+                odd_h_p15 = round(1.0 / (prob_h_p15 * 1.04), 2)
+                sel_hp15 = f"{home} (+1.5 Handicap)"
+                if prob_h_p15 >= prob_floor and min_odds_floor <= odd_h_p15 <= max_odds_cap and sel_hp15 not in seen_selections:
+                    seen_selections.add(sel_hp15)
+                    candidates.append(PickDecision(
+                        fixture_id=fix_id, home_team=home, away_team=away, competition=comp,
+                        kickoff_datetime=kickoff, market_name="Asian Handicap", selection_name=sel_hp15,
+                        model_probability=round(prob_h_p15, 3), estimated_odds=odd_h_p15,
+                        elo_gap=elo_gap, tier_context=tier_context,
+                        approved=True, confidence_tier="ELITE", gate_results={"gate1": "PASS", "gate2": "PASS"},
+                        rejection_reason=None, decision_audit_log=[], kelly_quarter_stake_pct=3.0,
+                        raw_match_data=fixture, market_id="16", outcome_id="1714", specifier="hcp=1.5",
+                        league_tier=tier_label, league_tier_score=tier_score, tactical_archetype="BALANCED_HANDICAP", tactical_score=28.0
+                    ))
+
+                # Away +1.5 Asian Handicap (wins on Away win, draw, or 1-goal loss)
+                prob_a_p15 = min(0.92, 0.58 + (pa * 0.40) + (pd * 0.35))
+                odd_a_p15 = round(1.0 / (prob_a_p15 * 1.04), 2)
+                sel_ap15 = f"{away} (+1.5 Handicap)"
+                if prob_a_p15 >= prob_floor and min_odds_floor <= odd_a_p15 <= max_odds_cap and sel_ap15 not in seen_selections:
+                    seen_selections.add(sel_ap15)
+                    candidates.append(PickDecision(
+                        fixture_id=fix_id, home_team=home, away_team=away, competition=comp,
+                        kickoff_datetime=kickoff, market_name="Asian Handicap", selection_name=sel_ap15,
+                        model_probability=round(prob_a_p15, 3), estimated_odds=odd_a_p15,
+                        elo_gap=elo_gap, tier_context=tier_context,
+                        approved=True, confidence_tier="ELITE", gate_results={"gate1": "PASS", "gate2": "PASS"},
+                        rejection_reason=None, decision_audit_log=[], kelly_quarter_stake_pct=3.0,
+                        raw_match_data=fixture, market_id="16", outcome_id="1715", specifier="hcp=1.5",
+                        league_tier=tier_label, league_tier_score=tier_score, tactical_archetype="BALANCED_HANDICAP", tactical_score=28.0
+                    ))
+
+        # 3. Over/Under Lines
+        if _cat_allowed("OVER_UNDER") and (not has_mkt_filter or "18" in raw_market_ids):
+            for ou in ou_lines:
+                line_val = str(ou.get("line"))
+                o_odd = ou.get("over")
+                u_odd = ou.get("under")
+                if o_odd and min_odds_floor <= float(o_odd) <= max_odds_cap:
+                    sel = f"Over {line_val} Goals"
+                    prob = round(min(0.96, 1.0 / (float(o_odd) * 1.04)), 3)
+                    if prob >= prob_floor and sel not in seen_selections:
+                        seen_selections.add(sel)
+                        t_boost = 25.0 if archetype_type == "HIGH_GOAL_EXPECTANCY" else (15.0 if float(line_val) <= 1.5 else 0.0)
+                        candidates.append(PickDecision(
+                            fixture_id=fix_id, home_team=home, away_team=away, competition=comp,
+                            kickoff_datetime=kickoff, market_name="Over/Under Goals", selection_name=sel,
+                            model_probability=prob, estimated_odds=float(o_odd),
+                            elo_gap=elo_gap, tier_context=tier_context,
+                            approved=True, confidence_tier="ELITE" if prob >= 0.88 else "HIGH",
+                            gate_results={"gate1": "PASS", "gate2": "PASS"}, rejection_reason=None,
+                            decision_audit_log=[], kelly_quarter_stake_pct=2.5,
+                            raw_match_data=fixture, market_id="18", outcome_id="12", specifier=f"total={line_val}",
+                            league_tier=tier_label, league_tier_score=tier_score,
+                            tactical_archetype=archetype_type, tactical_score=t_boost
+                        ))
+                if u_odd and min_odds_floor <= float(u_odd) <= max_odds_cap and float(line_val) >= 2.5:
+                    sel = f"Under {line_val} Goals"
+                    prob = round(min(0.96, 1.0 / (float(u_odd) * 1.04)), 3)
+                    if prob >= prob_floor and sel not in seen_selections:
+                        seen_selections.add(sel)
+                        t_boost = 25.0 if (archetype_type == "LOW_GOAL_DEFENSIVE" or is_even_match) else (15.0 if float(line_val) >= 3.5 else 0.0)
+                        candidates.append(PickDecision(
+                            fixture_id=fix_id, home_team=home, away_team=away, competition=comp,
+                            kickoff_datetime=kickoff, market_name="Over/Under Goals", selection_name=sel,
+                            model_probability=prob, estimated_odds=float(u_odd),
+                            elo_gap=elo_gap, tier_context=tier_context,
+                            approved=True, confidence_tier="ELITE" if prob >= 0.88 else "HIGH",
+                            gate_results={"gate1": "PASS", "gate2": "PASS"}, rejection_reason=None,
+                            decision_audit_log=[], kelly_quarter_stake_pct=2.5,
+                            raw_match_data=fixture, market_id="18", outcome_id="13", specifier=f"total={line_val}",
+                            league_tier=tier_label, league_tier_score=tier_score,
+                            tactical_archetype=archetype_type, tactical_score=t_boost
+                        ))
+
+        # 4. Team Goals (Team Over 0.5 / 1.5 Goals)
+        if _cat_allowed("TEAM_GOALS"):
+            if ph >= 0.52 and r_home <= 2.10 and (not has_mkt_filter or "19" in raw_market_ids):
+                prob_h_o05 = min(0.95, 0.72 + (ph * 0.25))
+                odd_h_o05 = round(1.0 / (prob_h_o05 * 1.04), 2)
+                sel_h05 = f"{home} Over 0.5 Goals"
+                if prob_h_o05 >= prob_floor and min_odds_floor <= odd_h_o05 <= max_odds_cap and sel_h05 not in seen_selections:
+                    seen_selections.add(sel_h05)
+                    candidates.append(PickDecision(
+                        fixture_id=fix_id, home_team=home, away_team=away, competition=comp,
+                        kickoff_datetime=kickoff, market_name="Team Goals", selection_name=sel_h05,
+                        model_probability=round(prob_h_o05, 3), estimated_odds=odd_h_o05,
+                        elo_gap=elo_gap, tier_context=tier_context,
+                        approved=True, confidence_tier="ELITE", gate_results={"gate1": "PASS", "gate2": "PASS"},
+                        rejection_reason=None, decision_audit_log=[], kelly_quarter_stake_pct=3.0,
+                        raw_match_data=fixture, market_id="19", outcome_id="12", specifier="total=0.5",
+                        league_tier=tier_label, league_tier_score=tier_score, tactical_archetype=archetype_type, tactical_score=20.0
+                    ))
+
+                # Team Over 1.5 Goals for Dominant Favorites
+                if ph >= 0.62 and r_home <= 1.65:
+                    prob_h_o15 = min(0.86, 0.44 + (ph * 0.42))
+                    odd_h_o15 = round(1.0 / (prob_h_o15 * 1.04), 2)
+                    sel_h15 = f"{home} Over 1.5 Team Goals"
+                    if prob_h_o15 >= prob_floor and min_odds_floor <= odd_h_o15 <= max_odds_cap and sel_h15 not in seen_selections:
+                        seen_selections.add(sel_h15)
+                        candidates.append(PickDecision(
+                            fixture_id=fix_id, home_team=home, away_team=away, competition=comp,
+                            kickoff_datetime=kickoff, market_name="Team Goals", selection_name=sel_h15,
+                            model_probability=round(prob_h_o15, 3), estimated_odds=odd_h_o15,
+                            elo_gap=elo_gap, tier_context=tier_context,
+                            approved=True, confidence_tier="HIGH", gate_results={"gate1": "PASS", "gate2": "PASS"},
+                            rejection_reason=None, decision_audit_log=[], kelly_quarter_stake_pct=2.5,
+                            raw_match_data=fixture, market_id="19", outcome_id="12", specifier="total=1.5",
+                            league_tier=tier_label, league_tier_score=tier_score, tactical_archetype=archetype_type, tactical_score=25.0
+                        ))
+
+            if pa >= 0.52 and r_away <= 2.10 and (not has_mkt_filter or "20" in raw_market_ids):
+                prob_a_o05 = min(0.95, 0.72 + (pa * 0.25))
+                odd_a_o05 = round(1.0 / (prob_a_o05 * 1.04), 2)
+                sel_a05 = f"{away} Over 0.5 Goals"
+                if prob_a_o05 >= prob_floor and min_odds_floor <= odd_a_o05 <= max_odds_cap and sel_a05 not in seen_selections:
+                    seen_selections.add(sel_a05)
+                    candidates.append(PickDecision(
+                        fixture_id=fix_id, home_team=home, away_team=away, competition=comp,
+                        kickoff_datetime=kickoff, market_name="Team Goals", selection_name=sel_a05,
+                        model_probability=round(prob_a_o05, 3), estimated_odds=odd_a_o05,
+                        elo_gap=elo_gap, tier_context=tier_context,
+                        approved=True, confidence_tier="ELITE", gate_results={"gate1": "PASS", "gate2": "PASS"},
+                        rejection_reason=None, decision_audit_log=[], kelly_quarter_stake_pct=3.0,
+                        raw_match_data=fixture, market_id="20", outcome_id="12", specifier="total=0.5",
+                        league_tier=tier_label, league_tier_score=tier_score, tactical_archetype=archetype_type, tactical_score=20.0
+                    ))
+
+                # Team Over 1.5 Goals for Dominant Favorites
+                if pa >= 0.62 and r_away <= 1.65:
+                    prob_a_o15 = min(0.86, 0.44 + (pa * 0.42))
+                    odd_a_o15 = round(1.0 / (prob_a_o15 * 1.04), 2)
+                    sel_a15 = f"{away} Over 1.5 Team Goals"
+                    if prob_a_o15 >= prob_floor and min_odds_floor <= odd_a_o15 <= max_odds_cap and sel_a15 not in seen_selections:
+                        seen_selections.add(sel_a15)
+                        candidates.append(PickDecision(
+                            fixture_id=fix_id, home_team=home, away_team=away, competition=comp,
+                            kickoff_datetime=kickoff, market_name="Team Goals", selection_name=sel_a15,
+                            model_probability=round(prob_a_o15, 3), estimated_odds=odd_a_o15,
+                            elo_gap=elo_gap, tier_context=tier_context,
+                            approved=True, confidence_tier="HIGH", gate_results={"gate1": "PASS", "gate2": "PASS"},
+                            rejection_reason=None, decision_audit_log=[], kelly_quarter_stake_pct=2.5,
+                            raw_match_data=fixture, market_id="20", outcome_id="12", specifier="total=1.5",
+                            league_tier=tier_label, league_tier_score=tier_score, tactical_archetype=archetype_type, tactical_score=25.0
+                        ))
+
+        # 5. Advanced Tactical Options: Win Either Half & Home/Away or Over 2.5
+        if _cat_allowed("COMBO") or _cat_allowed("DOUBLE_CHANCE"):
+            # Home to Win Either Half
+            if ph >= 0.55 and r_home <= 1.85 and (not has_mkt_filter or "73" in raw_market_ids):
+                prob_h_weh = min(0.92, 0.58 + (ph * 0.38))
+                odd_h_weh = round(1.0 / (prob_h_weh * 1.04), 2)
+                sel_h_weh = f"{home} to Win Either Half"
+                if prob_h_weh >= prob_floor and min_odds_floor <= odd_h_weh <= max_odds_cap and sel_h_weh not in seen_selections:
+                    seen_selections.add(sel_h_weh)
+                    candidates.append(PickDecision(
+                        fixture_id=fix_id, home_team=home, away_team=away, competition=comp,
+                        kickoff_datetime=kickoff, market_name="Win Either Half", selection_name=sel_h_weh,
+                        model_probability=round(prob_h_weh, 3), estimated_odds=odd_h_weh,
+                        elo_gap=elo_gap, tier_context=tier_context,
+                        approved=True, confidence_tier="ELITE", gate_results={"gate1": "PASS", "gate2": "PASS"},
+                        rejection_reason=None, decision_audit_log=[], kelly_quarter_stake_pct=2.5,
+                        raw_match_data=fixture, market_id="73", outcome_id="75", specifier=None,
+                        league_tier=tier_label, league_tier_score=tier_score, tactical_archetype="WIN_EITHER_HALF", tactical_score=26.0
+                    ))
+
+            # Home or Over 2.5 Goals
+            if ph >= 0.55 and (not has_mkt_filter or "62" in raw_market_ids):
+                prob_h_o25 = min(0.93, ph + 0.22)
+                odd_h_o25 = round(1.0 / (prob_h_o25 * 1.04), 2)
+                sel_h_o25 = f"{home} or Over 2.5 Goals"
+                if prob_h_o25 >= prob_floor and min_odds_floor <= odd_h_o25 <= max_odds_cap and sel_h_o25 not in seen_selections:
+                    seen_selections.add(sel_h_o25)
+                    candidates.append(PickDecision(
+                        fixture_id=fix_id, home_team=home, away_team=away, competition=comp,
+                        kickoff_datetime=kickoff, market_name="Compound Safety", selection_name=sel_h_o25,
+                        model_probability=round(prob_h_o25, 3), estimated_odds=odd_h_o25,
+                        elo_gap=elo_gap, tier_context=tier_context,
+                        approved=True, confidence_tier="ELITE", gate_results={"gate1": "PASS", "gate2": "PASS"},
+                        rejection_reason=None, decision_audit_log=[], kelly_quarter_stake_pct=2.5,
+                        raw_match_data=fixture, market_id="62", outcome_id="1", specifier=None,
+                        league_tier=tier_label, league_tier_score=tier_score, tactical_archetype="COMBO_SAFETY", tactical_score=24.0
+                    ))
+
+            # Away to Win Either Half
+            if pa >= 0.55 and r_away <= 1.85 and (not has_mkt_filter or "74" in raw_market_ids):
+                prob_a_weh = min(0.92, 0.58 + (pa * 0.38))
+                odd_a_weh = round(1.0 / (prob_a_weh * 1.04), 2)
+                sel_a_weh = f"{away} to Win Either Half"
+                if prob_a_weh >= prob_floor and min_odds_floor <= odd_a_weh <= max_odds_cap and sel_a_weh not in seen_selections:
+                    seen_selections.add(sel_a_weh)
+                    candidates.append(PickDecision(
+                        fixture_id=fix_id, home_team=home, away_team=away, competition=comp,
+                        kickoff_datetime=kickoff, market_name="Win Either Half", selection_name=sel_a_weh,
+                        model_probability=round(prob_a_weh, 3), estimated_odds=odd_a_weh,
+                        elo_gap=elo_gap, tier_context=tier_context,
+                        approved=True, confidence_tier="ELITE", gate_results={"gate1": "PASS", "gate2": "PASS"},
+                        rejection_reason=None, decision_audit_log=[], kelly_quarter_stake_pct=2.5,
+                        raw_match_data=fixture, market_id="74", outcome_id="75", specifier=None,
+                        league_tier=tier_label, league_tier_score=tier_score, tactical_archetype="WIN_EITHER_HALF", tactical_score=26.0
+                    ))
+
+            # Away or Over 2.5 Goals
+            if pa >= 0.55 and (not has_mkt_filter or "62" in raw_market_ids):
+                prob_a_o25 = min(0.93, pa + 0.22)
+                odd_a_o25 = round(1.0 / (prob_a_o25 * 1.04), 2)
+                sel_a_o25 = f"{away} or Over 2.5 Goals"
+                if prob_a_o25 >= prob_floor and min_odds_floor <= odd_a_o25 <= max_odds_cap and sel_a_o25 not in seen_selections:
+                    seen_selections.add(sel_a_o25)
+                    candidates.append(PickDecision(
+                        fixture_id=fix_id, home_team=home, away_team=away, competition=comp,
+                        kickoff_datetime=kickoff, market_name="Compound Safety", selection_name=sel_a_o25,
+                        model_probability=round(prob_a_o25, 3), estimated_odds=odd_a_o25,
+                        elo_gap=elo_gap, tier_context=tier_context,
+                        approved=True, confidence_tier="ELITE", gate_results={"gate1": "PASS", "gate2": "PASS"},
+                        rejection_reason=None, decision_audit_log=[], kelly_quarter_stake_pct=2.5,
+                        raw_match_data=fixture, market_id="62", outcome_id="2", specifier=None,
+                        league_tier=tier_label, league_tier_score=tier_score, tactical_archetype="COMBO_SAFETY", tactical_score=24.0
+                    ))
+
+        # 6. 1X2 Match Result Lines
+        if _cat_allowed("1X2") and (not has_mkt_filter or "1" in raw_market_ids):
+            if r_home and min_odds_floor <= r_home <= max_odds_cap and ph >= prob_floor:
+                sel_h = f"{home} to Win (1)"
+                if sel_h not in seen_selections:
+                    seen_selections.add(sel_h)
+                    candidates.append(PickDecision(
+                        fixture_id=fix_id, home_team=home, away_team=away, competition=comp,
+                        kickoff_datetime=kickoff, market_name="1X2 Match Result", selection_name=sel_h,
+                        model_probability=ph, estimated_odds=r_home,
+                        elo_gap=elo_gap, tier_context=tier_context,
+                        approved=True, confidence_tier="ELITE" if ph >= 0.75 else "HIGH",
+                        gate_results={"gate1": "PASS", "gate2": "PASS"}, rejection_reason=None,
+                        decision_audit_log=[], kelly_quarter_stake_pct=2.0,
+                        raw_match_data=fixture, market_id="1", outcome_id="1", specifier=None,
+                        league_tier=tier_label, league_tier_score=tier_score,
+                        tactical_archetype=archetype_type, tactical_score=30.0
+                    ))
+            if r_away and min_odds_floor <= r_away <= max_odds_cap and pa >= prob_floor:
+                sel_a = f"{away} to Win (2)"
+                if sel_a not in seen_selections:
+                    seen_selections.add(sel_a)
+                    candidates.append(PickDecision(
+                        fixture_id=fix_id, home_team=home, away_team=away, competition=comp,
+                        kickoff_datetime=kickoff, market_name="1X2 Match Result", selection_name=sel_a,
+                        model_probability=pa, estimated_odds=r_away,
+                        elo_gap=elo_gap, tier_context=tier_context,
+                        approved=True, confidence_tier="ELITE" if pa >= 0.75 else "HIGH",
+                        gate_results={"gate1": "PASS", "gate2": "PASS"}, rejection_reason=None,
+                        decision_audit_log=[], kelly_quarter_stake_pct=2.0,
+                        raw_match_data=fixture, market_id="1", outcome_id="3", specifier=None,
+                        league_tier=tier_label, league_tier_score=tier_score,
+                        tactical_archetype=archetype_type, tactical_score=30.0
+                    ))
+
+        # Fallback base decision if no candidates generated
         base_dec = self.evaluate_fixture_markets(
             fixture=fixture,
             per_leg_target_odds=per_leg_target_odds,
@@ -806,93 +1235,13 @@ class MatchIQPickEngine:
             allowed_markets=allowed_markets,
             excluded_markets=excluded_markets,
         )
-        if not base_dec.approved:
+        if candidates:
+            return candidates
+        elif base_dec.approved:
+            base_dec.league_tier = tier_label
+            base_dec.league_tier_score = tier_score
             return [base_dec]
-
-        home = fixture.get("home_team") or fixture.get("home") or "Home Team"
-        away = fixture.get("away_team") or fixture.get("away") or "Away Team"
-        comp = fixture.get("competition") or fixture.get("competition_code") or "Football"
-        fix_id = str(fixture.get("fixture_id") or f"FIX_{home}_{away}")
-        kickoff = fixture.get("kickoff_datetime")
-
-        tier_score, tier_label = classify_league_tier(comp)
-        ou_lines = fixture.get("ou_lines") or []
-        dc_odds = fixture.get("double_chance") or {}
-        r_home = float(fixture.get("odds_home") or 2.5)
-        r_draw = float(fixture.get("odds_draw") or 3.2)
-        r_away = float(fixture.get("odds_away") or 2.8)
-
-        archetype_info = detect_match_archetype(r_home, r_draw, r_away, ou_lines, home, away)
-        archetype_type = archetype_info["archetype"]
-
-        candidates = []
-        seen_selections = set()
-
-        # Update base decision with tier & archetype context
-        base_dec.league_tier = tier_label
-        base_dec.league_tier_score = tier_score
-        base_dec.tactical_archetype = archetype_type
-        base_dec.tactical_score = 15.0 if any(k in (base_dec.market_name or "").lower() for k in archetype_info["boost_markets"]) else 0.0
-        candidates.append(base_dec)
-        seen_selections.add(base_dec.selection_name)
-
-        # 1. Over/Under Lines (Tactically enriched)
-        for ou in ou_lines:
-            line_val = str(ou.get("line"))
-            o_odd = ou.get("over")
-            u_odd = ou.get("under")
-            if o_odd and 1.10 <= float(o_odd) <= 1.55:
-                sel = f"Over {line_val} Goals"
-                if sel not in seen_selections:
-                    seen_selections.add(sel)
-                    t_boost = 25.0 if archetype_type == "HIGH_GOAL_EXPECTANCY" else (15.0 if float(line_val) <= 1.5 else 0.0)
-                    candidates.append(PickDecision(
-                        fixture_id=fix_id, home_team=home, away_team=away, competition=comp,
-                        kickoff_datetime=kickoff, market_name="Over/Under Goals", selection_name=sel,
-                        model_probability=round(min(0.95, 1.0 / (float(o_odd) * 1.04)), 3),
-                        estimated_odds=float(o_odd), elo_gap=base_dec.elo_gap, tier_context=base_dec.tier_context,
-                        approved=True, confidence_tier="HIGH", gate_results={"gate1": "PASS", "gate2": "PASS"},
-                        rejection_reason=None, decision_audit_log=[], kelly_quarter_stake_pct=2.5,
-                        raw_match_data=fixture, market_id="18", outcome_id="12", specifier=f"total={line_val}",
-                        league_tier=tier_label, league_tier_score=tier_score, tactical_archetype=archetype_type, tactical_score=t_boost
-                    ))
-            if u_odd and 1.10 <= float(u_odd) <= 1.45 and float(line_val) >= 3.5:
-                sel = f"Under {line_val} Goals"
-                if sel not in seen_selections:
-                    seen_selections.add(sel)
-                    t_boost = 25.0 if archetype_type == "LOW_GOAL_DEFENSIVE" else (15.0 if float(line_val) >= 4.5 else 0.0)
-                    candidates.append(PickDecision(
-                        fixture_id=fix_id, home_team=home, away_team=away, competition=comp,
-                        kickoff_datetime=kickoff, market_name="Over/Under Goals", selection_name=sel,
-                        model_probability=round(min(0.96, 1.0 / (float(u_odd) * 1.04)), 3),
-                        estimated_odds=float(u_odd), elo_gap=base_dec.elo_gap, tier_context=base_dec.tier_context,
-                        approved=True, confidence_tier="HIGH", gate_results={"gate1": "PASS", "gate2": "PASS"},
-                        rejection_reason=None, decision_audit_log=[], kelly_quarter_stake_pct=2.5,
-                        raw_match_data=fixture, market_id="18", outcome_id="13", specifier=f"total={line_val}",
-                        league_tier=tier_label, league_tier_score=tier_score, tactical_archetype=archetype_type, tactical_score=t_boost
-                    ))
-
-        # 2. Double Chance Lines (Tactically enriched)
-        for dc_key, dc_val in dc_odds.items():
-            if dc_val and 1.10 <= float(dc_val) <= 1.50:
-                sel_lbl = f"{home} or Draw (1X)" if dc_key == "1X" else (f"{away} or Draw (X2)" if dc_key == "X2" else f"{home} or {away} (12)")
-                if sel_lbl not in seen_selections:
-                    seen_selections.add(sel_lbl)
-                    t_boost = 25.0 if archetype_type == "HEAVY_FAVORITE" and ((dc_key == "1X" and r_home < r_away) or (dc_key == "X2" and r_away < r_home)) else 10.0
-                    candidates.append(PickDecision(
-                        fixture_id=fix_id, home_team=home, away_team=away, competition=comp,
-                        kickoff_datetime=kickoff, market_name="Double Chance", selection_name=sel_lbl,
-                        model_probability=round(min(0.95, 1.0 / (float(dc_val) * 1.05)), 3),
-                        estimated_odds=float(dc_val), elo_gap=base_dec.elo_gap, tier_context=base_dec.tier_context,
-                        approved=True, confidence_tier="HIGH", gate_results={"gate1": "PASS", "gate2": "PASS"},
-                        rejection_reason=None, decision_audit_log=[], kelly_quarter_stake_pct=3.0,
-                        raw_match_data=fixture, market_id="10",
-                        outcome_id="9" if dc_key == "1X" else ("11" if dc_key == "X2" else "10"),
-                        specifier=None, league_tier=tier_label, league_tier_score=tier_score,
-                        tactical_archetype=archetype_type, tactical_score=t_boost
-                    ))
-
-        return candidates
+        return []
 
 
     def build_ticket(
@@ -994,61 +1343,111 @@ class MatchIQPickEngine:
             return tier_score + tactical_bonus + prob_score + dominance_score + elo_score
 
         if mode == "ROLLOVER":
-            # For Rollover: Strictly prioritize Tier 1 & Tier 2 leagues + high dominance ratio
-            # Filter for Tier 1 & Tier 2 matches first
-            tier1_2 = [d for d in approved_decisions if getattr(d, "league_tier_score", 50) >= 50]
-            base_pool = tier1_2 if len(tier1_2) >= 2 else approved_decisions[:]
-            base_pool.sort(key=_dynamic_candidate_score, reverse=True)
+            import itertools
 
+            # Filter candidates for Rollover:
+            # Require minimum leg odds of 1.10 to prevent 1.04/1.05 junk picks
+            def _is_safe_rollover_market(d) -> bool:
+                m_lower = (d.market_name or "").lower()
+                s_lower = (d.selection_name or "").lower()
+                o_val = float(d.estimated_odds or 1.0)
+                if o_val < 1.10 or o_val > 1.65:
+                    return False
+                is_dc = "double chance" in m_lower
+                is_safe_goals = (
+                    ("over" in s_lower and any(x in s_lower for x in ["1.5", "2", "0.5"])) or
+                    ("under" in s_lower and any(x in s_lower for x in ["3.5", "4.5", "5.5"]))
+                )
+                is_team_goals = "team" in m_lower or "team" in s_lower
+                is_fav_win = ("match result" in m_lower or "to win" in s_lower) and d.model_probability >= 0.70 and o_val <= 1.45
+                return is_dc or is_safe_goals or is_team_goals or is_fav_win
+
+            # Probability floor for rollover based on risk profile
+            rp_upper = (risk_profile or "BALANCED").upper()
+            rollover_prob_floor = 0.80 if rp_upper == "ULTRA_CONSERVATIVE" else (0.68 if rp_upper == "AGGRESSIVE" else 0.73)
+
+            valid_cands = [
+                d for d in approved_decisions
+                if _is_safe_rollover_market(d)
+                and d.model_probability >= rollover_prob_floor
+            ]
+
+            # Use all valid candidates from the user's selected league pool
+            pool_to_use = valid_cands if len(valid_cands) >= 2 else approved_decisions
+
+            # Group candidates by distinct fixture
+            fixtures_dict: Dict[str, List[PickDecision]] = {}
+            for d in pool_to_use:
+                fix_k = str(d.fixture_id or f"{d.home_team}_{d.away_team}")
+                if fix_k not in fixtures_dict:
+                    fixtures_dict[fix_k] = []
+                fixtures_dict[fix_k].append(d)
+
+            # Sort candidates within each fixture by (model_probability desc, score desc)
+            for fk in fixtures_dict:
+                fixtures_dict[fk].sort(key=lambda x: (x.model_probability, _dynamic_candidate_score(x)), reverse=True)
+
+            avail_fix_keys = list(fixtures_dict.keys())
             seed_val = reshuffle_seed if reshuffle_seed is not None else int(time.time() * 1000)
             rng = random.Random(seed_val)
+            rng.shuffle(avail_fix_keys)
 
-            # High-assurance pool (Dominance Ratio >= 2.2 or Prob >= 82%)
-            top_decisions = [d for d in base_pool if _dynamic_candidate_score(d) >= 120.0 or d.model_probability >= 0.82]
-            pool_candidates = top_decisions if len(top_decisions) >= 2 else base_pool[:]
+            target = float(target_total_odds or 2.00)
+            best_combo: List[PickDecision] = []
+            best_diff = float("inf")
 
-            pool_copy = pool_candidates[:max(15, len(pool_candidates))]
-            rng.shuffle(pool_copy)
+            # Search 1-leg, 2-leg, 3-leg, 4-leg, 5-leg combinations to find optimal target match
+            for leg_k in range(1, min(6, len(avail_fix_keys) + 1)):
+                fix_subsets = list(itertools.combinations(avail_fix_keys[:20], leg_k))
+                rng.shuffle(fix_subsets)
+                for subset in fix_subsets[:100]:
+                    subset_cands = [fixtures_dict[fk][:6] for fk in subset]
+                    for cand_tuple in itertools.product(*subset_cands):
+                        combo_odds = 1.0
+                        combo_prob = 1.0
+                        for c in cand_tuple:
+                            combo_odds *= float(c.estimated_odds or 1.25)
+                            combo_prob *= float(c.model_probability or 0.80)
 
-            selected_decisions: List[PickDecision] = []
-            curr_acc_odds = 1.0
-            seen_fixtures_ro = set()
-            seen_leagues: Dict[str, int] = {}
-            seen_markets: Dict[str, int] = {}
+                        diff = abs(combo_odds - target)
+                        # Penalize being under target odds heavily to prevent sub-1.85 slips on 2.0x target
+                        if combo_odds < (target * 0.95):
+                            diff += 2.5 * (target - combo_odds)
+                        elif combo_odds > (target * 1.12):
+                            diff += 1.2 * (combo_odds - target)
 
-            # Strictly allow safe rollover markets
-            safe_rollover_markets = ["double chance", "over 1.5", "under 4.5", "team over", "draw no bet"]
+                        # Score combines odds closeness with high win probability
+                        score = diff - (combo_prob * 0.25)
+                        if score < best_diff:
+                            best_diff = score
+                            best_combo = list(cand_tuple)
+                            if abs(combo_odds - target) <= 0.03 and combo_prob >= 0.50:
+                                break
 
-            for d in pool_copy:
-                fix_k = str(d.fixture_id or f"{d.home_team}_{d.away_team}")
-                if fix_k in seen_fixtures_ro:
-                    continue
+                    if best_combo:
+                        tot_o = 1.0
+                        for c in best_combo: tot_o *= c.estimated_odds
+                        if abs(tot_o - target) <= 0.03:
+                            break
 
-                m_lower = (d.market_name or "").lower()
-                if not any(k in m_lower for k in safe_rollover_markets):
-                    continue
+            if best_combo:
+                selected_decisions = best_combo
+            else:
+                # Fallback greedy
+                selected_decisions = []
+                curr_acc_odds = 1.0
+                seen_f = set()
+                for fk in avail_fix_keys:
+                    cands = fixtures_dict[fk]
+                    if not cands or fk in seen_f: continue
+                    selected_decisions.append(cands[0])
+                    seen_f.add(fk)
+                    curr_acc_odds *= cands[0].estimated_odds
+                    if curr_acc_odds >= (target * 0.96):
+                        break
 
-                comp = str(d.competition or "OTHER")
-                m_type = str(d.market_name or "OTHER")
-
-                if seen_leagues.get(comp, 0) >= 1 and len(pool_copy) > 4:
-                    continue
-                if seen_markets.get(m_type, 0) >= 2:
-                    continue
-
-                selected_decisions.append(d)
-                seen_fixtures_ro.add(fix_k)
-                seen_leagues[comp] = seen_leagues.get(comp, 0) + 1
-                seen_markets[m_type] = seen_markets.get(m_type, 0) + 1
-                curr_acc_odds *= d.estimated_odds
-
-                if curr_acc_odds >= (target_total_odds * 0.95):
-                    break
-                if len(selected_decisions) >= 3:
-                    break
-
-            if not selected_decisions and pool_copy:
-                selected_decisions.append(pool_copy[0])
+            if not selected_decisions and valid_cands:
+                selected_decisions.append(valid_cands[0])
         else:
             seed_val = reshuffle_seed if reshuffle_seed is not None else int(time.time() * 1000)
             rng = random.Random(seed_val)
@@ -1166,6 +1565,7 @@ class MatchIQPickEngine:
                     pass
 
             ev_id = str((d.raw_match_data or {}).get("event_id") or d.fixture_id)
+            country_val = (d.raw_match_data or {}).get("country") or ""
             approved_legs.append({
                 "fixture_id": d.fixture_id,
                 "event_id": ev_id,
@@ -1174,6 +1574,7 @@ class MatchIQPickEngine:
                 "home_team": d.home_team,
                 "away_team": d.away_team,
                 "competition": d.competition,
+                "country": country_val,
                 "kickoff_datetime": d.kickoff_datetime,
                 "start_time_ms": k_ms,
                 "day_offset": day_offset,
@@ -1251,3 +1652,7 @@ class MatchIQPickEngine:
             decision_audit_summary=summary_logs,
             recommended_stake_pct=rec_stake_pct
         )
+
+# Global singleton
+pick_engine = MatchIQPickEngine()
+

@@ -363,7 +363,7 @@ class TrackedTicket(Base):
 
     id: Mapped[str] = mapped_column(String(50), primary_key=True)
     code: Mapped[str] = mapped_column(String(50), index=True, default="CUSTOM")
-    mode: Mapped[str] = mapped_column(String(30), default="SWAP")
+    mode: Mapped[str] = mapped_column(String(30), default="AUDITOR")
     target_odds: Mapped[float] = mapped_column(Float, default=1.5)
     total_odds: Mapped[float] = mapped_column(Float, default=1.5)
     stake: Mapped[float] = mapped_column(Float, default=100.0)

@@ -1665,7 +1665,7 @@ def evaluate_tracked_tickets(db: Optional[Session] = None) -> List[Dict[str, Any
 
 
 _last_sync_time: float = 0.0
-_SYNC_COOLDOWN_SECONDS = 10  # Minimum seconds between full syncs (rapid live updates)
+_SYNC_COOLDOWN_SECONDS = 5  # Instant live score updates (5s cooldown)
 
 
 def sync_tracked_tickets_with_live_apis(db: Optional[Session] = None) -> List[Dict[str, Any]]:

@@ -111,15 +111,27 @@ export default function BetHistoryTab({ externalSelectedTicketId, onClearExterna
     }
   }, [externalSelectedTicketId, tickets]);
 
-  // Fast local data refresh every 10s — just re-reads from backend DB cache, cheap
+  const handleManualRefresh = async () => {
+    setLoading(true);
+    try {
+      await syncLiveTrackedTickets();
+      await loadData(true);
+    } catch (e) {
+      await loadData(true);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Fast local data refresh every 5s — just re-reads from backend DB cache, cheap
   useEffect(() => {
     const fastTimer = setInterval(() => {
       loadData(true); // silent, no spinner
-    }, 10000);
+    }, 5000);
     return () => clearInterval(fastTimer);
   }, []);
 
-  // Slower SportyBet live API sync every 30s — only fires when there are active/live tickets
+  // Rapid SportyBet live API sync every 10s — continuously pulls live scores, clocks & goals for active tickets
   useEffect(() => {
     const syncTimer = setInterval(() => {
       setTickets(prev => {
@@ -132,7 +144,7 @@ export default function BetHistoryTab({ externalSelectedTicketId, onClearExterna
         }
         return prev; // no state change, just side-effect
       });
-    }, 30000);
+    }, 10000);
     return () => clearInterval(syncTimer);
   }, []);
 
@@ -204,9 +216,6 @@ export default function BetHistoryTab({ externalSelectedTicketId, onClearExterna
       feat.includes("AI BUILDER") || feat.includes("AI TICKET")
     ) {
       return "AI_BUILDER";
-    }
-    if (mode === "SWAP" || feat.includes("SWAP")) {
-      return "SWAP";
     }
     if (mode === "REMOVE" || feat.includes("REMOVE")) {
       return "REMOVE";
@@ -293,12 +302,12 @@ export default function BetHistoryTab({ externalSelectedTicketId, onClearExterna
 
         <div className="flex items-center gap-2 self-end sm:self-auto">
           <button
-            onClick={() => loadData(false)}
+            onClick={handleManualRefresh}
             disabled={loading}
-            className="flex items-center gap-1.5 sm:gap-2 bg-slate-800 hover:bg-slate-700 text-white px-3 py-1.5 sm:px-4 sm:py-2 rounded-xl text-xs font-bold transition-all border border-slate-700 shadow-sm"
+            className="flex items-center gap-1.5 sm:gap-2 bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-1.5 sm:px-4 sm:py-2 rounded-xl text-xs font-bold transition-all border border-emerald-500 shadow-sm"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} />
-            <span>Sync History</span>
+            <span>{loading ? "Syncing Scores..." : "Live Score Sync"}</span>
           </button>
         </div>
       </div>
@@ -407,7 +416,6 @@ export default function BetHistoryTab({ externalSelectedTicketId, onClearExterna
               { key: "ROLLOVER",   label: "Rollover",   desc: "Compound bankers" },
               { key: "AUDITOR",    label: "Auditor",    desc: "Code upgrades" },
               { key: "REMOVE",     label: "Remove",     desc: "Risk reduction" },
-              { key: "SWAP",       label: "Swap",       desc: "High-prob swaps" },
             ];
 
             // Tickets for the selected feature panel

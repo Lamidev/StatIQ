@@ -4,11 +4,13 @@ const resolveApiBase = () => {
     const custom = envUrl.trim().replace(/\/+$/, "");
     return custom.endsWith("/api/v1") ? custom : `${custom}/api/v1`;
   }
-  // Default to live 24/7 Contabo VPS Backend so localhost and production are 100% synchronized in real time
+  // If running locally, connect to local backend server
+  if (typeof window !== "undefined" && (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1")) {
+    return "http://localhost:8000/api/v1";
+  }
+  // Default to live 24/7 Contabo VPS Backend
   return "https://statiq-api.duckdns.org/api/v1";
 };
-
-
 
 const API_BASE_URL = resolveApiBase();
 
@@ -227,11 +229,11 @@ export async function fetchMatchStats(matches) {
 }
 
 /**
- * Run MatchIQ Statistical Ticket Re-Editor (AUDITOR, SWAP, or REMOVE mode).
+ * Run MatchIQ Statistical Ticket Re-Editor (AUDITOR or REMOVE mode).
  * Timeout scales with ticket size: ≤15 games = 30s, 16-30 games = 60s, 31-50 games = 90s.
  * Returns error object on server crash or timeout.
  */
-export async function runTicketReEdit(selections, targetOdds, mode = "SWAP", targetMode = "ODDS", targetGames = 10, reshuffleSeed = null, strictMode = false) {
+export async function runTicketReEdit(selections, targetOdds, mode = "AUDITOR", targetMode = "ODDS", targetGames = 10, reshuffleSeed = null, strictMode = false) {
   const controller = new AbortController();
   // Adaptive timeout — larger tickets need more time due to parallel HTTP resolution
   const n = Array.isArray(selections) ? selections.length : 0;
