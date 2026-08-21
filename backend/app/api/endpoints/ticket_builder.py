@@ -157,67 +157,81 @@ def _is_league_match(comp_name: str, country_name: str, code_key: str) -> bool:
     country = (country_name or "").strip().lower()
     code = (code_key or "").upper()
 
+    # Reject non-top flight attributes universally unless specifically a cup code
+    is_cup_code = code in ["UCL", "UEL", "UECL", "COP"]
+    if not is_cup_code:
+        if any(x in comp for x in [
+            "women", "femenino", "feminin", "damen", "frauen", "vrouwen", "kvinner", "bayanlar",
+            "u23", "u21", "u20", "u19", "u18", "u17", "youth", "primavera", "reserve", "reserves",
+            "amateur", "cup", "trophy", "kupa", "pokal", "coppa", "taça", "taca", "copa", "shield",
+            "group a", "group b", "group c", "group d", "group e", "group f", "group g", "group h",
+            "serie c", "serie d", "liga 3", "liga 2", "2. liga", "3. liga", "persha", "druha", "segunda"
+        ]):
+            return False
+
     if code == "PL":
-        # English Premier League only
-        if country and country not in ["england", "great britain", "uk", ""]:
+        # English Premier League (Strict Top Flight)
+        if any(x in comp for x in [
+            "faroe", "islands", "ghana", "egypt", "wales", "israel", "crimea", "russia", "victoria",
+            "kazakhstan", "northern ireland", "south africa", "ukraine", "bhutan", "division", "kuwait",
+            "india", "kenya", "singapore", "jamaica", "malta", "armenia", "georgia"
+        ]):
             return False
-        if any(x in comp for x in ["victoria", "ghana", "egypt", "kuwait", "wales", "russia", "crimea", "israel", "kazakhstan", "northern ireland", "south africa", "ukraine", "bhutan", "women", "femenino", "u21", "u19", "u18", "reserve", "division"]):
+        if country and country not in ["england", "great britain", "uk", "international"]:
             return False
-        return "premier league" in comp
+        return "premier league" in comp or "epl" in comp
 
     elif code == "PD":
-        # Spanish LaLiga (Primera Division) only
-        if country and country not in ["spain", ""]:
+        # Spanish LaLiga (Primera Division Only)
+        if any(x in comp for x in ["laliga 2", "la liga 2", "hypermotion", "segunda", "rfef", "federacion", "tercera"]):
             return False
-        if any(x in comp for x in ["laliga 2", "la liga 2", "segunda", "hypermotion", "women", "femenino", "u19", "rfef", "federacion", "tercera"]):
+        if country and country not in ["spain", ""]:
             return False
         return "laliga" in comp or "la liga" in comp or "primera division" in comp
 
     elif code == "SA":
-        # Italian Serie A only
+        # Italian Serie A (Strict Top Flight)
+        if any(x in comp for x in ["serie b", "serie c", "serie d", "brasileiro", "brazil", "ecuador", "colombia"]):
+            return False
         if country and country not in ["italy", ""]:
             return False
-        if any(x in comp for x in ["brasileiro", "brazil", "ecuador", "colombia", "women", "femenino", "serie b", "serie c", "primavera", "u20", "u19"]):
-            return False
-        return "serie a" in comp and (country in ["italy", ""] or "italy" in comp)
+        return "serie a" in comp
 
     elif code == "BL1":
-        # German Bundesliga only
+        # German Bundesliga (Strict Top Flight)
+        if any(x in comp for x in ["2. bundesliga", "2.bundesliga", "3. liga", "austria", "österreich", "regionalliga"]):
+            return False
         if country and country not in ["germany", ""]:
             return False
-        if any(x in comp for x in ["2. bundesliga", "2.bundesliga", "austria", "österreich", "women", "femenino", "2. liga", "u19", "u17", "regionalliga"]):
-            return False
-        return "bundesliga" in comp and (country in ["germany", ""] or "germany" in comp)
+        return "bundesliga" in comp
 
     elif code == "FL1":
-        # French Ligue 1 only
+        # French Ligue 1 (Strict Top Flight)
+        if any(x in comp for x in ["ligue 2", "national", "algeria", "ivory coast", "tunisia"]):
+            return False
         if country and country not in ["france", ""]:
             return False
-        if any(x in comp for x in ["ligue 2", "algeria", "ivory coast", "tunisia", "women", "femenino", "national", "u19"]):
-            return False
-        return "ligue 1" in comp and (country in ["france", ""] or "france" in comp)
+        return "ligue 1" in comp
 
     elif code == "ELC":
         # English Championship
         if country and country not in ["england", "uk", "great britain", ""]:
             return False
-        if any(x in comp for x in ["scotland", "scottish", "women", "u21", "u19"]):
-            return False
-        return "championship" in comp
+        return "championship" in comp and "scotland" not in comp and "scottish" not in comp
 
     elif code == "DED":
-        # Dutch Eredivisie only
-        if country and country not in ["netherlands", "holland", ""]:
+        # Dutch Eredivisie (Strict Top Flight)
+        if any(x in comp for x in ["eerste", "division", "reserve"]):
             return False
-        if any(x in comp for x in ["women", "vrouwen", "eerste", "division", "u21", "reserve"]):
+        if country and country not in ["netherlands", "holland", ""]:
             return False
         return "eredivisie" in comp
 
     elif code == "PPL":
-        # Portuguese Primeira Liga / Liga Portugal top flight only
-        if country and country not in ["portugal", ""]:
+        # Portuguese Primeira Liga (Strict Top Flight)
+        if any(x in comp for x in ["liga 2", "liga portugal 2", "liga 3", "liga portugal 3", " b"]):
             return False
-        if any(x in comp for x in ["women", "liga 2", "liga portugal 2", "segunda", "liga 3", "liga portugal 3", "u23", "u19", "taça", "taca"]):
+        if country and country not in ["portugal", ""]:
             return False
         return "primeira liga" in comp or ("liga portugal" in comp and not any(k in comp for k in [" 2", " 3", " b"]))
 
@@ -228,144 +242,144 @@ def _is_league_match(comp_name: str, country_name: str, code_key: str) -> bool:
         return "2. bundesliga" in comp or "2.bundesliga" in comp
 
     elif code == "SD":
-        # Spanish LaLiga 2 / Hypermotion / Segunda
+        # Spanish LaLiga 2 / Hypermotion
         if country and country not in ["spain", ""]:
             return False
         return "laliga 2" in comp or "la liga 2" in comp or "segunda division" in comp or "hypermotion" in comp
 
     elif code == "TUR":
         # Turkish Süper Lig (Top Flight Only)
-        if country and country not in ["turkey", "türkiye", "turkiye", ""]:
+        if any(x in comp for x in ["1. lig", "2. lig", "3. lig"]):
             return False
-        if any(x in comp for x in ["1. lig", "2. lig", "3. lig", "women", "bayanlar", "u19", "cup", "kupa"]):
+        if country and country not in ["turkey", "türkiye", "turkiye", ""]:
             return False
         return "super lig" in comp or "süper lig" in comp or "superlig" in comp
 
     elif code == "BEL":
         # Belgian Pro League / Jupiler Pro League (Top Flight Only)
-        if country and country not in ["belgium", "belgique", ""]:
+        if any(x in comp for x in ["1b", "challenger"]):
             return False
-        if any(x in comp for x in ["women", "u21", "1b", "challenger", "cup", "croky", "amateur"]):
+        if country and country not in ["belgium", "belgique", ""]:
             return False
         return "pro league" in comp or "first division a" in comp or "jupiler" in comp
 
     elif code == "AUT":
         # Austrian Bundesliga (Top Flight Only)
-        if country and country not in ["austria", "österreich", ""]:
+        if any(x in comp for x in ["2. liga", "2.liga", "regionalliga"]):
             return False
-        if any(x in comp for x in ["2. liga", "2.liga", "regionalliga", "women", "frauen", "cup", "oefb"]):
+        if country and country not in ["austria", "österreich", ""]:
             return False
         return "bundesliga" in comp
 
     elif code == "SAU":
         # Saudi Pro League (Roshn Saudi League - Top Flight Only)
-        if country and country not in ["saudi arabia", "saudi", ""]:
+        if any(x in comp for x in ["division 1", "division 2", "division 3", "first division"]):
             return False
-        if any(x in comp for x in ["division 1", "division 2", "division 3", "first division", "women", "u19", "king cup", "crown prince"]):
+        if country and country not in ["saudi arabia", "saudi", ""]:
             return False
         return "pro league" in comp or "roshn" in comp
 
     elif code == "SCO":
         # Scottish Premiership (Top Flight Only)
-        if country and country not in ["scotland", ""]:
+        if any(x in comp for x in ["championship", "league one", "league two"]):
             return False
-        if any(x in comp for x in ["championship", "women", "league one", "league two", "cup"]):
+        if country and country not in ["scotland", ""]:
             return False
         return "premiership" in comp or "premier league" in comp
 
     elif code in ["ROU", "ROM"]:
         # Romanian SuperLiga (Top Flight Only)
-        if country and country not in ["romania", "rumänien", ""]:
+        if any(x in comp for x in ["liga 2", "liga 3"]):
             return False
-        if any(x in comp for x in ["liga 2", "liga 3", "women", "u19", "cupa"]):
+        if country and country not in ["romania", "rumänien", ""]:
             return False
         return "superliga" in comp or "liga 1" in comp or "liga i" in comp
 
     elif code == "SUI":
-        # Swiss Super League
-        if country and country not in ["switzerland", "suisse", "schweiz", ""]:
+        # Swiss Super League (Top Flight Only)
+        if any(x in comp for x in ["challenge", "promotion"]):
             return False
-        if any(x in comp for x in ["challenge", "promotion", "women"]):
+        if country and country not in ["switzerland", "suisse", "schweiz", ""]:
             return False
         return "super league" in comp or "credit suisse" in comp
 
     elif code == "CRO":
-        # Croatian HNL / Prva HNL
-        if country and country not in ["croatia", "hrvatska", ""]:
+        # Croatian HNL (Top Flight Only)
+        if any(x in comp for x in ["2. hnl", "1. nl", "2. nl"]):
             return False
-        if any(x in comp for x in ["2. hnl", "women", "u19"]):
+        if country and country not in ["croatia", "hrvatska", ""]:
             return False
         return "hnl" in comp or "prva liga" in comp
 
     elif code == "DEN":
-        # Danish Superliga
-        if country and country not in ["denmark", "danmark", ""]:
+        # Danish Superliga (Top Flight Only)
+        if any(x in comp for x in ["1. division", "2. division"]):
             return False
-        if any(x in comp for x in ["1. division", "2. division", "women"]):
+        if country and country not in ["denmark", "danmark", ""]:
             return False
         return "superliga" in comp or "superligaen" in comp
 
     elif code == "GRE":
-        # Greek Super League
-        if country and country not in ["greece", ""]:
+        # Greek Super League 1 (Top Flight Only)
+        if "super league 2" in comp:
             return False
-        if any(x in comp for x in ["super league 2", "women", "u19"]):
+        if country and country not in ["greece", ""]:
             return False
         return "super league" in comp
 
     elif code == "NOR":
-        # Norwegian Eliteserien
-        if country and country not in ["norway", "norge", ""]:
+        # Norwegian Eliteserien (Top Flight Only)
+        if any(x in comp for x in ["1. divisjon", "obos"]):
             return False
-        if any(x in comp for x in ["1. divisjon", "obos", "women", "kvinner"]):
+        if country and country not in ["norway", "norge", ""]:
             return False
         return "eliteserien" in comp
 
     elif code == "SWE":
-        # Swedish Allsvenskan
-        if country and country not in ["sweden", "sverige", ""]:
+        # Swedish Allsvenskan (Top Flight Only)
+        if any(x in comp for x in ["superettan", "ettan"]):
             return False
-        if any(x in comp for x in ["superettan", "ettan", "women", "damallsvenskan"]):
+        if country and country not in ["sweden", "sverige", ""]:
             return False
         return "allsvenskan" in comp
 
     elif code == "POL":
-        # Polish Ekstraklasa
-        if country and country not in ["poland", "polska", ""]:
+        # Polish Ekstraklasa (Top Flight Only)
+        if any(x in comp for x in ["i liga", "ii liga"]):
             return False
-        if any(x in comp for x in ["i liga", "ii liga", "women"]):
+        if country and country not in ["poland", "polska", ""]:
             return False
         return "ekstraklasa" in comp
 
     elif code == "BRA":
-        # Brazilian Serie A (Brasileirão)
-        if country and country not in ["brazil", "brasil", ""]:
+        # Brazilian Serie A (Brasileirão - Top Flight Only)
+        if any(x in comp for x in ["serie b", "serie c", "serie d", "carioca", "paulista", "mineiro", "gaucho"]):
             return False
-        if any(x in comp for x in ["serie b", "serie c", "serie d", "u20", "u19", "carioca", "paulista", "mineiro", "gaucho", "women", "feminino"]):
+        if country and country not in ["brazil", "brasil", ""]:
             return False
         return "serie a" in comp or "brasileiro" in comp or "brasileirão" in comp
 
     elif code == "MLS":
-        # American Major League Soccer
-        if country and country not in ["usa", "united states", ""]:
+        # American Major League Soccer (Top Flight Only)
+        if any(x in comp for x in ["next pro", "usl", "nwsl"]):
             return False
-        if any(x in comp for x in ["next pro", "usl", "nwsl", "women"]):
+        if country and country not in ["usa", "united states", ""]:
             return False
         return "major league soccer" in comp or "mls" in comp
 
     elif code == "RUS":
-        # Russian Premier League
-        if country and country not in ["russia", ""]:
+        # Russian Premier League (Top Flight Only)
+        if any(x in comp for x in ["fnl", "first league"]):
             return False
-        if any(x in comp for x in ["fnl", "first league", "women"]):
+        if country and country not in ["russia", ""]:
             return False
         return "premier league" in comp or "rpl" in comp
 
     elif code == "UKR":
-        # Ukrainian Premier League
-        if country and country not in ["ukraine", ""]:
+        # Ukrainian Premier League (Top Flight Only)
+        if any(x in comp for x in ["persha", "druha"]):
             return False
-        if any(x in comp for x in ["persha", "druha", "women"]):
+        if country and country not in ["ukraine", ""]:
             return False
         return "premier league" in comp or "upl" in comp
 
@@ -382,7 +396,7 @@ def _is_league_match(comp_name: str, country_name: str, code_key: str) -> bool:
     elif code == "UECL":
         return "conference league" in comp
 
-    return code.lower() in comp
+    return False
 
 
 @router.post("/build")
