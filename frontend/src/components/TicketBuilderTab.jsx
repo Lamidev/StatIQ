@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { fetchFixturesByGameweek, generateSportyBetCode, generateVerifiedBookingCode, buildAiTicket, lockTrackedTicket, fetchTodaysSportybetGames } from "../api/client";
-import { Copy, Info, Calendar, Send, ShieldCheck, RefreshCw, CheckCircle2, ExternalLink, X, ChevronDown, ChevronUp, AlertCircle, Award, Trash2, Lock, ShieldAlert, Sliders, Sparkles, Search, Filter, BarChart2, Target, RotateCcw } from "lucide-react";
+import { Copy, Info, Calendar, Send, ShieldCheck, RefreshCw, CheckCircle2, ExternalLink, X, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, AlertCircle, Award, Trash2, Lock, ShieldAlert, Sliders, Sparkles, Search, Filter, BarChart2, Target, RotateCcw, Ticket, Layers } from "lucide-react";
 
 import { generateSafePick, buildSafeTicket, scoreFixtures } from "../utils/pickEngine";
 import { calculateFlexShield } from "../utils/flexCalculator";
@@ -2221,47 +2221,90 @@ export default function TicketBuilderTab() {
       {/* MODE 1 & MODE 3 RESULTS */}
       {(builderMode === "ACCUMULATOR" || builderMode === "TODAY_GAMES") && result && (
         <div className="space-y-6">
-          {/* Multi-Ticket Portfolio Navigation Bar */}
+          {/* Multi-Ticket Portfolio Navigation Bar (Optimized for Mobile & Desktop) */}
           {result.scenarios && result.scenarios.length > 1 && (
             <div className="bg-slate-900 text-white p-4 rounded-2xl border border-slate-700 shadow-md space-y-3">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                 <div className="flex items-center gap-2">
                   <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse" />
-                  <span className="text-xs font-black uppercase tracking-wider text-emerald-400">
-                    StatIQ Multi-Ticket Portfolio ({result.scenarios.length} Diversified Slips)
+                  <span className="text-xs font-black uppercase tracking-wider text-emerald-400 flex items-center gap-1.5">
+                    <Layers className="w-4 h-4 text-emerald-400" />
+                    <span>StatIQ Multi-Ticket Portfolio ({result.scenarios.length} Diversified Slips)</span>
                   </span>
                 </div>
-                <span className="text-[10px] font-extrabold uppercase px-2.5 py-1 rounded-full bg-emerald-950 text-emerald-300 border border-emerald-500/40">
+                <span className="text-[10px] font-extrabold uppercase px-2.5 py-1 rounded-full bg-emerald-950 text-emerald-300 border border-emerald-500/40 w-fit">
                   🛡️ 100% Zero-Overlap &bull; Zero Correlated Failure
                 </span>
               </div>
 
-              {/* Tab Selectors for each ticket in the portfolio */}
-              <div className="flex items-center gap-2 overflow-x-auto pb-1">
-                {result.scenarios.map((sc, scIdx) => (
-                  <button
-                    key={scIdx}
-                    type="button"
-                    onClick={() => setActivePortfolioIndex(scIdx)}
-                    className={`px-4 py-2 rounded-xl text-xs font-extrabold transition-all flex items-center gap-2 flex-shrink-0 cursor-pointer ${
-                      activePortfolioIndex === scIdx
-                        ? "bg-white text-slate-950 shadow-md scale-[1.02]"
-                        : "bg-slate-800 text-slate-300 hover:bg-slate-700"
-                    }`}
-                  >
-                    <span>🎫 Portfolio Slip #{scIdx + 1}</span>
-                    <span className={`text-[10px] font-black px-1.5 py-0.5 rounded ${
-                      activePortfolioIndex === scIdx ? "bg-slate-950 text-emerald-400" : "bg-slate-900 text-slate-400"
-                    }`}>
-                      ~{sc.accumulated_odds}x ({sc.selections?.length} Legs)
-                    </span>
-                    {sc.booking_code && (
-                      <span className="text-[9px] font-mono text-emerald-500 bg-emerald-950/60 px-1 py-0.5 rounded border border-emerald-800/40">
-                        {sc.booking_code}
-                      </span>
-                    )}
-                  </button>
-                ))}
+              {/* Responsive Grid Selector for each ticket in the portfolio */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-1">
+                {result.scenarios.map((sc, scIdx) => {
+                  const isCurrent = activePortfolioIndex === scIdx;
+                  return (
+                    <button
+                      key={scIdx}
+                      type="button"
+                      onClick={() => setActivePortfolioIndex(scIdx)}
+                      className={`w-full p-3 rounded-xl border text-left transition-all flex flex-col justify-between gap-2 cursor-pointer ${
+                        isCurrent
+                          ? "bg-slate-800 border-emerald-400 ring-2 ring-emerald-400/50 text-white shadow-lg scale-[1.01]"
+                          : "bg-slate-950/70 border-slate-800 text-slate-400 hover:bg-slate-800 hover:text-slate-200"
+                      }`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-black text-white flex items-center gap-1.5">
+                          <Ticket className="w-3.5 h-3.5 text-emerald-400" />
+                          <span>Slip #{scIdx + 1}</span>
+                        </span>
+                        <span className={`text-[10px] px-2 py-0.5 rounded font-black ${
+                          isCurrent ? "bg-emerald-500 text-slate-950" : "bg-slate-800 text-slate-300"
+                        }`}>
+                          ~{sc.accumulated_odds}x
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between text-[11px] pt-1 border-t border-slate-800/80">
+                        <span className="text-slate-400 font-bold">{sc.selections?.length || 0} Legs</span>
+                        {sc.booking_code ? (
+                          <span className="font-mono font-black text-emerald-400 bg-emerald-950/70 px-2 py-0.5 rounded border border-emerald-800/60 text-[10px]">
+                            {sc.booking_code}
+                          </span>
+                        ) : (
+                          <span className="text-emerald-400 font-bold text-[10px]">Active Slip</span>
+                        )}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Mobile Quick Prev / Next Navigator */}
+              <div className="flex items-center justify-between pt-2 border-t border-slate-800 text-xs sm:hidden">
+                <button
+                  type="button"
+                  disabled={activePortfolioIndex === 0}
+                  onClick={() => setActivePortfolioIndex(prev => Math.max(0, prev - 1))}
+                  className={`px-3 py-1.5 rounded-lg font-bold flex items-center gap-1 ${
+                    activePortfolioIndex === 0 ? "text-slate-600 cursor-not-allowed" : "bg-slate-800 text-white hover:bg-slate-700"
+                  }`}
+                >
+                  <ChevronLeft className="w-4 h-4" />
+                  <span>Prev Slip</span>
+                </button>
+                <span className="font-extrabold text-emerald-400 text-[11px]">
+                  Viewing Slip #{activePortfolioIndex + 1} of {result.scenarios.length}
+                </span>
+                <button
+                  type="button"
+                  disabled={activePortfolioIndex === result.scenarios.length - 1}
+                  onClick={() => setActivePortfolioIndex(prev => Math.min(result.scenarios.length - 1, prev + 1))}
+                  className={`px-3 py-1.5 rounded-lg font-bold flex items-center gap-1 ${
+                    activePortfolioIndex === result.scenarios.length - 1 ? "text-slate-600 cursor-not-allowed" : "bg-slate-800 text-white hover:bg-slate-700"
+                  }`}
+                >
+                  <span>Next Slip</span>
+                  <ChevronRight className="w-4 h-4" />
+                </button>
               </div>
             </div>
           )}
