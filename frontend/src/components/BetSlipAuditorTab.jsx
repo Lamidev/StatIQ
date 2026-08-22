@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { decodeBookingCode, runTicketReEdit, generateNewBookingCode, generateVerifiedBookingCode, lockTrackedTicket, fetchTrackedTickets as fetchTrackedTicketsApi, deleteTrackedTicket as deleteTrackedTicketApi } from "../api/client";
-import { Search, Copy, CheckCircle, CheckCircle2, ShieldCheck, ShieldAlert, AlertTriangle, ArrowRight, RefreshCw, Trash2, Sliders, ExternalLink, X, Receipt, Sparkles, Scissors } from "lucide-react";
+import { Search, Copy, CheckCircle, CheckCircle2, ShieldCheck, ShieldAlert, AlertTriangle, ArrowRight, RefreshCw, Trash2, Sliders, ExternalLink, X, Receipt, Sparkles, Scissors, Layers, Ticket } from "lucide-react";
 
 import { calculateFlexShield } from "../utils/flexCalculator";
 
@@ -21,6 +21,10 @@ export default function BetSlipAuditorTab({ onNavigateHistory, onTicketLocked })
   const [strictMode, setStrictMode] = useState(false);
   const [showAdvancedSettings, setShowAdvancedSettings] = useState(false);
   const [auditorStep, setAuditorStep] = useState(1); // Wizard step: 1 or 2
+
+  // Multi-Ticket Portfolio State
+  const [numTickets, setNumTickets] = useState(1);
+  const [activePortfolioIndex, setActivePortfolioIndex] = useState(0);
 
   // Processing state & output
   const [reEditing, setReEditing] = useState(false);
@@ -308,6 +312,7 @@ export default function BetSlipAuditorTab({ onNavigateHistory, onTicketLocked })
     setReEditResult(null);
     setReEditError(null);
     setGeneratedCode(null);
+    setActivePortfolioIndex(0);
 
     const finalOdds = useCustomOdds && customOddsInput ? parseFloat(customOddsInput) : targetOdds;
     const result = await runTicketReEdit(
@@ -317,7 +322,8 @@ export default function BetSlipAuditorTab({ onNavigateHistory, onTicketLocked })
       targetMode,
       targetGames,
       Date.now(),
-      strictMode
+      strictMode,
+      numTickets
     );
     setReEditing(false);
 
@@ -335,30 +341,10 @@ export default function BetSlipAuditorTab({ onNavigateHistory, onTicketLocked })
     // Valid result
     setReEditResult(result);
 
-    // Auto generate verified booking code for new ticket & trigger modal popup
-    if (result.final_selections && result.final_selections.length > 0) {
-      setGeneratingCode(true);
-      const codeRes = result.booking_code 
-        ? { booking_code: result.booking_code, status: result.verification_status || "VERIFIED", share_url: result.share_url }
-        : await generateVerifiedBookingCode(result.final_selections, "TKT-REEDIT", "ng");
-      
-      if (codeRes.booking_code && (codeRes.status === "VERIFIED" || codeRes.status === "SUCCESS")) {
-        setGeneratedCode(codeRes.booking_code);
-        setCodeModalData({
-          code: codeRes.booking_code,
-          status: codeRes.status,
-          verificationSummary: codeRes.reconciliation_summary || "All selections verified 100% with zero false positives.",
-          totalOdds: codeRes.total_odds || result.new_total_odds,
-          selections: result.final_selections,
-          loadUrl: codeRes.share_url || `https://www.sportybet.com/ng/?shareCode=${codeRes.booking_code}`
-        });
-        setShowCodeModal(true);
-      } else {
-        setGeneratedCode(null);
-      }
-      setGeneratingCode(false);
+    // Auto set verified booking code from primary slip
+    if (result.booking_code) {
+      setGeneratedCode(result.booking_code);
     }
-
   };
 
   const copyCode = (code) => {
@@ -1045,6 +1031,36 @@ export default function BetSlipAuditorTab({ onNavigateHistory, onTicketLocked })
                     )}
                   </div>
 
+                  {/* Multi-Ticket Portfolio Selector */}
+                  <div className="space-y-2">
+                    <label className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider block">
+                      Tickets to Generate (Zero-Overlap Portfolio)
+                    </label>
+                    <div className="grid grid-cols-3 gap-2">
+                      {[
+                        { count: 1, label: "1 Ticket", sub: "Standard Single Slip" },
+                        { count: 2, label: "2 Tickets", sub: "Split 0% Overlap" },
+                        { count: 3, label: "3 Tickets", sub: "Diversified Portfolio" },
+                      ].map((item) => (
+                        <button
+                          key={item.count}
+                          type="button"
+                          onClick={() => { setNumTickets(item.count); setReEditResult(null); }}
+                          className={`p-3 rounded-xl border text-left transition-all ${
+                            numTickets === item.count
+                              ? "bg-slate-900 border-slate-900 text-white shadow-sm ring-1 ring-slate-900"
+                              : "bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100"
+                          }`}
+                        >
+                          <span className="font-extrabold text-xs block">{item.label}</span>
+                          <span className={`text-[9px] block mt-0.5 ${numTickets === item.count ? "text-emerald-400 font-bold" : "text-slate-500"}`}>
+                            {item.sub}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
                   {/* Flex Cut — compact select */}
                   <div>
                     <label className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider block mb-2">Flex Cut Strategy</label>
@@ -1169,262 +1185,341 @@ export default function BetSlipAuditorTab({ onNavigateHistory, onTicketLocked })
                 </div>
               )}
 
-              {/* Header result banner */}
-              <div className="bg-emerald-50 border border-emerald-200 p-5 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                <div>
-                  <div className="flex items-center gap-2">
-                    <span className="text-[10px] text-emerald-700 font-bold uppercase tracking-wider block">
-                      Re-Edit Complete — Mode: {reEditResult.mode}
-                    </span>
-                    <button
-                      onClick={() => { setReEditResult(null); setGeneratedCode(null); }}
-                      className="px-2 py-0.5 rounded bg-emerald-100 hover:bg-emerald-200 text-emerald-800 text-[10px] font-extrabold transition-all border border-emerald-300"
-                      title="Clear current result and change target odds or mode"
-                    >
-                      Reset & Change Settings
-                    </button>
-                  </div>
-                  <h3 className="text-lg font-extrabold text-slate-900 mt-0.5">
-                    {reEditResult.final_count} Final Matches • New Total Odds: ~{reEditResult.new_total_odds}x
-                  </h3>
-                  <p className="text-xs text-slate-600 mt-1">
-                    Kept {reEditResult.kept} safe picks
-                    {reEditResult.swapped > 0 ? `, Swapped ${reEditResult.swapped} risky picks with safe MatchIQ predictions` : ""}
-                    {reEditResult.removed > 0 ? `, Dropped ${reEditResult.removed} risky/unsupported picks` : ""}.
-                  </p>
-                </div>
-
-                {/* Booking Code Display */}
-                <div className="bg-white p-3 rounded-xl border border-emerald-300 text-right min-w-[240px] flex flex-col items-end gap-1.5">
-                  <span className="text-[10px] text-slate-400 block font-medium">New SportyBet Code</span>
-                  {generatingCode ? (
-                    <span className="text-xs text-slate-400 animate-pulse">Generating...</span>
-                  ) : generatedCode ? (
-                    <div className="flex items-center space-x-2">
-                      <span className="text-[11px] font-extrabold text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-lg border border-emerald-200 flex items-center gap-1">
-                        <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
-                        <span>VERIFIED {generatedCode}</span>
-                      </span>
-                      <button
-                        onClick={() => {
-                          setCodeModalData({
-                            code: generatedCode,
-                            selections: reEditResult.final_selections,
-                            loadUrl: `https://www.sportybet.com/ng/?shareCode=${generatedCode}`
-                          });
-                          setShowCodeModal(true);
-                        }}
-                        className="px-3 py-1 rounded-lg btn-black text-white text-xs font-extrabold flex items-center space-x-1"
-                        title="View Code Popup"
-                      >
-                        <Copy className="w-3.5 h-3.5" />
-                        <span>View Code</span>
-                      </button>
-                    </div>
-                  ) : (
-                    <button
-                      onClick={async () => {
-                        setGeneratingCode(true);
-                        const codeRes = await generateVerifiedBookingCode(reEditResult.final_selections, "TKT-REEDIT", "ng");
-                        if (codeRes.booking_code && (codeRes.status === "VERIFIED" || codeRes.status === "SUCCESS")) {
-                          setGeneratedCode(codeRes.booking_code);
-                          setCodeModalData({
-                            code: codeRes.booking_code,
-                            status: codeRes.status,
-                            verificationSummary: codeRes.reconciliation_summary || "All selections verified 100% with zero false positives.",
-                            totalOdds: codeRes.total_odds || reEditResult.new_total_odds,
-                            selections: reEditResult.final_selections,
-                            loadUrl: codeRes.share_url || `https://www.sportybet.com/ng/?shareCode=${codeRes.booking_code}`
-                          });
-                          setShowCodeModal(true);
-                        } else {
-                          showNotice(`SportyBet Code Generation Result: ${codeRes.message || 'Could not verify selections on SportyBet Nigeria.'}`);
-                        }
-                        setGeneratingCode(false);
-                      }}
-
-                      disabled={generatingCode}
-                      className="px-3.5 py-1.5 rounded-xl btn-black text-white text-xs font-extrabold flex items-center space-x-1.5 shadow-sm transition-all"
-                    >
-                      {generatingCode ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : null}
-                      <span>{generatingCode ? "Verifying SportyBet..." : "Generate SportyBet Code"}</span>
-                    </button>
-
-                  )}
-
-                  <button
-                    onClick={() => setShowLockModal(true)}
-                    className="w-full mt-1 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-extrabold flex items-center justify-center gap-1.5 shadow-sm transition-all"
-                    title="Lock & Track this ticket for win/loss history and performance metrics"
-                  >
-                    <CheckCircle className="w-3.5 h-3.5" />
-                    <span>📌 Lock & Track Staked Ticket</span>
-                  </button>
-                </div>
-              </div>
-
-              {/* 🛡️ SportyBet Flex-Shield Recommendation Banner */}
-              {reEditResult.final_selections?.length >= 2 && (() => {
-                const totalLegs = reEditResult.final_selections.length;
-                const flex = calculateFlexShield(totalLegs, totalLegs, reEditResult.new_total_odds);
-                
-                let activeCut = flex.recommendedCut;
-                let isCustomSelection = false;
-
-                if (selectedFlexCut === "OFF") {
-                  return (
-                    <div className="bg-slate-900 border border-slate-700 p-4 rounded-2xl flex items-center justify-between text-white shadow-sm">
-                      <div className="flex items-center space-x-3">
-                        <div className="w-9 h-9 rounded-xl bg-slate-800 text-slate-400 border border-slate-700 flex items-center justify-center flex-shrink-0">
-                          <ShieldAlert className="w-5 h-5" />
-                        </div>
-                        <div>
-                          <span className="text-[11px] font-extrabold uppercase tracking-wider text-slate-400">
-                            SportyBet Flex Strategy
-                          </span>
-                          <h4 className="text-xs font-extrabold text-slate-200 mt-0.5">
-                            Straight Accumulator Selected (Flex Protection OFF)
-                          </h4>
-                          <p className="text-[11px] text-slate-400 mt-0.5">
-                            All {totalLegs} matches must win for full payout. No loss buffer applied.
-                          </p>
-                        </div>
-                      </div>
-                    </div>
-                  );
-                }
-
-                activeCut = parseInt(selectedFlexCut) || 1;
+              {/* Header result banner & Portfolio Switcher */}
+              {(() => {
+                const portfolioSlips = (reEditResult.portfolio_tickets && reEditResult.portfolio_tickets.length > 0)
+                  ? reEditResult.portfolio_tickets
+                  : [reEditResult];
+                const activeSlip = portfolioSlips[activePortfolioIndex] || portfolioSlips[0] || reEditResult;
+                const activeFinalSelections = activeSlip.final_selections || reEditResult.final_selections || [];
+                const activeOdds = activeSlip.new_total_odds || reEditResult.new_total_odds;
+                const activeCount = activeSlip.final_count || activeFinalSelections.length;
+                const activeBookingCode = activeSlip.booking_code || (activePortfolioIndex === 0 ? generatedCode : null);
+                const activeShareUrl = activeSlip.share_url || (activeBookingCode ? `https://www.sportybet.com/ng/?shareCode=${activeBookingCode}` : null);
 
                 return (
-                  <div className="bg-slate-900 border border-emerald-500/40 p-5 rounded-2xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 text-white shadow-sm">
-                    <div className="flex items-start space-x-3.5">
-                      <div className="w-10 h-10 rounded-xl bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 flex items-center justify-center flex-shrink-0 mt-0.5">
-                        <ShieldCheck className="w-5 h-5" />
-                      </div>
-                      <div>
-                        <div className="flex items-center space-x-2">
-                          <span className="text-[11px] font-extrabold uppercase tracking-wider text-emerald-400 flex items-center gap-1">
-                            {isCustomSelection ? "Selected SportyBet Flex Strategy" : "Recommended SportyBet Flex Strategy"}
+                  <div className="space-y-4">
+                    {/* Top Portfolio Tab Bar if multi-ticket */}
+                    {portfolioSlips.length > 1 && (
+                      <div className="bg-slate-900 p-3.5 rounded-2xl border border-slate-800 space-y-2.5">
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 px-1">
+                          <span className="text-[10px] font-black uppercase tracking-wider text-emerald-400 flex items-center gap-1.5">
+                            <Layers className="w-3.5 h-3.5" />
+                            <span>Multi-Ticket Portfolio ({portfolioSlips.length} Independent Slips • Zero Overlap)</span>
                           </span>
-                          <span className="text-[10px] font-bold bg-slate-800 text-slate-300 border border-slate-700 px-2 py-0.5 rounded-full">
-                            Select Flex Cut-{activeCut}
+                          <span className="text-[10px] text-slate-400 font-bold">
+                            {reEditResult.portfolio_summary?.total_unique_matches || (activeCount * portfolioSlips.length)} Total Unique Match Picks
                           </span>
                         </div>
-                        <h4 className="text-sm font-extrabold text-white mt-1">
-                          🛡️ Apply Flex Cut-{activeCut} on SportyBet when placing this slip
-                        </h4>
-                        <p className="text-xs text-slate-300 mt-1 leading-relaxed">
-                          StatIQ's model predicts your {totalLegs}-leg ticket will hit high accuracy. Selecting <strong>Flex Cut-{activeCut}</strong> guarantees payout even if up to <strong>{activeCut} {activeCut === 1 ? "match" : "matches"}</strong> have unexpected outcomes!
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                          {portfolioSlips.map((slip, sIdx) => {
+                            const isCurrent = activePortfolioIndex === sIdx;
+                            const slipCode = slip.booking_code;
+                            return (
+                              <button
+                                key={sIdx}
+                                type="button"
+                                onClick={() => setActivePortfolioIndex(sIdx)}
+                                className={`p-3 rounded-xl border text-left transition-all flex flex-col justify-between gap-2 ${
+                                  isCurrent
+                                    ? "bg-slate-800 border-emerald-500 ring-2 ring-emerald-500/40 text-white shadow-lg"
+                                    : "bg-slate-950/60 border-slate-800 text-slate-400 hover:bg-slate-800/80 hover:text-slate-200"
+                                }`}
+                              >
+                                <div className="flex items-center justify-between">
+                                  <span className="text-xs font-black text-white flex items-center gap-1.5">
+                                    <Ticket className="w-3.5 h-3.5 text-emerald-400" />
+                                    <span>Slip #{sIdx + 1}</span>
+                                  </span>
+                                  <span className={`text-[10px] px-2 py-0.5 rounded font-black ${isCurrent ? "bg-emerald-500 text-slate-950" : "bg-slate-800 text-slate-300"}`}>
+                                    ~{slip.new_total_odds}x
+                                  </span>
+                                </div>
+                                <div className="flex items-center justify-between text-[11px] pt-1 border-t border-slate-800/80">
+                                  <span className="text-slate-400 font-bold">{slip.final_count} Legs</span>
+                                  {slipCode ? (
+                                    <span className="font-mono font-black text-emerald-400 bg-emerald-950/60 px-1.5 py-0.5 rounded border border-emerald-800/50">
+                                      {slipCode}
+                                    </span>
+                                  ) : (
+                                    <span className="text-slate-500">Ready</span>
+                                  )}
+                                </div>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Active Slip Banner */}
+                    <div className="bg-emerald-50 border border-emerald-200 p-5 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-[10px] text-emerald-700 font-bold uppercase tracking-wider block">
+                            {portfolioSlips.length > 1 ? `Portfolio Slip #${activePortfolioIndex + 1} of ${portfolioSlips.length} • Mode: ${reEditResult.mode}` : `Re-Edit Complete — Mode: ${reEditResult.mode}`}
+                          </span>
+                          <button
+                            onClick={() => { setReEditResult(null); setGeneratedCode(null); }}
+                            className="px-2 py-0.5 rounded bg-emerald-100 hover:bg-emerald-200 text-emerald-800 text-[10px] font-extrabold transition-all border border-emerald-300"
+                            title="Clear current result and change target odds or mode"
+                          >
+                            Reset & Change Settings
+                          </button>
+                        </div>
+                        <h3 className="text-lg font-extrabold text-slate-900 mt-0.5">
+                          {activeCount} Final Matches • Slip Odds: ~{activeOdds}x
+                        </h3>
+                        <p className="text-xs text-slate-600 mt-1">
+                          {reEditResult.mode === "AUDITOR"
+                            ? `Upgraded all ${activeCount} matches to optimal 5-gate safety cushions (1X/X2, Over 1.5, Under 3.5).`
+                            : `Filtered and retained ${activeCount} model-confirmed winners with >70% win probability.`}
                         </p>
+                      </div>
+
+                      {/* Booking Code Display */}
+                      <div className="bg-white p-3 rounded-xl border border-emerald-300 text-right min-w-[240px] flex flex-col items-end gap-1.5">
+                        <span className="text-[10px] text-slate-400 block font-medium">
+                          {portfolioSlips.length > 1 ? `Slip #${activePortfolioIndex + 1} SportyBet Code` : "SportyBet Booking Code"}
+                        </span>
+                        {generatingCode ? (
+                          <span className="text-xs text-slate-400 animate-pulse">Generating...</span>
+                        ) : activeBookingCode ? (
+                          <div className="flex items-center space-x-2">
+                            <span className="text-[11px] font-extrabold text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-lg border border-emerald-200 flex items-center gap-1">
+                              <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
+                              <span>VERIFIED {activeBookingCode}</span>
+                            </span>
+                            <button
+                              onClick={() => {
+                                setCodeModalData({
+                                  code: activeBookingCode,
+                                  selections: activeFinalSelections,
+                                  loadUrl: activeShareUrl || `https://www.sportybet.com/ng/?shareCode=${activeBookingCode}`
+                                });
+                                setShowCodeModal(true);
+                              }}
+                              className="px-3 py-1 rounded-lg btn-black text-white text-xs font-extrabold flex items-center space-x-1"
+                              title="View Code Popup"
+                            >
+                              <Copy className="w-3.5 h-3.5" />
+                              <span>View Code</span>
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            onClick={async () => {
+                              setGeneratingCode(true);
+                              const codeRes = await generateVerifiedBookingCode(activeFinalSelections, `TKT-REEDIT-${activePortfolioIndex + 1}`, "ng");
+                              if (codeRes.booking_code && (codeRes.status === "VERIFIED" || codeRes.status === "SUCCESS")) {
+                                if (activeSlip) activeSlip.booking_code = codeRes.booking_code;
+                                setGeneratedCode(codeRes.booking_code);
+                                setCodeModalData({
+                                  code: codeRes.booking_code,
+                                  status: codeRes.status,
+                                  verificationSummary: codeRes.reconciliation_summary || "All selections verified 100% with zero false positives.",
+                                  totalOdds: codeRes.total_odds || activeOdds,
+                                  selections: activeFinalSelections,
+                                  loadUrl: codeRes.share_url || `https://www.sportybet.com/ng/?shareCode=${codeRes.booking_code}`
+                                });
+                                setShowCodeModal(true);
+                              } else {
+                                showNotice(`SportyBet Code Generation Result: ${codeRes.message || 'Could not verify selections on SportyBet Nigeria.'}`);
+                              }
+                              setGeneratingCode(false);
+                            }}
+                            disabled={generatingCode}
+                            className="px-3.5 py-1.5 rounded-xl btn-black text-white text-xs font-extrabold flex items-center space-x-1.5 shadow-sm transition-all"
+                          >
+                            {generatingCode ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : null}
+                            <span>{generatingCode ? "Verifying SportyBet..." : "Generate SportyBet Code"}</span>
+                          </button>
+                        )}
+
+                        <button
+                          onClick={() => setShowLockModal(true)}
+                          className="w-full mt-1 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-extrabold flex items-center justify-center gap-1.5 shadow-sm transition-all"
+                          title="Lock & Track this ticket for win/loss history and performance metrics"
+                        >
+                          <CheckCircle className="w-3.5 h-3.5" />
+                          <span>📌 Lock Slip #{activePortfolioIndex + 1} to Tracker</span>
+                        </button>
                       </div>
                     </div>
 
-                    <div className="flex flex-col items-end flex-shrink-0 self-stretch sm:self-auto justify-center bg-slate-800/80 border border-slate-700/60 p-3 rounded-xl min-w-[140px]">
-                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Safety Shield</span>
-                      <span className="text-sm font-black text-emerald-400 mt-0.5">
-                        Cut-{activeCut} Flex Protection
-                      </span>
-                      <span className="text-[10px] text-slate-400 mt-0.5">
-                        Covers up to {activeCut} {activeCut === 1 ? "Loss" : "Losses"}
-                      </span>
+                    {/* 🛡️ SportyBet Flex-Shield Recommendation Banner */}
+                    {activeFinalSelections.length >= 2 && (() => {
+                      const totalLegs = activeFinalSelections.length;
+                      const flex = calculateFlexShield(totalLegs, totalLegs, activeOdds);
+                      
+                      let activeCut = flex.recommendedCut;
+                      let isCustomSelection = false;
+
+                      if (selectedFlexCut === "OFF") {
+                        return (
+                          <div className="bg-slate-900 border border-slate-700 p-4 rounded-2xl flex items-center justify-between text-white shadow-sm">
+                            <div className="flex items-center space-x-3">
+                              <div className="w-9 h-9 rounded-xl bg-slate-800 text-slate-400 border border-slate-700 flex items-center justify-center flex-shrink-0">
+                                <ShieldAlert className="w-5 h-5" />
+                              </div>
+                              <div>
+                                <span className="text-[11px] font-extrabold uppercase tracking-wider text-slate-400">
+                                  SportyBet Flex Strategy
+                                </span>
+                                <h4 className="text-xs font-extrabold text-slate-200 mt-0.5">
+                                  Straight Accumulator Selected (Flex Protection OFF)
+                                </h4>
+                                <p className="text-[11px] text-slate-400 mt-0.5">
+                                  All {totalLegs} matches must win for full payout. No loss buffer applied.
+                                </p>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      }
+
+                      activeCut = parseInt(selectedFlexCut) || 1;
+
+                      return (
+                        <div className="bg-slate-900 border border-emerald-500/40 p-5 rounded-2xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 text-white shadow-sm">
+                          <div className="flex items-start space-x-3.5">
+                            <div className="w-10 h-10 rounded-xl bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 flex items-center justify-center flex-shrink-0 mt-0.5">
+                              <ShieldCheck className="w-5 h-5" />
+                            </div>
+                            <div>
+                              <div className="flex items-center space-x-2">
+                                <span className="text-[11px] font-extrabold uppercase tracking-wider text-emerald-400 flex items-center gap-1">
+                                  {isCustomSelection ? "Selected SportyBet Flex Strategy" : "Recommended SportyBet Flex Strategy"}
+                                </span>
+                                <span className="text-[10px] font-bold bg-slate-800 text-slate-300 border border-slate-700 px-2 py-0.5 rounded-full">
+                                  Select Flex Cut-{activeCut}
+                                </span>
+                              </div>
+                              <h4 className="text-sm font-extrabold text-white mt-1">
+                                🛡️ Apply Flex Cut-{activeCut} on SportyBet when placing this slip
+                              </h4>
+                              <p className="text-xs text-slate-300 mt-1 leading-relaxed">
+                                StatIQ's model predicts your {totalLegs}-leg ticket will hit high accuracy. Selecting <strong>Flex Cut-{activeCut}</strong> guarantees payout even if up to <strong>{activeCut} {activeCut === 1 ? "match" : "matches"}</strong> have unexpected outcomes!
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="flex flex-col items-end flex-shrink-0 self-stretch sm:self-auto justify-center bg-slate-800/80 border border-slate-700/60 p-3 rounded-xl min-w-[140px]">
+                            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Safety Shield</span>
+                            <span className="text-sm font-black text-emerald-400 mt-0.5">
+                              Cut-{activeCut} Flex Protection
+                            </span>
+                            <span className="text-[10px] text-slate-400 mt-0.5">
+                              Covers up to {activeCut} {activeCut === 1 ? "Loss" : "Losses"}
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })()}
+
+                    {/* Final Re-Edited Selections List */}
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between px-1">
+                        <h4 className="text-xs font-extrabold text-slate-700 uppercase tracking-wider">
+                          {portfolioSlips.length > 1 ? `Slip #${activePortfolioIndex + 1} Matches (${activeFinalSelections.length} Selections)` : `Final Re-Edited Ticket (${activeFinalSelections.length} Selections)`}
+                        </h4>
+                        <button
+                          onClick={() => copySelectionsAsText(activeFinalSelections)}
+                          className="px-2.5 py-1 rounded bg-slate-100 hover:bg-slate-200 text-slate-700 text-[10px] font-extrabold transition-all border border-slate-200 flex items-center gap-1"
+                        >
+                          <Copy className="w-3 h-3" />
+                          <span>Copy Selections Text</span>
+                        </button>
+                      </div>
+
+                      {activeFinalSelections.map((item, idx) => (
+                        <div
+                          key={idx}
+                          className={`p-4 rounded-xl border flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs ${
+                            item.action === "REPLACEMENT"
+                              ? "bg-indigo-50/50 border-indigo-200"
+                              : "bg-slate-50 border-slate-200"
+                          }`}
+                        >
+                          <div>
+                            <div className="flex items-center gap-2 mb-1">
+                              {item.action === "AUDITED_UPGRADED" ? (
+                                <span className="bg-emerald-600 text-white px-2 py-0.5 rounded text-[10px] font-extrabold uppercase">
+                                  Audited & Upgraded Pick
+                                </span>
+                              ) : item.action === "AUDITED_CONFIRMED" ? (
+                                <span className="bg-teal-600 text-white px-2 py-0.5 rounded text-[10px] font-extrabold uppercase">
+                                  5-Gate Confirmed Pick
+                                </span>
+                              ) : (
+                                <span className="bg-slate-900 text-white px-2 py-0.5 rounded text-[10px] font-extrabold uppercase">
+                                  Kept High-Confidence Pick
+                                </span>
+                              )}
+                              <span className="text-slate-400 font-medium text-[11px]">
+                                [{item.competition || item.league || "Domestic"}]
+                              </span>
+                            </div>
+
+                            <span className="text-sm font-extrabold text-slate-900 block">
+                              {item.home_team} vs {item.away_team}
+                            </span>
+
+                            <span className="text-slate-700 font-semibold mt-0.5 block">
+                              Selection: <strong>{item.market_name} — {item.selection_name}</strong> (Odds: {item.estimated_odds || item.odds})
+                            </span>
+
+                            {(item.h2h_summary || item.form_summary) && (
+                              <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
+                                {item.h2h_summary && (
+                                  <span className="text-[10px] font-bold bg-indigo-50 text-indigo-900 px-2 py-0.5 rounded border border-indigo-200">
+                                    📊 {item.h2h_summary}
+                                  </span>
+                                )}
+                                {item.form_summary && (
+                                  <span className="text-[10px] font-bold bg-emerald-50 text-emerald-900 px-2 py-0.5 rounded border border-emerald-200">
+                                    🔥 {item.form_summary}
+                                  </span>
+                                )}
+                              </div>
+                            )}
+
+                            {item.reason && (
+                              <p className="text-[11px] text-emerald-800 bg-emerald-50 border border-emerald-200/80 px-2.5 py-1 rounded-lg mt-1.5 font-medium flex items-center gap-1.5">
+                                <CheckCircle className="w-3.5 h-3.5 text-emerald-600 flex-shrink-0" />
+                                <span>{item.reason}</span>
+                              </p>
+                            )}
+
+                            {item.replaced_original && (
+                              <p className="text-[11px] text-indigo-700 mt-1 font-medium">
+                                Replaced original pick ({item.replaced_original.home_team} vs {item.replaced_original.away_team} — {item.replaced_original.selection_name}): {item.replaced_original.reason}
+                              </p>
+                            )}
+                          </div>
+
+                          <div className="flex items-center justify-between sm:justify-end gap-4 flex-shrink-0">
+                            <div className="text-right">
+                              <span className="text-[10px] text-slate-400 block font-medium">Model Probability</span>
+                              <span className="text-base font-extrabold text-emerald-700">
+                                {Math.round((item.estimated_prob || 0.7) * 100)}% Win Chance
+                              </span>
+                            </div>
+
+                            <button
+                              onClick={() => handleRemoveDraftedSelection(idx)}
+                              className="p-2 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 border border-transparent hover:border-rose-200 transition-all"
+                              title="Remove this selection from the re-edited slip"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
+                        </div>
+                      ))}
                     </div>
                   </div>
                 );
               })()}
-
-              {/* Final Re-Edited Selections List */}
-              <div className="space-y-3">
-                <h4 className="text-xs font-extrabold text-slate-700 uppercase tracking-wider px-1">
-                  Final Re-Edited Ticket ({reEditResult.final_selections?.length} Selections)
-                </h4>
-
-                {reEditResult.final_selections?.map((item, idx) => (
-                  <div
-                    key={idx}
-                    className={`p-4 rounded-xl border flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs ${
-                      item.action === "REPLACEMENT"
-                        ? "bg-indigo-50/50 border-indigo-200"
-                        : "bg-slate-50 border-slate-200"
-                    }`}
-                  >
-                    <div>
-                      <div className="flex items-center gap-2 mb-1">
-                        {item.action === "AUDITED_UPGRADED" ? (
-                          <span className="bg-emerald-600 text-white px-2 py-0.5 rounded text-[10px] font-extrabold uppercase">
-                            Audited & Upgraded Pick
-                          </span>
-                        ) : item.action === "AUDITED_CONFIRMED" ? (
-                          <span className="bg-teal-600 text-white px-2 py-0.5 rounded text-[10px] font-extrabold uppercase">
-                            5-Gate Confirmed Pick
-                          </span>
-                        ) : (
-                          <span className="bg-slate-900 text-white px-2 py-0.5 rounded text-[10px] font-extrabold uppercase">
-                            Kept High-Confidence Pick
-                          </span>
-                        )}
-                        <span className="text-slate-400 font-medium text-[11px]">
-                          [{item.competition || item.league || "Domestic"}]
-                        </span>
-                      </div>
-
-                      <span className="text-sm font-extrabold text-slate-900 block">
-                        {item.home_team} vs {item.away_team}
-                      </span>
-
-                      <span className="text-slate-700 font-semibold mt-0.5 block">
-                        Selection: <strong>{item.market_name} — {item.selection_name}</strong> (Odds: {item.estimated_odds || item.odds})
-                      </span>
-
-                      {(item.h2h_summary || item.form_summary) && (
-                        <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
-                          {item.h2h_summary && (
-                            <span className="text-[10px] font-bold bg-indigo-50 text-indigo-900 px-2 py-0.5 rounded border border-indigo-200">
-                              📊 {item.h2h_summary}
-                            </span>
-                          )}
-                          {item.form_summary && (
-                            <span className="text-[10px] font-bold bg-emerald-50 text-emerald-900 px-2 py-0.5 rounded border border-emerald-200">
-                              🔥 {item.form_summary}
-                            </span>
-                          )}
-                        </div>
-                      )}
-
-                      {item.reason && (
-                        <p className="text-[11px] text-emerald-800 bg-emerald-50 border border-emerald-200/80 px-2.5 py-1 rounded-lg mt-1.5 font-medium flex items-center gap-1.5">
-                          <CheckCircle className="w-3.5 h-3.5 text-emerald-600 flex-shrink-0" />
-                          <span>{item.reason}</span>
-                        </p>
-                      )}
-
-                      {item.replaced_original && (
-                        <p className="text-[11px] text-indigo-700 mt-1 font-medium">
-                          Replaced original pick ({item.replaced_original.home_team} vs {item.replaced_original.away_team} — {item.replaced_original.selection_name}): {item.replaced_original.reason}
-                        </p>
-                      )}
-                    </div>
-
-                    <div className="flex items-center justify-between sm:justify-end gap-4 flex-shrink-0">
-                      <div className="text-right">
-                        <span className="text-[10px] text-slate-400 block font-medium">Model Probability</span>
-                        <span className="text-base font-extrabold text-emerald-700">
-                          {Math.round((item.estimated_prob || 0.7) * 100)}% Win Chance
-                        </span>
-                      </div>
-
-                      {/* Cancel X / Remove Fixture Button */}
-                      <button
-                        onClick={() => handleRemoveDraftedSelection(idx)}
-                        className="p-2 rounded-xl bg-white hover:bg-rose-100 text-slate-400 hover:text-rose-600 border border-slate-200 hover:border-rose-300 transition-all shadow-sm flex items-center justify-center"
-                        title="Cancel / Remove game from drafted ticket"
-                      >
-                        <X className="w-4 h-4" />
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
 
               {/* Original Selections Audit Status */}
               <div className="space-y-3 pt-4 border-t border-slate-100">

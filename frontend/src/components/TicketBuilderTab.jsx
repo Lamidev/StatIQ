@@ -49,6 +49,9 @@ export default function TicketBuilderTab() {
   const [targetMode, setTargetMode] = useState("ODDS"); // "ODDS" or "GAMES"
   const [targetGames, setTargetGames] = useState(10);
   const [customGamesInput, setCustomGamesInput] = useState("10");
+  const [numTickets, setNumTickets] = useState(1); // 1, 2, 3 (Multi-Ticket Portfolio)
+  const [activePortfolioIndex, setActivePortfolioIndex] = useState(0);
+  const [portfolioTickets, setPortfolioTickets] = useState(null);
   const [selectedLeagues, setSelectedLeagues] = useState(ALL_TOP_LEAGUE_CODES);
   const [dateWindow, setDateWindow] = useState("TODAY");
   const [selectedFlexCut, setSelectedFlexCut] = useState("OFF");
@@ -432,14 +435,14 @@ export default function TicketBuilderTab() {
       date_window: dateWindow,
       flex_cut: selectedFlexCut === "OFF" ? 0 : parseInt(selectedFlexCut) || 0,
       mode: "ACCUMULATOR",
+      num_tickets: numTickets,
+      overlap_mode: "ZERO_OVERLAP",
       use_live_odds: true,
       strict_mode: strictMode,
       reshuffle_seed: Date.now(),
       risk_profile: riskProfile,
       allowed_market_categories: selectedMarketCategories
     };
-
-
 
     const res = await buildAiTicket(payload);
     setLoading(false);
@@ -462,13 +465,45 @@ export default function TicketBuilderTab() {
       return;
     }
 
-    if (res.ticket) {
-      const scopeLabel = selectedLeagues.includes("ALL") ? "All Top Leagues" : selectedLeagues.join(", ");
+    const scopeLabel = selectedLeagues.includes("ALL") ? "All Top Leagues" : selectedLeagues.join(", ");
+
+    if (res.portfolio_tickets && res.portfolio_tickets.length > 1) {
+      setPortfolioTickets(res.portfolio_tickets);
+      setActivePortfolioIndex(0);
+
+      const scenarios = res.portfolio_tickets.map((t, tIdx) => ({
+        scenario_id: `STATIQ-PORTFOLIO-SLIP-${tIdx + 1}`,
+        ticket_index: tIdx + 1,
+        scope_label: `${scopeLabel} · Slip #${tIdx + 1} (${t.approved_legs.length} Legs)`,
+        gameweek_label: dateWindow,
+        target_odds: finalOddsGoal,
+        accumulated_odds: t.accumulated_odds,
+        independence_assumption_probability: t.combined_probability,
+        correlation_adjusted_probability: t.correlation_adjusted_probability,
+        confidence_tier: t.confidence_tier,
+        recommended_stake_pct: t.recommended_stake_pct,
+        selections: t.approved_legs,
+        rejected_picks: t.rejected_picks,
+        booking_code: t.booking_code,
+        share_url: t.share_url,
+        total_evaluated: t.total_evaluated,
+        decision_audit_summary: t.decision_audit_summary
+      }));
+
+      setResult({
+        ticket: res.ticket,
+        portfolio_summary: res.portfolio_summary,
+        scenarios: scenarios
+      });
+    } else if (res.ticket) {
+      setPortfolioTickets(null);
+      setActivePortfolioIndex(0);
       setResult({
         ticket: res.ticket,
         scenarios: [
           {
             scenario_id: `STATIQ-${targetMode === "GAMES" ? `${targetGames}G` : `${finalOddsGoal.toFixed(0)}X`}-${dateWindow}`,
+            ticket_index: 1,
             scope_label: `${scopeLabel} · ${dateWindow}`,
             gameweek_label: dateWindow,
             target_odds: finalOddsGoal,
@@ -1801,6 +1836,47 @@ export default function TicketBuilderTab() {
                   </div>
                 </div>
 
+                {/* Multi-Ticket Portfolio Strategy */}
+                <div className="pt-2">
+                  <div className="flex items-center justify-between mb-2">
+                    <label className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider block">
+                      Multi-Ticket Portfolio Builder (Zero-Overlap Mode)
+                    </label>
+                    <span className="text-[9px] font-extrabold uppercase px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 border border-emerald-300">
+                      🛡️ HEDGE & DIVERSIFY
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                    {[
+                      { id: 1, label: "1 Ticket", desc: "Single optimal ticket" },
+                      { id: 2, label: "2 Tickets Portfolio", desc: "2 distinct non-overlapping slips" },
+                      { id: 3, label: "3 Tickets Portfolio", desc: "3 diversified slips (Max coverage)" },
+                    ].map(nt => (
+                      <div
+                        key={nt.id}
+                        onClick={() => setNumTickets(nt.id)}
+                        className={`p-3 rounded-xl border cursor-pointer transition-all ${
+                          numTickets === nt.id
+                            ? "bg-slate-900 border-slate-900 text-white shadow-sm"
+                            : "bg-slate-50 border-slate-200 text-slate-800 hover:bg-slate-100"
+                        }`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <p className="text-xs font-extrabold">{nt.label}</p>
+                          {nt.id > 1 && (
+                            <span className={`text-[9px] font-black uppercase px-1.5 py-0.5 rounded ${
+                              numTickets === nt.id ? "bg-emerald-400 text-slate-950" : "bg-emerald-100 text-emerald-800"
+                            }`}>
+                              Zero Overlap
+                            </span>
+                          )}
+                        </div>
+                        <p className={`text-[10px] mt-0.5 ${numTickets === nt.id ? "text-slate-400" : "text-slate-500"}`}>{nt.desc}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
                 {/* Risk Strategy Profile */}
                 <div className="pt-2">
                   <label className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider block mb-2">Risk Strategy Profile</label>
@@ -2145,7 +2221,55 @@ export default function TicketBuilderTab() {
       {/* MODE 1 & MODE 3 RESULTS */}
       {(builderMode === "ACCUMULATOR" || builderMode === "TODAY_GAMES") && result && (
         <div className="space-y-6">
-          {result.scenarios?.map((scn) => {
+          {/* Multi-Ticket Portfolio Navigation Bar */}
+          {result.scenarios && result.scenarios.length > 1 && (
+            <div className="bg-slate-900 text-white p-4 rounded-2xl border border-slate-700 shadow-md space-y-3">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse" />
+                  <span className="text-xs font-black uppercase tracking-wider text-emerald-400">
+                    StatIQ Multi-Ticket Portfolio ({result.scenarios.length} Diversified Slips)
+                  </span>
+                </div>
+                <span className="text-[10px] font-extrabold uppercase px-2.5 py-1 rounded-full bg-emerald-950 text-emerald-300 border border-emerald-500/40">
+                  🛡️ 100% Zero-Overlap &bull; Zero Correlated Failure
+                </span>
+              </div>
+
+              {/* Tab Selectors for each ticket in the portfolio */}
+              <div className="flex items-center gap-2 overflow-x-auto pb-1">
+                {result.scenarios.map((sc, scIdx) => (
+                  <button
+                    key={scIdx}
+                    type="button"
+                    onClick={() => setActivePortfolioIndex(scIdx)}
+                    className={`px-4 py-2 rounded-xl text-xs font-extrabold transition-all flex items-center gap-2 flex-shrink-0 cursor-pointer ${
+                      activePortfolioIndex === scIdx
+                        ? "bg-white text-slate-950 shadow-md scale-[1.02]"
+                        : "bg-slate-800 text-slate-300 hover:bg-slate-700"
+                    }`}
+                  >
+                    <span>🎫 Portfolio Slip #{scIdx + 1}</span>
+                    <span className={`text-[10px] font-black px-1.5 py-0.5 rounded ${
+                      activePortfolioIndex === scIdx ? "bg-slate-950 text-emerald-400" : "bg-slate-900 text-slate-400"
+                    }`}>
+                      ~{sc.accumulated_odds}x ({sc.selections?.length} Legs)
+                    </span>
+                    {sc.booking_code && (
+                      <span className="text-[9px] font-mono text-emerald-500 bg-emerald-950/60 px-1 py-0.5 rounded border border-emerald-800/40">
+                        {sc.booking_code}
+                      </span>
+                    )}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {(result.scenarios && result.scenarios.length > 1
+            ? [result.scenarios[activePortfolioIndex] || result.scenarios[0]]
+            : result.scenarios
+          )?.map((scn) => {
             const code = generatedCodes[scn.scenario_id];
 
             if (scn.error) {

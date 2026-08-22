@@ -210,7 +210,7 @@ class PredictionGateService:
                     odds_v = float(out.get("odds") or 1.20)
                     prob_v = float(out.get("implied_probability") or (1.0 / odds_v if odds_v > 0 else 0.0))
 
-                    if o_id == "9" and (odds_analysis.favorite_team == "HOME" or p_model_h >= 0.40):
+                    if o_id == "9" and (odds_analysis.favorite_team == "HOME" or (p_model_h >= 0.45 and odds_analysis.favorite_team != "AWAY")):
                         candidates.append(MarketOption(
                             market_name="Double Chance",
                             selection_name=f"{h_name} or Draw (1X)",
@@ -223,7 +223,7 @@ class PredictionGateService:
                             safety_score=prob_v * 100 - (odds_v - 1.0) * 8,
                             confidence_tier="ELITE" if prob_v >= 0.75 else "HIGH"
                         ))
-                    elif o_id == "11" and (odds_analysis.favorite_team == "AWAY" or p_model_a >= 0.40):
+                    elif o_id == "11" and (odds_analysis.favorite_team == "AWAY" or (p_model_a >= 0.45 and odds_analysis.favorite_team != "HOME")):
                         candidates.append(MarketOption(
                             market_name="Double Chance",
                             selection_name=f"Draw or {a_name} (X2)",
@@ -235,6 +235,19 @@ class PredictionGateService:
                             market_probability=prob_v,
                             safety_score=prob_v * 100 - (odds_v - 1.0) * 8,
                             confidence_tier="ELITE" if prob_v >= 0.75 else "HIGH"
+                        ))
+                    elif o_id == "10" and p_model_o15 >= 0.75 and odds_analysis.prob_draw_true <= 0.24:
+                        candidates.append(MarketOption(
+                            market_name="Double Chance",
+                            selection_name=f"{h_name} or {a_name} (12)",
+                            odds=odds_v,
+                            market_id="10",
+                            outcome_id="10",
+                            specifier=spec,
+                            model_probability=prob_v,
+                            market_probability=prob_v,
+                            safety_score=prob_v * 100 - (odds_v - 1.0) * 8,
+                            confidence_tier="ELITE" if prob_v >= 0.78 else "HIGH"
                         ))
 
             # Market 18: Over / Under

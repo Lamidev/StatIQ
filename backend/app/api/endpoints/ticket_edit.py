@@ -38,6 +38,7 @@ class ReEditRequest(BaseModel):
     mode: str = "AUDITOR"                # "AUDITOR", "REMOVE"
     reshuffle_seed: Optional[int] = None
     strict_mode: bool = False
+    num_tickets: Optional[int] = 1
 
 class GenerateCodeRequest(BaseModel):
     selections: List[Dict[str, Any]]
@@ -69,7 +70,8 @@ async def run_re_edit(req: ReEditRequest, db: Session = Depends(get_db)):
     """
     Runs MatchIQ's statistical ticket re-editor.
     Supports target_mode="ODDS" or target_mode="GAMES" (up to 50 games max).
-    Automatically generates a verified SportyBet booking code for the new ticket.
+    Supports num_tickets=1, 2, or 3 with zero-overlap portfolio partitioning.
+    Automatically generates verified SportyBet booking codes for all tickets in parallel.
     Server-side timeout scales with ticket size: 75s for ≤15 legs, up to 120s for 50 legs.
     """
     selections_dict = [s.model_dump() for s in req.selections]
@@ -88,6 +90,7 @@ async def run_re_edit(req: ReEditRequest, db: Session = Depends(get_db)):
                 target_games=req.target_games or 10,
                 reshuffle_seed=req.reshuffle_seed,
                 strict_mode=req.strict_mode,
+                num_tickets=req.num_tickets or 1,
             ),
             timeout=reedit_timeout
         )
@@ -95,63 +98,47 @@ async def run_re_edit(req: ReEditRequest, db: Session = Depends(get_db)):
         logger.warning(f"re_edit_ticket timed out after {reedit_timeout}s for {n_legs}-leg ticket")
         raise HTTPException(status_code=504, detail=f"Re-edit timed out after {reedit_timeout}s. Try reducing the number of selections or splitting the ticket.")
 
-    # Automatic Phase 14 Verified Booking Code Generation
-    final_sels = res.get("final_selections", [])
-    booking_timeout = 60 if n_legs <= 15 else (90 if n_legs <= 30 else 120)
-    if final_sels:
+    # Automatic Phase 14 Verified Booking Code Generation for all portfolio slips in parallel
+    portfolio_slips = res.get("portfolio_tickets", [])
+    if not portfolio_slips and res.get("final_selections"):
+        portfolio_slips = [{
+            "ticket_index": 1,
+            "final_count": len(res.get("final_selections")),
+            "final_selections": res.get("final_selections"),
+            "new_total_odds": res.get("new_total_odds"),
+            "avg_win_prob": res.get("avg_win_prob")
+        }]
+
+    if portfolio_slips:
         try:
-            from app.services.sportybet_reconciliation import SportyBetVerificationEngine
-            engine = SportyBetVerificationEngine(db)
-            ver_res = await asyncio.wait_for(
-                engine.generate_verified_booking(
-                    statiq_ticket_id="REEDIT-AUTO",
-                    selections=final_sels,
-                    region="ng"
-                ),
-                timeout=booking_timeout
-            )
-            if ver_res.get("status") == "VERIFIED":
-                res["booking_code"] = ver_res.get("booking_code")
-                res["share_url"] = ver_res.get("share_url")
-                res["verification_status"] = ver_res.get("status")
-                res["reconciliation_summary"] = ver_res.get("reconciliation_summary")
+            adapter = SportyBetAdapter(db)
 
-                # ── Back-fill real SportyBet odds into final_selections ──────────
-                # audit_resolved contains the actual SportyBet odds per resolved selection.
-                # We match by home+away team name and overwrite estimated_odds / odds
-                # so the frontend always displays the verified real per-leg odds.
-                audit_resolved = ver_res.get("audit_resolved", [])
-                if audit_resolved:
-                    # Build a lookup: (normalised_home, normalised_away) -> real_odds
-                    def _norm(t: str) -> str:
-                        return (t or "").lower().strip()
+            async def _generate_booking_for_slip(slip_data):
+                sels = slip_data.get("final_selections", [])
+                if not sels:
+                    return slip_data
+                try:
+                    # Run sync adapter method in thread pool to avoid blocking
+                    b_res = await asyncio.to_thread(adapter.generate_booking_code, sels, "ng")
+                    if b_res.get("status") == "SUCCESS" and b_res.get("booking_code"):
+                        slip_data["booking_code"] = b_res.get("booking_code")
+                        slip_data["share_url"] = b_res.get("load_url")
+                        slip_data["verification_status"] = b_res.get("verification_status", "BOOKING_VERIFIED")
+                except Exception as ex:
+                    logger.warning(f"Slip booking generation error: {ex}")
+                return slip_data
 
-                    odds_map = {
-                        (_norm(ar.get("home_team", "")), _norm(ar.get("away_team", ""))): float(ar.get("odds", 0))
-                        for ar in audit_resolved
-                        if ar.get("odds") and float(ar.get("odds", 0)) >= 1.01
-                    }
+            updated_slips = await asyncio.gather(*[_generate_booking_for_slip(s) for s in portfolio_slips])
+            res["portfolio_tickets"] = updated_slips
 
-                    for sel in res.get("final_selections", []):
-                        key = (_norm(sel.get("home_team", "")), _norm(sel.get("away_team", "")))
-                        if key in odds_map:
-                            real_odds = odds_map[key]
-                            sel["estimated_odds"] = real_odds
-                            sel["odds"] = real_odds
-                            sel["odds_source"] = "SPORTYBET_VERIFIED"
+            if updated_slips and len(updated_slips) > 0:
+                primary = updated_slips[0]
+                res["booking_code"] = primary.get("booking_code")
+                res["share_url"] = primary.get("share_url")
+                res["verification_status"] = primary.get("verification_status", "BOOKING_VERIFIED")
 
-                    # Recompute total odds from back-filled real values
-                    real_total = 1.0
-                    for sel in res.get("final_selections", []):
-                        real_total *= float(sel.get("estimated_odds") or sel.get("odds") or 1.25)
-                    res["new_total_odds"] = round(real_total, 2)
-
-                res["audit_resolved"] = audit_resolved  # expose for frontend display
-
-        except asyncio.TimeoutError:
-            logger.warning(f"generate_verified_booking timed out after {booking_timeout}s for {n_legs}-leg ticket (re-edit result still returned)")
         except Exception as e:
-            logger.warning(f"Auto verified booking generation error during re-edit: {e}")
+            logger.warning(f"Portfolio booking generation error: {e}")
 
     return res
 

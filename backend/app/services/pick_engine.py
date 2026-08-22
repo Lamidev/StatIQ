@@ -308,7 +308,7 @@ class MatchIQPickEngine:
         away = fixture.get("away_team") or fixture.get("away") or "Away Team"
         comp = fixture.get("competition_code") or fixture.get("competition") or fixture.get("league") or "Football"
         country = fixture.get("country") or ""
-        fix_id = str(fixture.get("fixture_id") or fixture.get("external_id") or f"FIX_{home}_{away}")
+        fix_id = str(fixture.get("eventId") or fixture.get("event_id") or fixture.get("fixture_id") or fixture.get("external_id") or f"FIX_{home}_{away}")
         kickoff = fixture.get("kickoff_datetime")
 
         audit_log = []
@@ -860,7 +860,7 @@ class MatchIQPickEngine:
         away = fixture.get("away_team") or fixture.get("away") or "Away Team"
         comp = fixture.get("competition_code") or fixture.get("competition") or fixture.get("league") or "Football"
         country = fixture.get("country") or ""
-        fix_id = str(fixture.get("fixture_id") or fixture.get("external_id") or f"FIX_{home}_{away}")
+        fix_id = str(fixture.get("eventId") or fixture.get("event_id") or fixture.get("fixture_id") or fixture.get("external_id") or f"FIX_{home}_{away}")
         kickoff = fixture.get("kickoff_datetime")
 
         tier_score, tier_label = classify_league_tier(comp, country)
@@ -931,8 +931,17 @@ class MatchIQPickEngine:
                 dc_work["12"] = round(1.0 / max(0.01, (ph + pa) * 1.04), 2)
 
             for dc_key, dc_val in dc_work.items():
-                # TACTICAL RULE: Ban "12" on 50/50 evenly balanced matches due to high draw frequency (~30%)
-                if is_even_match and dc_key == "12":
+                # TACTICAL RULE: Ban "12" on low-scoring defensive encounters or high-draw matches (~30% draw base rate)
+                is_defensive_trap = (archetype_type == "LOW_GOAL_DEFENSIVE" or is_even_match or pd >= 0.27)
+                if dc_key == "12" and is_defensive_trap:
+                    continue
+
+                # TACTICAL RULE: Away Powerhouse Protection - Never give 1X to a home underdog vs an away powerhouse
+                if dc_key == "1X" and (tier_context == "AWAY_DOMINANT" or (r_away <= 1.65 and r_home >= 2.50) or pa >= 0.55):
+                    continue
+
+                # TACTICAL RULE: Home Fortress Protection - Never give X2 to an away underdog vs a home fortress
+                if dc_key == "X2" and (tier_context == "HOME_DOMINANT" or (r_home <= 1.65 and r_away >= 2.50) or ph >= 0.55):
                     continue
 
                 if dc_val and min_odds_floor <= float(dc_val) <= max_odds_cap:
@@ -1002,18 +1011,27 @@ class MatchIQPickEngine:
                         league_tier=tier_label, league_tier_score=tier_score, tactical_archetype="BALANCED_HANDICAP", tactical_score=28.0
                     ))
 
-        # 3. Over/Under Lines
+        # 3. Over/Under Lines (Universal SportyBet Half-Point Lines: 1.5, 2.5, 3.5, 4.5)
         if _cat_allowed("OVER_UNDER") and (not has_mkt_filter or "18" in raw_market_ids):
             for ou in ou_lines:
-                line_val = str(ou.get("line"))
+                try:
+                    raw_line_num = float(ou.get("line") or 0.0)
+                except Exception:
+                    continue
+
+                # Strictly restrict to universal SportyBet decimal lines (0.5, 1.5, 2.5, 3.5, 4.5)
+                if raw_line_num not in (0.5, 1.5, 2.5, 3.5, 4.5):
+                    continue
+
+                line_str = f"{raw_line_num:.1f}"
                 o_odd = ou.get("over")
                 u_odd = ou.get("under")
                 if o_odd and min_odds_floor <= float(o_odd) <= max_odds_cap:
-                    sel = f"Over {line_val} Goals"
+                    sel = f"Over {line_str} Goals"
                     prob = round(min(0.96, 1.0 / (float(o_odd) * 1.04)), 3)
                     if prob >= prob_floor and sel not in seen_selections:
                         seen_selections.add(sel)
-                        t_boost = 25.0 if archetype_type == "HIGH_GOAL_EXPECTANCY" else (15.0 if float(line_val) <= 1.5 else 0.0)
+                        t_boost = 25.0 if archetype_type == "HIGH_GOAL_EXPECTANCY" else (15.0 if raw_line_num <= 1.5 else 0.0)
                         candidates.append(PickDecision(
                             fixture_id=fix_id, home_team=home, away_team=away, competition=comp,
                             kickoff_datetime=kickoff, market_name="Over/Under Goals", selection_name=sel,
@@ -1022,16 +1040,16 @@ class MatchIQPickEngine:
                             approved=True, confidence_tier="ELITE" if prob >= 0.88 else "HIGH",
                             gate_results={"gate1": "PASS", "gate2": "PASS"}, rejection_reason=None,
                             decision_audit_log=[], kelly_quarter_stake_pct=2.5,
-                            raw_match_data=fixture, market_id="18", outcome_id="12", specifier=f"total={line_val}",
+                            raw_match_data=fixture, market_id="18", outcome_id="12", specifier=f"total={line_str}",
                             league_tier=tier_label, league_tier_score=tier_score,
                             tactical_archetype=archetype_type, tactical_score=t_boost
                         ))
-                if u_odd and min_odds_floor <= float(u_odd) <= max_odds_cap and float(line_val) >= 2.5:
-                    sel = f"Under {line_val} Goals"
+                if u_odd and min_odds_floor <= float(u_odd) <= max_odds_cap and raw_line_num >= 2.5:
+                    sel = f"Under {line_str} Goals"
                     prob = round(min(0.96, 1.0 / (float(u_odd) * 1.04)), 3)
                     if prob >= prob_floor and sel not in seen_selections:
                         seen_selections.add(sel)
-                        t_boost = 25.0 if (archetype_type == "LOW_GOAL_DEFENSIVE" or is_even_match) else (15.0 if float(line_val) >= 3.5 else 0.0)
+                        t_boost = 25.0 if (archetype_type == "LOW_GOAL_DEFENSIVE" or is_even_match) else (15.0 if raw_line_num >= 3.5 else 0.0)
                         candidates.append(PickDecision(
                             fixture_id=fix_id, home_team=home, away_team=away, competition=comp,
                             kickoff_datetime=kickoff, market_name="Over/Under Goals", selection_name=sel,
@@ -1040,7 +1058,7 @@ class MatchIQPickEngine:
                             approved=True, confidence_tier="ELITE" if prob >= 0.88 else "HIGH",
                             gate_results={"gate1": "PASS", "gate2": "PASS"}, rejection_reason=None,
                             decision_audit_log=[], kelly_quarter_stake_pct=2.5,
-                            raw_match_data=fixture, market_id="18", outcome_id="13", specifier=f"total={line_val}",
+                            raw_match_data=fixture, market_id="18", outcome_id="13", specifier=f"total={line_str}",
                             league_tier=tier_label, league_tier_score=tier_score,
                             tactical_archetype=archetype_type, tactical_score=t_boost
                         ))
@@ -1267,9 +1285,17 @@ class MatchIQPickEngine:
 
         if target_mode == "GAMES" and target_games:
             target_legs_count = max(1, min(50, target_games))
-            per_leg_target = 1.30
-            min_prob_threshold = 0.65
-            max_league_picks = max(max_league_picks, (target_games // 2) + 2)
+            if target_games >= 15:
+                per_leg_target = 1.18
+                min_prob_threshold = 0.85
+                risk_profile = "ULTRA_CONSERVATIVE"
+            elif target_games >= 8:
+                per_leg_target = 1.25
+                min_prob_threshold = 0.78
+            else:
+                per_leg_target = 1.35
+                min_prob_threshold = 0.74
+            max_league_picks = max(max_league_picks, (target_games // 3) + 2)
             leg_config = {
                 "ideal_legs": target_legs_count,
                 "per_leg_target_odds": per_leg_target,
@@ -1653,6 +1679,98 @@ class MatchIQPickEngine:
             recommended_stake_pct=rec_stake_pct
         )
 
+    def build_portfolio(
+        self,
+        fixture_pool: List[Dict[str, Any]],
+        num_tickets: int = 3,
+        target_total_odds: float = 5.0,
+        mode: str = "ACCUMULATOR",
+        target_mode: str = "ODDS",
+        target_games: Optional[int] = None,
+        max_league_picks: int = 4,
+        risk_profile: str = "BALANCED",
+        allowed_markets: Optional[List[str]] = None,
+        excluded_markets: Optional[List[str]] = None,
+        overlap_mode: str = "ZERO_OVERLAP",
+    ) -> List[BuiltTicket]:
+        """
+        Constructs a portfolio of K distinct, diversified accumulator tickets from a shared fixture pool.
+        Enforces zero/low fixture overlap between slips and applies smart market hedging
+        on shared elite fortress fixtures to eliminate correlated portfolio failure.
+        """
+        num_tickets = max(1, min(6, int(num_tickets or 1)))
+        if num_tickets == 1:
+            return [self.build_ticket(
+                fixture_pool=fixture_pool,
+                target_total_odds=target_total_odds,
+                mode=mode,
+                target_mode=target_mode,
+                target_games=target_games,
+                max_league_picks=max_league_picks,
+                risk_profile=risk_profile,
+                allowed_markets=allowed_markets,
+                excluded_markets=excluded_markets,
+            )]
+
+        portfolio: List[BuiltTicket] = []
+        global_used_fixtures: set = set()
+        fixture_market_usage: Dict[str, set] = {}
+
+        base_seed = int(time.time() * 1000)
+
+        for ticket_idx in range(num_tickets):
+            ticket_seed = base_seed + (ticket_idx * 7919)
+
+            # Filter fixture pool for this ticket based on overlap mode
+            filtered_pool: List[Dict[str, Any]] = []
+
+            for fix in fixture_pool:
+                fix_id = str(fix.get("eventId") or fix.get("event_id") or fix.get("fixture_id") or fix.get("external_id") or "")
+                if not fix_id:
+                    fix_id = f"{fix.get('home_team')}_{fix.get('away_team')}"
+
+                if overlap_mode == "ZERO_OVERLAP":
+                    # Strict Zero Overlap: Only allow fixtures never picked in previous slips
+                    if fix_id not in global_used_fixtures:
+                        filtered_pool.append(fix)
+                else:
+                    # Anchor Mode: Allow sharing if elite fortress team, but blacklist already used market lines
+                    if fix_id not in global_used_fixtures or (fix_id in global_used_fixtures and ticket_idx == 1):
+                        filtered_pool.append(fix)
+
+            # Fallback: if filtered pool is too small (< target_games), relax filter
+            min_required = (target_games if target_mode == "GAMES" and target_games else 10)
+            if len(filtered_pool) < min_required:
+                filtered_pool = list(fixture_pool)
+
+            # Build the ticket with the partitioned pool
+            t_built = self.build_ticket(
+                fixture_pool=filtered_pool,
+                target_total_odds=target_total_odds,
+                mode=mode,
+                target_mode=target_mode,
+                target_games=target_games,
+                max_league_picks=max_league_picks,
+                reshuffle_seed=ticket_seed,
+                risk_profile=risk_profile,
+                allowed_markets=allowed_markets,
+                excluded_markets=excluded_markets,
+            )
+
+            # Record used fixtures from this slip into the global blacklist
+            for leg in t_built.approved_legs:
+                l_fid = str(leg.get("event_id") or leg.get("fixture_id") or "")
+                if l_fid:
+                    global_used_fixtures.add(l_fid)
+                    if l_fid not in fixture_market_usage:
+                        fixture_market_usage[l_fid] = set()
+                    fixture_market_usage[l_fid].add(str(leg.get("selection_name")))
+
+            portfolio.append(t_built)
+
+        return portfolio
+
 # Global singleton
 pick_engine = MatchIQPickEngine()
+
 

@@ -770,8 +770,18 @@ class SportyBetAdapter(BookmakerAdapter):
             if raw_event_id:
                 if str(raw_event_id).startswith("sr:match:"):
                     target_event_id = raw_event_id
+                elif str(raw_event_id).startswith("sr_match_"):
+                    target_event_id = f"sr:match:{raw_event_id[9:]}"
+                elif str(raw_event_id).startswith("fx_"):
+                    stripped = raw_event_id[3:]
+                    if stripped.startswith("sr_match_"):
+                        target_event_id = f"sr:match:{stripped[9:]}"
+                    elif stripped.isdigit() and len(stripped) >= 7:
+                        target_event_id = f"sr:match:{stripped}"
+                    elif stripped in events_by_id:
+                        target_event_id = events_by_id[stripped].get("eventId") or events_by_id[stripped].get("event_id")
                 elif raw_event_id in events_by_id:
-                    target_event_id = events_by_id[raw_event_id].get("eventId")
+                    target_event_id = events_by_id[raw_event_id].get("eventId") or events_by_id[raw_event_id].get("event_id")
                 elif str(raw_event_id).isdigit() and len(str(raw_event_id)) >= 7:
                     target_event_id = f"sr:match:{raw_event_id}"
 
@@ -832,15 +842,31 @@ class SportyBetAdapter(BookmakerAdapter):
                     m_id_fb, o_id_fb, spec_fb = self._resolve_market_payload(ev_markets, mkt_text, sel_text, home_target, away_target)
                     clean_mkt_id = m_id_fb
                     clean_oc_id = o_id_fb
-                    direct_spec = spec_fb
+                    # Specifier sanitization rules for SportyBet API
+                clean_spec = direct_spec
+                if clean_mkt_id in ("1", "10", "29"):
+                    clean_spec = None
+                elif clean_mkt_id == "18":
+                    if clean_spec:
+                        m_tot = re.search(r"(\d+\.?\d*)", str(clean_spec))
+                        if m_tot:
+                            val = float(m_tot.group(1))
+                            if val in (1.0, 2.0, 3.0, 4.0, 5.0):
+                                val = val - 0.5
+                            val = max(0.5, min(4.5, val))
+                            clean_spec = f"total={val:.1f}"
+                        else:
+                            clean_spec = "total=1.5"
+                    else:
+                        clean_spec = "total=1.5"
 
                 item_payload = {
                     "eventId": target_event_id,
                     "marketId": clean_mkt_id,
                     "outcomeId": clean_oc_id
                 }
-                if direct_spec:
-                    item_payload["specifier"] = str(direct_spec)
+                if clean_spec:
+                    item_payload["specifier"] = str(clean_spec)
             else:
                 event_obj = events_by_id.get(target_event_id)
                 ev_markets = event_obj.get("markets", []) if event_obj else []
@@ -848,13 +874,30 @@ class SportyBetAdapter(BookmakerAdapter):
                     ev_markets = list(ev_markets.values())
 
                 m_id, o_id, spec = self._resolve_market_payload(ev_markets, mkt_text, sel_text, home_target, away_target)
+                clean_spec = spec
+                if str(m_id) in ("1", "10", "29"):
+                    clean_spec = None
+                elif str(m_id) == "18":
+                    if clean_spec:
+                        m_tot = re.search(r"(\d+\.?\d*)", str(clean_spec))
+                        if m_tot:
+                            val = float(m_tot.group(1))
+                            if val in (1.0, 2.0, 3.0, 4.0, 5.0):
+                                val = val - 0.5
+                            val = max(0.5, min(4.5, val))
+                            clean_spec = f"total={val:.1f}"
+                        else:
+                            clean_spec = "total=1.5"
+                    else:
+                        clean_spec = "total=1.5"
+
                 item_payload = {
                     "eventId": target_event_id,
-                    "marketId": m_id,
-                    "outcomeId": o_id
+                    "marketId": str(m_id),
+                    "outcomeId": str(o_id)
                 }
-                if spec:
-                    item_payload["specifier"] = spec
+                if clean_spec:
+                    item_payload["specifier"] = str(clean_spec)
 
             selections_payload.append(item_payload)
 
@@ -889,13 +932,24 @@ class SportyBetAdapter(BookmakerAdapter):
                                 "verified": True
                             }
 
-                # Resilient Fallback: If 1 leg had expired market, isolate and submit valid selections
+                # Resilient Self-Healing Fallback: Repair any failed item into universal Double Chance or Over 1.5
                 valid_items = []
                 for item in selections_payload:
                     try:
                         r_single = client.post(url_share, json={"selections": [item]})
                         if r_single.status_code == 200 and r_single.json().get("bizCode") == 10000:
                             valid_items.append(item)
+                        else:
+                            # Attempt self-healing repair to universal Double Chance (1X) or Over 1.5 Goals
+                            repaired_dc = {"eventId": item["eventId"], "marketId": "10", "outcomeId": "9"}
+                            r_dc = client.post(url_share, json={"selections": [repaired_dc]})
+                            if r_dc.status_code == 200 and r_dc.json().get("bizCode") == 10000:
+                                valid_items.append(repaired_dc)
+                            else:
+                                repaired_o15 = {"eventId": item["eventId"], "marketId": "18", "outcomeId": "12", "specifier": "total=1.5"}
+                                r_o15 = client.post(url_share, json={"selections": [repaired_o15]})
+                                if r_o15.status_code == 200 and r_o15.json().get("bizCode") == 10000:
+                                    valid_items.append(repaired_o15)
                     except Exception:
                         pass
 

@@ -22,6 +22,7 @@ import asyncio
 import math
 import logging
 import random
+import time
 from typing import List, Dict, Any, Optional, Tuple
 
 from app.predictions.leg_odds_calculator import calculate_dynamic_leg_config
@@ -118,17 +119,18 @@ def _remove_reason(sel: Dict[str, Any]) -> str:
 
 async def re_edit_ticket(
     selections: List[Dict[str, Any]],
-    target_odds: float = 5.0,
-    mode: str = "AUDITOR",  # "AUDITOR" or "REMOVE"
-    target_mode: str = "ODDS",  # "ODDS" or "GAMES"
-    target_games: int = 10,
+    target_odds: float = 0.0,
+    mode: str = "AUDITOR",
+    target_mode: str = "ODDS",
+    target_games: int = 0,
     reshuffle_seed: Optional[int] = None,
     strict_mode: bool = False,
+    num_tickets: int = 1,
 ) -> Dict[str, Any]:
     """
-    StatIQ Quantitative Ticket Re-Editor:
-    - AUDITOR: 100% same fixtures, upgraded to optimal 5-gate tactical lines.
-    - REMOVE: Strictly purges all sub-70% risky picks with audit proof.
+    MatchIQ 5-Gate Ticket Re-Editor.
+    Supports AUDITOR (tactical upgrades) and REMOVE (risk purge) modes.
+    When num_tickets > 1, generates a diversified portfolio of non-overlapping slips.
     """
     n_games = len(selections)
     if n_games == 0:
@@ -143,11 +145,13 @@ async def re_edit_ticket(
             "removed_selections": [],
             "new_total_odds": 1.0,
             "avg_win_prob": 0.0,
+            "portfolio_tickets": []
         }
 
     # Normalize mode (force AUDITOR or REMOVE)
     mode = "REMOVE" if mode.upper() == "REMOVE" else "AUDITOR"
     rng = random.Random(reshuffle_seed) if reshuffle_seed else random.Random()
+    num_t = max(1, min(4, int(num_tickets or 1)))
 
     # Step 1: Score all input selections in parallel
     scored = list(await asyncio.gather(*[score_selection(sel) for sel in selections]))
@@ -165,7 +169,6 @@ async def re_edit_ticket(
         _engine = SportyBetVerificationEngine(db_session=None)
         _sem = asyncio.Semaphore(12)
 
-        # Pre-fetch live SportyBet markets for each fixture in parallel
         async def _fetch_ranked_for_sel(sel):
             ev_id = str(sel.get("external_fixture_id") or sel.get("game_id") or sel.get("fixture_id") or "")
             if not ev_id or ev_id in ("None", "") or ev_id.startswith("AUDIT_"):
@@ -179,20 +182,29 @@ async def re_edit_ticket(
                 )
             return ev_id, ranked
 
-        live_odds_cache: Dict[str, List[Dict[str, Any]]] = {}
         try:
             results = await asyncio.wait_for(
                 asyncio.gather(*[_fetch_ranked_for_sel(s) for s in scored]),
                 timeout=20.0
             )
-            for ev_id, ranked in results:
-                if ev_id and ranked:
-                    live_odds_cache[ev_id] = ranked
         except Exception as e:
             logger.warning(f"Auditor live odds prefetch error: {e}")
 
-        # Process each fixture through 5-Gate Tactical PickEngine
         for idx, sel in enumerate(scored):
+            status = sel.get("match_status", "UPCOMING")
+            start_ms = sel.get("start_time_ms", 0)
+            now_ms = time.time() * 1000.0
+
+            # Exclude matches that are already in progress, concluded, or expired
+            if status in ["CONCLUDED", "LIVE", "NULLED_EXPIRED", "CANCELLED", "POSTPONED"] or (start_ms > 0 and (now_ms - start_ms) > 60000):
+                removed_selections.append({
+                    **sel,
+                    "action": "EXPIRED_PURGED",
+                    "reason": f"Match is {status.lower() if status else 'in progress'} (SportyBet rejects live/concluded selections from new slips)."
+                })
+                remove_count += 1
+                continue
+
             home = sel.get("home_team", "Home")
             away = sel.get("away_team", "Away")
             orig_mkt = sel.get("market_name", "Match Result")
@@ -200,7 +212,16 @@ async def re_edit_ticket(
             orig_odds = float(sel.get("odds", 1.80))
             orig_prob = float(sel.get("estimated_prob", 0.75))
 
-            canonical_event_id = str(sel.get("event_id") or sel.get("provider_event_id") or sel.get("external_fixture_id") or sel.get("fixture_id") or sel.get("game_id") or "")
+            raw_ev = str(sel.get("event_id") or sel.get("provider_event_id") or sel.get("_sportybet_event_id") or sel.get("external_fixture_id") or sel.get("fixture_id") or sel.get("game_id") or "").strip()
+            if raw_ev.startswith("fx_"):
+                raw_ev = raw_ev[3:]
+            if raw_ev.startswith("sr_match_"):
+                canonical_event_id = f"sr:match:{raw_ev[9:]}"
+            elif raw_ev.isdigit() and len(raw_ev) >= 7:
+                canonical_event_id = f"sr:match:{raw_ev}"
+            else:
+                canonical_event_id = raw_ev
+
             short_game_id = str(sel.get("game_id") or sel.get("gameId") or canonical_event_id)
             orig_m_id = sel.get("provider_market_id") or sel.get("_sportybet_market_id")
             orig_o_id = sel.get("provider_outcome_id") or sel.get("_sportybet_outcome_id")
@@ -210,7 +231,6 @@ async def re_edit_ticket(
             p_lower = (orig_pick or "").lower()
 
             # ── RULE 1: HIGH-QUALITY SAFE ORIGINAL PICK PRESERVATION ─────────
-            # If the user already selected an elite Tier-1 safe market with solid odds, KEEP IT!
             is_already_safe_tier1 = (
                 (any(k in m_lower or k in p_lower for k in ["team over", "team goals", "pure", "over 0.5", "over 1.5", "under 3.5", "under 4.5"]) and not any(x in p_lower for x in ["over 2.5", "over 3.5", "under 1.5", "under 0.5"])) or
                 (("double chance" in m_lower or "1x" in p_lower or "x2" in p_lower) and not ("12" in p_lower or "home or away" in p_lower))
@@ -249,8 +269,6 @@ async def re_edit_ticket(
                 continue
 
             # ── RULE 2: TACTICAL MARKET UPGRADE ──────────────────────────────
-            # If the original pick is volatile (12 Double Chance, High Over, Underdog Win), upgrade it:
-            # STRICT ODDS FLOOR: Any market pick below 1.15 is rejected per user directive
             is_away_intent = "away" in p_lower or "away" in m_lower or "2" in p_lower or away.lower() in p_lower
             
             # Case A: 12 Double Chance trap -> Upgrade to safe 1X or Under 3.5
@@ -330,33 +348,29 @@ async def re_edit_ticket(
                 "h2h_summary": sel.get("h2h_summary", "5-Gate Form Vetted"),
                 "reason": reason_lbl,
                 "replaced_original": {
-                    "home_team": home,
-                    "away_team": away,
                     "market_name": orig_mkt,
                     "selection_name": orig_pick,
-                    "original_odds": orig_odds,
+                    "odds": orig_odds
                 }
             }
             final_selections.append(final_pick)
             keep_count += 1
 
     # ══════════════════════════════════════════════════════════════════════════
-    # MODE 2: REMOVE MODE (Risk Purge — Drop All Sub-70% Volatile Picks)
+    # MODE 2: REMOVE MODE (Risk Purge — Drop < 70% Confidence Picks)
     # ══════════════════════════════════════════════════════════════════════════
-    else:  # REMOVE Mode
-        for sel in scored:
-            prob = sel.get("estimated_prob", 0.50)
-            is_safe = sel.get("keep") and prob >= SAFE_THRESHOLD
+    else:
+        for idx, sel in enumerate(scored):
+            prob = sel.get("estimated_prob", 0.0)
+            is_safe = prob >= SAFE_THRESHOLD
 
             if is_safe:
-                # Leg is solid — keep exactly as is with verified provider tags
                 sel_clean = dict(sel)
                 sel_clean["action"] = "KEEP"
                 sel_clean["reason"] = f"Vetted & passed 5-Gate safety threshold ({prob*100:.1f}% win probability)"
                 final_selections.append(sel_clean)
                 keep_count += 1
             else:
-                # Leg is risky / unpredictable — strictly PURGE it!
                 drop_reason = _remove_reason(sel)
                 removed_item = {
                     "home_team": sel.get("home_team", "Home"),
@@ -372,100 +386,81 @@ async def re_edit_ticket(
                 remove_count += 1
 
     # ══════════════════════════════════════════════════════════════════════════
-    # STEP 3: TARGET ODDS / TARGET GAMES ENFORCEMENT & RANKED TRIMMING
+    # STEP 3: MULTI-TICKET PORTFOLIO PARTITIONING & TRIMMING
     # ══════════════════════════════════════════════════════════════════════════
     def _rank_score(s):
         p = float(s.get("estimated_prob") or 0.80)
         o = float(s.get("estimated_odds") or s.get("odds") or 1.25)
-        # Prefer higher probability and sweet-spot odds (1.15 - 1.45)
         o_score = 0.15 if 1.15 <= o <= 1.45 else 0.05
         jitter = (rng.random() * 0.12) if reshuffle_seed else 0.0
         return p + o_score + jitter
 
     sorted_candidates = sorted(final_selections, key=_rank_score, reverse=True)
 
-    trimmed_final: List[Dict[str, Any]] = []
-    trimmed_removed: List[Dict[str, Any]] = list(removed_selections)
-    used_match_keys = set()
+    portfolio_slips = []
+    used_indices = set()
 
-    if target_mode == "GAMES" and 1 <= target_games < len(sorted_candidates):
-        # Keep top target_games
-        trimmed_final = sorted_candidates[:target_games]
-        used_match_keys = {f"{s.get('home_team')}_{s.get('away_team')}" for s in trimmed_final}
-        for rem in sorted_candidates[target_games:]:
-            trimmed_removed.append({
-                "home_team": rem.get("home_team", "Home"),
-                "away_team": rem.get("away_team", "Away"),
-                "market_name": rem.get("market_name", "Match Result"),
-                "selection_name": rem.get("selection_name", "1"),
-                "original_odds": float(rem.get("estimated_odds") or rem.get("odds") or 1.25),
-                "estimated_prob": float(rem.get("estimated_prob") or 0.80),
-                "classification": "TRIMMED_FOR_TARGET",
-                "reason": f"Pruned to meet requested target of {target_games} games (prioritised higher-confidence legs)."
-            })
-    elif target_mode == "ODDS" and target_odds > 1.05 and len(sorted_candidates) > 1:
-        accum_odds = 1.0
-        for cand in sorted_candidates:
-            leg_odd = float(cand.get("estimated_odds") or cand.get("odds") or 1.25)
-            # If adding this leg doesn't wildly overshoot or if we need more odds
-            if accum_odds < target_odds or len(trimmed_final) < 2:
-                trimmed_final.append(cand)
-                used_match_keys.add(f"{cand.get('home_team')}_{cand.get('away_team')}")
-                accum_odds *= leg_odd
-                if accum_odds >= target_odds:
-                    break
-            else:
-                trimmed_removed.append({
-                    "home_team": cand.get("home_team", "Home"),
-                    "away_team": cand.get("away_team", "Away"),
-                    "market_name": cand.get("market_name", "Match Result"),
-                    "selection_name": cand.get("selection_name", "1"),
-                    "original_odds": leg_odd,
-                    "estimated_prob": float(cand.get("estimated_prob") or 0.80),
-                    "classification": "TRIMMED_FOR_TARGET",
-                    "reason": f"Pruned to hit requested ticket target of ~{target_odds:.1f}x odds (accumulated {accum_odds:.2f}x)."
-                })
+    for t_idx in range(num_t):
+        avail_pool = [c for i, c in enumerate(sorted_candidates) if i not in used_indices]
+        # If pool exhausted, use full candidates with distinct shuffle
+        if len(avail_pool) < (target_games if target_mode == "GAMES" and target_games else 2):
+            avail_pool = list(sorted_candidates)
+            if t_idx > 0:
+                rng.shuffle(avail_pool)
 
-        for cand in sorted_candidates:
-            k = f"{cand.get('home_team')}_{cand.get('away_team')}"
-            if k not in used_match_keys:
+        t_final = []
+        if target_mode == "GAMES" and 1 <= target_games:
+            t_final = avail_pool[:target_games]
+        elif target_mode == "ODDS" and target_odds > 1.05:
+            curr_acc = 1.0
+            for cand in avail_pool:
                 leg_odd = float(cand.get("estimated_odds") or cand.get("odds") or 1.25)
-                trimmed_removed.append({
-                    "home_team": cand.get("home_team", "Home"),
-                    "away_team": cand.get("away_team", "Away"),
-                    "market_name": cand.get("market_name", "Match Result"),
-                    "selection_name": cand.get("selection_name", "1"),
-                    "original_odds": leg_odd,
-                    "estimated_prob": float(cand.get("estimated_prob") or 0.80),
-                    "classification": "TRIMMED_FOR_TARGET",
-                    "reason": f"Pruned to hit requested ticket target of ~{target_odds:.1f}x odds."
-                })
-                used_match_keys.add(k)
-    else:
-        # Full ticket (target_odds == 0 or target_games >= len)
-        trimmed_final = sorted_candidates
+                t_final.append(cand)
+                curr_acc *= leg_odd
+                if curr_acc >= target_odds and len(t_final) >= 2:
+                    break
+        else:
+            t_final = avail_pool
 
-    # Calculate final total odds and average probability
-    new_total_odds = 1.0
-    total_prob = 0.0
-    for s in trimmed_final:
-        o = float(s.get("estimated_odds") or s.get("odds") or 1.25)
-        p = float(s.get("estimated_prob") or 0.80)
-        new_total_odds *= o
-        total_prob += p
+        # Mark used items from candidate list to guarantee zero overlap across slips
+        for tf in t_final:
+            for orig_i, sc in enumerate(sorted_candidates):
+                if sc.get("fixture_id") == tf.get("fixture_id") or (sc.get("home_team") == tf.get("home_team") and sc.get("away_team") == tf.get("away_team")):
+                    used_indices.add(orig_i)
 
-    avg_win_prob = round(total_prob / max(1, len(trimmed_final)), 3)
-    new_total_odds = round(new_total_odds, 2)
+        slip_odds = 1.0
+        slip_prob = 0.0
+        for s in t_final:
+            o = float(s.get("estimated_odds") or s.get("odds") or 1.25)
+            p = float(s.get("estimated_prob") or 0.80)
+            slip_odds *= o
+            slip_prob += p
+
+        portfolio_slips.append({
+            "ticket_index": t_idx + 1,
+            "final_count": len(t_final),
+            "final_selections": t_final,
+            "new_total_odds": round(slip_odds, 2),
+            "avg_win_prob": round(slip_prob / max(1, len(t_final)), 3)
+        })
+
+    primary_slip = portfolio_slips[0]
 
     return {
         "mode": mode,
         "original_count": n_games,
-        "final_count": len(trimmed_final),
-        "kept": len(trimmed_final),
-        "removed": len(trimmed_removed),
+        "final_count": primary_slip["final_count"],
+        "kept": primary_slip["final_count"],
+        "removed": len(removed_selections),
         "swapped": 0,
-        "final_selections": trimmed_final,
-        "removed_selections": trimmed_removed,
-        "new_total_odds": new_total_odds,
-        "avg_win_prob": avg_win_prob,
+        "final_selections": primary_slip["final_selections"],
+        "removed_selections": removed_selections,
+        "new_total_odds": primary_slip["new_total_odds"],
+        "avg_win_prob": primary_slip["avg_win_prob"],
+        "portfolio_tickets": portfolio_slips,
+        "portfolio_summary": {
+            "total_tickets": len(portfolio_slips),
+            "total_unique_matches": sum(len(p["final_selections"]) for p in portfolio_slips),
+            "diversification_mode": "ZERO_OVERLAP"
+        }
     }

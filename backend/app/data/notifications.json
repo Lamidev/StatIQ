@@ -1,1 +1,44 @@
-[]
+[
+  {
+    "id": "NOTIF-TICK-1787313704",
+    "ticket_id": "TICK-1787313704",
+    "code": "UQPRY7",
+    "mode": "ROLLOVER",
+    "title": "\ud83c\udf89 Ticket WON! \u2014 UQPRY7",
+    "message": "WON (Clean Sweep - 0 Losses) \u2022 Stake \u20a61,000.00",
+    "flex_status_text": "WON (Clean Sweep - 0 Losses)",
+    "status": "WON",
+    "odds": 1.79,
+    "potential_payout": 1790.0,
+    "created_at": "2026-08-22 08:50:08",
+    "read": true
+  },
+  {
+    "id": "NOTIF-TICK-1787318813",
+    "ticket_id": "TICK-1787318813",
+    "code": "LDZKXU",
+    "mode": "ROLLOVER",
+    "title": "\ud83c\udf89 Ticket WON! \u2014 LDZKXU",
+    "message": "WON (Clean Sweep - 0 Losses) \u2022 Stake \u20a61,000.00",
+    "flex_status_text": "WON (Clean Sweep - 0 Losses)",
+    "status": "WON",
+    "odds": 1.99,
+    "potential_payout": 1990.0,
+    "created_at": "2026-08-22 08:50:08",
+    "read": true
+  },
+  {
+    "id": "NOTIF-TICK-1787328778",
+    "ticket_id": "TICK-1787328778",
+    "code": "YNQC59",
+    "mode": "AI_BUILDER",
+    "title": "\ud83c\udf89 Ticket WON! \u2014 YNQC59",
+    "message": "WON (Clean Sweep - 0 Losses) \u2022 Stake \u20a61,000.00",
+    "flex_status_text": "WON (Clean Sweep - 0 Losses)",
+    "status": "WON",
+    "odds": 2.49,
+    "potential_payout": 2490.0,
+    "created_at": "2026-08-22 08:50:08",
+    "read": true
+  }
+]

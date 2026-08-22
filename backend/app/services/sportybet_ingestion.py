@@ -123,12 +123,14 @@ class SportyBetIngestionService:
             329, 339, 352, 353, 365, 367, 379, 385, 386, 388, 389, 393
         ]
         fetch_urls = [
-            f"{cls.BASE_URL}/wapUpcomingEvents?sportId=sr:sport:1&pageNum={p}&pageSize=100" for p in range(1, 16)
+            f"{cls.BASE_URL}/wapUpcomingEvents?sportId=sr:sport:1&pageSize=100",
+            f"{cls.BASE_URL}/wapUpcomingEvents?sportId=sr:sport:1&pageSize=100&pageNum=2",
+            f"{cls.BASE_URL}/wapUpcomingEvents?sportId=sr:sport:1&pageSize=100&pageNum=3",
+            f"{cls.BASE_URL}/wapUpcomingEvents?sportId=sr:sport:1&pageSize=100&pageNum=4",
+            f"{cls.BASE_URL}/wapUpcomingEvents?sportId=sr:sport:1&pageSize=100&pageNum=5",
         ] + [
-            f"{cls.BASE_URL}/wapUpcomingEvents?sportId=sr:sport:1&categoryId=sr:category:{cid}&pageNum=1&pageSize=100"
+            f"{cls.BASE_URL}/wapUpcomingEvents?sportId=sr:sport:1&categoryId=sr:category:{cid}&pageSize=50"
             for cid in core_categories
-        ] + [
-            f"{cls.BASE_URL}/wapUpcomingEvents?sportId=sr:sport:1&tournamentId={t_id}" for t_id in cls.TOP_TOURNAMENTS
         ]
 
         all_events = []

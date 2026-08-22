@@ -29,6 +29,8 @@ class BuildTicketRequest(BaseModel):
     target_games: Optional[int] = None
     target_mode: str = "ODDS"  # "ODDS" or "GAMES"
     mode: str = "ACCUMULATOR"  # "ACCUMULATOR" or "ROLLOVER"
+    num_tickets: int = 1  # 1 (single ticket), 2, 3, 4 (multi-ticket portfolio)
+    overlap_mode: Optional[str] = "ZERO_OVERLAP"  # "ZERO_OVERLAP" or "ANCHOR_ONLY"
     selected_leagues: Optional[List[str]] = None  # e.g. ["PL", "PD", "SA", "BL1", "FL1", "ELC", "DED", "PPL"]
     league_scope: Optional[str] = "MULTI"
     single_league: Optional[str] = "PL"
@@ -546,71 +548,101 @@ async def build_ai_ticket(req: BuildTicketRequest):
 
     engine = MatchIQPickEngine(use_live_odds=True)
     target_odds_val = req.target_odds if (req.mode.upper() == "ROLLOVER" or req.target_mode == "ODDS") else 999.0
-    built_ticket = engine.build_ticket(
-        fixture_pool=fixture_pool,
-        target_total_odds=target_odds_val,
-        mode=req.mode.upper(),
-        target_mode=req.target_mode,
-        target_games=target_games,
-        max_league_picks=max_picks,
-        reshuffle_seed=req.reshuffle_seed,
-        risk_profile=req.risk_profile or "BALANCED",
-        allowed_markets=req.allowed_market_categories,
-        excluded_markets=req.excluded_market_categories,
-    )
+    num_t = max(1, min(4, int(req.num_tickets or 1)))
 
+    if num_t > 1:
+        portfolio_built = engine.build_portfolio(
+            fixture_pool=fixture_pool,
+            num_tickets=num_t,
+            target_total_odds=target_odds_val,
+            mode=req.mode.upper(),
+            target_mode=req.target_mode,
+            target_games=target_games,
+            max_league_picks=max_picks,
+            risk_profile=req.risk_profile or "BALANCED",
+            allowed_markets=req.allowed_market_categories,
+            excluded_markets=req.excluded_market_categories,
+            overlap_mode=req.overlap_mode or "ZERO_OVERLAP"
+        )
+    else:
+        portfolio_built = [engine.build_ticket(
+            fixture_pool=fixture_pool,
+            target_total_odds=target_odds_val,
+            mode=req.mode.upper(),
+            target_mode=req.target_mode,
+            target_games=target_games,
+            max_league_picks=max_picks,
+            reshuffle_seed=req.reshuffle_seed,
+            risk_profile=req.risk_profile or "BALANCED",
+            allowed_markets=req.allowed_market_categories,
+            excluded_markets=req.excluded_market_categories,
+        )]
 
-    # Trim to exact target_games if in GAMES mode
-    if req.target_mode == "GAMES" and len(built_ticket.approved_legs) > target_games:
-        built_ticket.approved_legs = built_ticket.approved_legs[:target_games]
-        # recalculate accumulated odds
-        acc = 1.0
-        for leg in built_ticket.approved_legs:
-            acc *= float(leg.get("odds", 1.5))
-        built_ticket.accumulated_odds = round(acc, 2)
+    # Process and generate SportyBet booking codes for each ticket
+    portfolio_results = []
+    from app.adapters.bookmaker_adapter import SportyBetAdapter
+    adapter = SportyBetAdapter()
 
+    for idx, b_ticket in enumerate(portfolio_built):
+        # Trim to exact target_games if in GAMES mode
+        if req.target_mode == "GAMES" and len(b_ticket.approved_legs) > target_games:
+            b_ticket.approved_legs = b_ticket.approved_legs[:target_games]
+            acc = 1.0
+            for leg in b_ticket.approved_legs:
+                acc *= float(leg.get("odds", 1.5))
+            b_ticket.accumulated_odds = round(acc, 2)
 
-    # Generate genuine SportyBet booking code via SportyBet direct adapter
-    booking_code = None
-    share_url = None
+        booking_code = None
+        share_url = None
+        if b_ticket.approved_legs:
+            try:
+                code_res = adapter.generate_booking_code(b_ticket.approved_legs, country_code="ng")
+                if code_res.get("status") == "SUCCESS" and code_res.get("booking_code"):
+                    booking_code = code_res.get("booking_code")
+                    share_url = code_res.get("load_url")
+            except Exception as e:
+                logger.warning(f"SportyBet booking code generation error for ticket #{idx+1}: {e}")
 
-    if built_ticket.approved_legs:
-        try:
-            from app.adapters.bookmaker_adapter import SportyBetAdapter
-            adapter = SportyBetAdapter()
-            code_res = adapter.generate_booking_code(built_ticket.approved_legs, country_code="ng")
-            if code_res.get("status") == "SUCCESS" and code_res.get("booking_code"):
-                booking_code = code_res.get("booking_code")
-                share_url = code_res.get("load_url")
-        except Exception as e:
-            logger.warning(f"SportyBet booking code generation error: {e}")
+        notice = None
+        if req.target_mode == "GAMES" and len(b_ticket.approved_legs) < target_games:
+            notice = f"Found all {len(b_ticket.approved_legs)} top-flight matches currently playing for {req.date_window}."
 
-    notice = None
-    if req.target_mode == "GAMES" and len(built_ticket.approved_legs) < target_games:
-        notice = f"Found all {len(built_ticket.approved_legs)} top-flight matches currently playing for {req.date_window}. To build a {target_games}-game ticket, select 'Weekend Combined' or 'Upcoming 7 Days'."
-
-    return {
-        "status": "SUCCESS",
-        "ticket": {
-            "mode": built_ticket.mode,
+        t_dict = {
+            "ticket_index": idx + 1,
+            "mode": b_ticket.mode,
             "target_mode": req.target_mode,
             "target_odds": req.target_odds,
             "target_games": target_games,
-            "accumulated_odds": built_ticket.accumulated_odds,
-            "combined_probability": built_ticket.combined_probability,
-            "correlation_adjusted_probability": built_ticket.correlation_adjusted_probability,
-            "confidence_tier": built_ticket.confidence_tier,
-            "recommended_stake_pct": built_ticket.recommended_stake_pct,
-            "leg_config": built_ticket.leg_config,
-            "approved_legs": built_ticket.approved_legs,
-            "rejected_picks": built_ticket.rejected_picks,
-            "total_evaluated": built_ticket.total_evaluated,
-            "decision_audit_summary": built_ticket.decision_audit_summary,
+            "accumulated_odds": b_ticket.accumulated_odds,
+            "combined_probability": b_ticket.combined_probability,
+            "correlation_adjusted_probability": b_ticket.correlation_adjusted_probability,
+            "confidence_tier": b_ticket.confidence_tier,
+            "recommended_stake_pct": b_ticket.recommended_stake_pct,
+            "leg_config": b_ticket.leg_config,
+            "approved_legs": b_ticket.approved_legs,
+            "rejected_picks": b_ticket.rejected_picks,
+            "total_evaluated": b_ticket.total_evaluated,
+            "decision_audit_summary": b_ticket.decision_audit_summary,
             "booking_code": booking_code,
             "share_url": share_url or (f"https://www.sportybet.com/ng/?shareCode={booking_code}" if booking_code else None),
             "flex_cut": req.flex_cut,
             "date_window": req.date_window,
             "notice": notice,
+        }
+        portfolio_results.append(t_dict)
+
+    primary_ticket = portfolio_results[0]
+
+    return {
+        "status": "SUCCESS",
+        "num_tickets": num_t,
+        "ticket": primary_ticket,
+        "portfolio_tickets": portfolio_results,
+        "portfolio_summary": {
+            "total_tickets": len(portfolio_results),
+            "total_unique_matches": sum(len(t["approved_legs"]) for t in portfolio_results),
+            "diversification_mode": req.overlap_mode or "ZERO_OVERLAP",
+            "message": f"Successfully generated {len(portfolio_results)} diversified portfolio tickets."
         }
     }
 

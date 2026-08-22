@@ -37,33 +37,37 @@ def calculate_dynamic_leg_config(target_total_odds: float) -> Dict[str, Any]:
     # Calculate ideal leg count based on natural log scaling with safe average leg odds (~1.32)
     calculated_legs = math.ceil(math.log(target_total_odds) / math.log(SAFE_DEFAULT_AVG_LEG_ODDS))
     
-    # Bound leg counts safely
+    # Bound leg counts safely: For sub-20 odds, concentrate into 5-8 legs for high win-rate
     if target_total_odds <= 3.0:
         min_legs, max_legs = 2, 3
     elif target_total_odds <= 7.0:
-        min_legs, max_legs = 4, 6
+        min_legs, max_legs = 3, 5
     elif target_total_odds <= 15.0:
+        min_legs, max_legs = 5, 7
+    elif target_total_odds <= 25.0:
         min_legs, max_legs = 6, 8
-    elif target_total_odds <= 35.0:
+    elif target_total_odds <= 50.0:
         min_legs, max_legs = 8, 11
-    elif target_total_odds <= 75.0:
+    elif target_total_odds <= 100.0:
         min_legs, max_legs = 11, 14
-    elif target_total_odds <= 200.0:
-        min_legs, max_legs = 13, 17
+    elif target_total_odds <= 300.0:
+        min_legs, max_legs = 14, 18
     elif target_total_odds <= 600.0:
-        min_legs, max_legs = 17, 23
+        min_legs, max_legs = 17, 22
     else:
         min_legs, max_legs = 20, 26
 
-    # Determine strict minimum model probability threshold for 9/10 accuracy target
+    # Determine strict minimum model probability threshold for high accuracy target
     if target_total_odds <= 3.0:
-        min_prob_threshold = 0.85  # Ultra safe / Rollover (85%+ per leg)
+        min_prob_threshold = 0.88  # Ultra safe / Rollover (88%+ per leg)
     elif target_total_odds <= 7.0:
-        min_prob_threshold = 0.80  # High confidence
+        min_prob_threshold = 0.82  # High confidence
     elif target_total_odds <= 20.0:
-        min_prob_threshold = 0.75  # Solid confidence
+        min_prob_threshold = 0.78  # Solid high confidence (8/10 win target)
+    elif target_total_odds <= 50.0:
+        min_prob_threshold = 0.72  # Balanced
     else:
-        min_prob_threshold = 0.68  # Standard balanced
+        min_prob_threshold = 0.68  # Standard
 
     ideal_legs = max(min_legs, min(max_legs, calculated_legs))
     per_leg_target = round(target_total_odds ** (1.0 / ideal_legs), 3)
