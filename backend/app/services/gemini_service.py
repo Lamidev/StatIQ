@@ -1,8 +1,11 @@
 import os
 import json
 import re
+import logging
 from typing import Dict, Any, Optional, List
 import httpx
+
+logger = logging.getLogger("matchiq.gemini_service")
 
 class GeminiAIService:
     """
