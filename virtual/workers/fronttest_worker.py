@@ -45,8 +45,10 @@ class VirtualFrontTestWorker:
         "preferred_market": "ALL",  # ALL, OVER_1.5, DOUBLE_CHANCE, 1X2_HOME
         "enable_per_league": True,
         "enable_master_slip": True,
+        "active_leagues": ["Master Multi-League", "England Virtual"],
         "min_confidence_prob": 0.72,
     }
+
 
     @classmethod
     def start(cls):
@@ -260,15 +262,20 @@ class VirtualFrontTestWorker:
             leagues_map.setdefault(league_name, []).append(ev)
 
         # 1. Per-League Tickets
+        active_leagues = cls.config.get("active_leagues", ["Master Multi-League", "England Virtual"])
+
         if cls.config.get("enable_per_league", True):
             for league_name, events in leagues_map.items():
+                if league_name not in active_leagues:
+                    continue
                 if len(events) < 3:
                     continue
                 cls._dispatch_league_ticket_if_needed(db, league_name, events, target_odds, mkt, now)
 
         # 2. Cross-League Master Slip
-        if cls.config.get("enable_master_slip", True) and len(raw_events) >= 6:
+        if cls.config.get("enable_master_slip", True) and "Master Multi-League" in active_leagues and len(raw_events) >= 6:
             cls._dispatch_master_ticket_if_needed(db, raw_events, target_odds, mkt, now)
+
 
         # 3. Sweep & deliver any pending slips not yet dispatched to Telegram
         undispatched = db.query(VirtualFrontTestSlip).filter(

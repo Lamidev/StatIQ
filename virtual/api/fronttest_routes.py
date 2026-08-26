@@ -3,7 +3,7 @@ API Endpoints for vFootball Automated Front-Testing & Telegram Signal Dispatcher
 """
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from sqlalchemy.orm import Session
 
 from virtual.core.db import get_db
@@ -18,6 +18,8 @@ class FrontTestConfigUpdate(BaseModel):
     enable_per_league: Optional[bool] = True
     enable_master_slip: Optional[bool] = True
     stake_amount: Optional[float] = 1000.0
+    active_leagues: Optional[List[str]] = ["Master Multi-League", "England Virtual"]
+
 
 @router.get("/status")
 def get_fronttest_status(db: Session = Depends(get_db)):

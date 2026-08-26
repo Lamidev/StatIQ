@@ -44,6 +44,16 @@ export default function VirtualFrontTesting() {
   const [preferredMarket, setPreferredMarket] = useState("ALL");
   const [enablePerLeague, setEnablePerLeague] = useState(true);
   const [enableMasterSlip, setEnableMasterSlip] = useState(true);
+  const [activeLeagues, setActiveLeagues] = useState(["Master Multi-League", "England Virtual"]);
+
+  const AVAILABLE_LEAGUES = [
+    { id: "Master Multi-League", label: "Master Multi-League", icon: "🏆" },
+    { id: "England Virtual", label: "England (Premier League)", icon: "🏴󠁧󠁢󠁥󠁮󠁧󠁿" },
+    { id: "Spain Virtual", label: "Spain (La Liga)", icon: "🇪🇸" },
+    { id: "Italy Virtual", label: "Italy (Serie A)", icon: "🇮🇹" },
+    { id: "Germany Virtual", label: "Germany (Bundesliga)", icon: "🇩🇪" },
+    { id: "France Virtual", label: "France (Ligue 1)", icon: "🇫🇷" },
+  ];
 
   const loadStatus = async () => {
     const res = await fetchFrontTestStatus();
@@ -54,6 +64,9 @@ export default function VirtualFrontTesting() {
         setPreferredMarket(res.config.preferred_market || "ALL");
         setEnablePerLeague(res.config.enable_per_league ?? true);
         setEnableMasterSlip(res.config.enable_master_slip ?? true);
+        if (res.config.active_leagues && Array.isArray(res.config.active_leagues)) {
+          setActiveLeagues(res.config.active_leagues);
+        }
       }
     }
     setLoading(false);
@@ -68,6 +81,20 @@ export default function VirtualFrontTesting() {
   const showToast = (msg) => {
     setToastMessage(msg);
     setTimeout(() => setToastMessage(""), 4000);
+  };
+
+  const toggleLeague = (leagueId) => {
+    setActiveLeagues((prev) => {
+      if (prev.includes(leagueId)) {
+        if (prev.length === 1) {
+          showToast("At least one league must remain active.");
+          return prev;
+        }
+        return prev.filter((l) => l !== leagueId);
+      } else {
+        return [...prev, leagueId];
+      }
+    });
   };
 
   const handleToggle = async () => {
@@ -88,14 +115,16 @@ export default function VirtualFrontTesting() {
       target_odds: parseFloat(targetOdds),
       preferred_market: preferredMarket,
       enable_per_league: enablePerLeague,
-      enable_master_slip: enableMasterSlip
+      enable_master_slip: enableMasterSlip,
+      active_leagues: activeLeagues
     });
     if (res && res.status === "SUCCESS") {
-      showToast("Strategy presets saved!");
+      showToast("Strategy presets and active leagues saved!");
       await loadStatus();
     }
     setActionLoading(false);
   };
+
 
   const handleTriggerNow = async () => {
     setActionLoading(true);
@@ -367,7 +396,43 @@ export default function VirtualFrontTesting() {
             </div>
           </div>
         </div>
+
+        {/* ── Active League Selector Pills ── */}
+        <div className="pt-5 mt-5 border-t border-slate-100">
+          <div className="flex items-center justify-between mb-2.5">
+            <label className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
+              <span>🎯 Focus Leagues & Tournaments</span>
+              <span className="text-[11px] font-normal text-slate-400">(Click to toggle on/off)</span>
+            </label>
+            <span className="text-[11px] font-bold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-100">
+              {activeLeagues.length} of {AVAILABLE_LEAGUES.length} Active
+            </span>
+          </div>
+
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5">
+            {AVAILABLE_LEAGUES.map((league) => {
+              const isSelected = activeLeagues.includes(league.id);
+              return (
+                <button
+                  key={league.id}
+                  type="button"
+                  onClick={() => toggleLeague(league.id)}
+                  className={`flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-xl text-xs font-bold border transition-all cursor-pointer ${
+                    isSelected
+                      ? "bg-emerald-500/10 border-emerald-500 text-emerald-900 shadow-xs"
+                      : "bg-slate-50 border-slate-200 text-slate-400 hover:border-slate-300 hover:text-slate-600"
+                  }`}
+                >
+                  <span className="text-sm">{league.icon}</span>
+                  <span className="truncate">{league.label}</span>
+                  {isSelected && <Check className="w-3.5 h-3.5 text-emerald-600 shrink-0 ml-0.5" />}
+                </button>
+              );
+            })}
+          </div>
+        </div>
       </div>
+
 
       {/* ── STEP 4: Visual Ticket Cards & Settlement Ledger ── */}
       <div className="space-y-4">
