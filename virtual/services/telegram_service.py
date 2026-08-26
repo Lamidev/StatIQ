@@ -208,24 +208,37 @@ class VirtualTelegramService:
         cum_win_rate = stats.get("win_rate_pct", 0.0)
         cum_profit = stats.get("net_profit_units", 0.0)
 
+        stake_unit = 250.0  # ₦250 flat stake unit
+        daily_ngn = net_profit_today * stake_unit
+        cum_ngn = cum_profit * stake_unit
+        
+        if net_profit_today > 0:
+            status_banner = "🟢 <b>PROFITABLE DAY (+ROI)</b>"
+        elif net_profit_today < 0:
+            status_banner = "🔴 <b>DRAWDOWN DAY (-ROI)</b>"
+        else:
+            status_banner = "⚪ <b>BREAK-EVEN DAY (0.0% ROI)</b>"
+
         lines = [
             "📊 <b>StatIQ vFootball — Daily Midnight Performance Report</b>",
-            "📅 <b>Audit Period:</b> <i>24-Hour Cycle (00:00 - 23:59)</i>",
+            "📅 <b>Audit Period:</b> <i>24-Hour Cycle (00:00 - 23:59 WAT)</i>",
+            f"🎯 <b>Status:</b> {status_banner}",
             "",
             "⚡ <b>Today's Front-Testing Results:</b>",
             f"• Slips Dispatched Today: <b>{total_today}</b>",
             f"• Daily Record: <b>{won_today}W - {lost_today}L</b>",
             f"• Daily Win Rate: <b>{win_rate_today}%</b>",
-            f"• Daily Net Yield: <b>{net_profit_today:+.2f} Units</b>",
+            f"• Daily Net Yield: <b>{net_profit_today:+.2f} Units</b> (<b>₦{daily_ngn:+,.2f}</b> @ ₦250/stake)",
             f"• Daily ROI: <b>{roi_today:+.1f}%</b>",
             "",
-            "🏆 <b>Cumulative All-Time Front-Test Stats:</b>",
+            "🏆 <b>Cumulative All-Time Ledger:</b>",
             f"• Total Slips Evaluated: <b>{cum_total}</b>",
             f"• All-Time Win Rate: <b>{cum_win_rate}%</b>",
-            f"• Cumulative Net P&L: <b>{cum_profit:+.2f} Units</b>",
+            f"• Cumulative Net P&L: <b>{cum_profit:+.2f} Units</b> (<b>₦{cum_ngn:+,.2f}</b>)",
             "",
             "<i>#StatIQ #DailyAudit #vFootball</i>"
         ]
 
         msg = "\n".join(lines)
         return cls.send_message(msg)
+
