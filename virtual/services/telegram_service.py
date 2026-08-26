@@ -66,14 +66,21 @@ class VirtualTelegramService:
             logger.error(f"[Telegram] Network error sending alert: {e}")
         return False
 
+    _dispatched_alert_keys: set = set()
+
     @classmethod
     def send_ticket_alert(cls, slip: Dict[str, Any]) -> bool:
         """
         Dispatches a pre-match vFootball 2.0x ticket with clear demarcation
-        and a direct SportyBet preload link.
+        and a direct SportyBet preload link. Strictly deduplicated.
         """
-        league = slip.get("league_name", "vFootball")
         code = slip.get("booking_code", "N/A")
+        alert_key = f"ticket:{code}"
+        if code and code != "N/A" and alert_key in cls._dispatched_alert_keys:
+            logger.info(f"[Telegram] Ticket {code} already dispatched. Skipping duplicate.")
+            return True
+
+        league = slip.get("league_name", "vFootball")
         total_odds = slip.get("actual_odds", 2.0)
         round_time = slip.get("round_time_str", "Upcoming")
         selections = slip.get("selections", [])
@@ -105,15 +112,23 @@ class VirtualTelegramService:
         ])
 
         msg = "\n".join(lines)
-        return cls.send_message(msg)
+        sent = cls.send_message(msg)
+        if sent and code and code != "N/A":
+            cls._dispatched_alert_keys.add(alert_key)
+        return sent
 
     @classmethod
     def send_kickoff_alert(cls, slip: Dict[str, Any]) -> bool:
         """
         Dispatches an in-play alert when a round officially starts, listing matches.
+        Strictly deduplicated.
         """
-        league = slip.get("league_name", "vFootball")
         code = slip.get("booking_code", "N/A")
+        alert_key = f"kickoff:{code}"
+        if code and code != "N/A" and alert_key in cls._dispatched_alert_keys:
+            return True
+
+        league = slip.get("league_name", "vFootball")
         total_odds = slip.get("actual_odds", 2.0)
         round_time = slip.get("round_time_str", "Now")
         selections = slip.get("selections", [])
@@ -138,16 +153,24 @@ class VirtualTelegramService:
         ])
 
         msg = "\n".join(lines)
-        return cls.send_message(msg)
-
+        sent = cls.send_message(msg)
+        if sent and code and code != "N/A":
+            cls._dispatched_alert_keys.add(alert_key)
+        return sent
 
     @classmethod
     def send_settlement_alert(cls, slip: Dict[str, Any], is_won: bool, stats: Dict[str, Any]) -> bool:
         """
         Dispatches a post-round settlement alert with match scores, leg results,
-        and cumulative front-testing performance stats.
+        and cumulative front-testing performance stats. Strictly deduplicated.
         """
+        code = slip.get("booking_code", "N/A")
+        alert_key = f"settle:{code}"
+        if code and code != "N/A" and alert_key in cls._dispatched_alert_keys:
+            return True
+
         league = slip.get("league_name", "vFootball")
+
         code = slip.get("booking_code", "N/A")
         total_odds = slip.get("actual_odds", 2.0)
         status_emoji = "✅ <b>[WON]</b>" if is_won else "❌ <b>[LOST]</b>"
