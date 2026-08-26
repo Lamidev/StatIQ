@@ -303,9 +303,9 @@ class VirtualFrontTestWorker:
             return
         round_dt = datetime.fromtimestamp(start_ms / 1000.0, tz=timezone.utc)
 
-        # Only dispatch if round is starting in 1 to 28 minutes
+        # Only dispatch if round is starting in 2 to 8 minutes (Golden Window)
         time_to_kickoff = (round_dt - now).total_seconds()
-        if not (60 <= time_to_kickoff <= 1680):
+        if not (120 <= time_to_kickoff <= 480):
             return
 
         # Check if already booked for this round
@@ -317,6 +317,7 @@ class VirtualFrontTestWorker:
 
         if existing:
             return
+
 
         # Pick 2-3 winnable selections approximating target odds
         num_games = 2 if target_odds <= 2.2 else 3
@@ -362,10 +363,11 @@ class VirtualFrontTestWorker:
         round_dt = datetime.fromtimestamp(start_ms / 1000.0, tz=timezone.utc)
 
         time_to_kickoff = (round_dt - now).total_seconds()
-        if not (60 <= time_to_kickoff <= 1680):
+        if not (120 <= time_to_kickoff <= 480):
             return
 
         league_name = "Master Multi-League"
+
         existing = db.query(VirtualFrontTestSlip).filter(
             VirtualFrontTestSlip.league_name == league_name,
             VirtualFrontTestSlip.round_time >= (round_dt - timedelta(minutes=3)),
