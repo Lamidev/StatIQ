@@ -19,6 +19,14 @@ from virtual.api.agent_control_routes import _pick_selections, _build_booking_co
 
 logger = logging.getLogger("statiq.virtual.fronttest_worker")
 
+def _format_wat_time(dt: Optional[datetime]) -> str:
+    if not dt:
+        return "Upcoming"
+    wat_hour = (dt.hour + 1) % 24
+    return f"{wat_hour:02d}:{dt.minute:02d} WAT"
+
+
+
 class VirtualFrontTestWorker:
     """
     Background worker orchestrating continuous vFootball front-testing.
@@ -149,7 +157,7 @@ class VirtualFrontTestWorker:
                 "league_name": slip.league_name,
                 "booking_code": slip.booking_code,
                 "actual_odds": slip.actual_odds,
-                "round_time_str": slip.round_time.strftime("%H:%M UTC") if slip.round_time else "Now"
+                "round_time_str": _format_wat_time(slip.round_time)
             }
             sent = VirtualTelegramService.send_kickoff_alert(slip_payload)
             if sent:
@@ -257,7 +265,7 @@ class VirtualFrontTestWorker:
                     "league_name": slip.league_name,
                     "booking_code": slip.booking_code,
                     "actual_odds": slip.actual_odds,
-                    "round_time_str": r_dt.strftime("%H:%M UTC"),
+                    "round_time_str": _format_wat_time(r_dt),
                     "selections": slip.selections or []
                 }
                 sent = VirtualTelegramService.send_ticket_alert(slip_payload)
@@ -329,7 +337,7 @@ class VirtualFrontTestWorker:
             "league_name": league_name,
             "booking_code": booking_code,
             "actual_odds": total_odds,
-            "round_time_str": round_dt.strftime("%H:%M UTC"),
+            "round_time_str": _format_wat_time(round_dt),
             "selections": selections
         }
         sent = VirtualTelegramService.send_ticket_alert(slip_payload)
@@ -373,7 +381,6 @@ class VirtualFrontTestWorker:
         booking_code = _build_booking_code(selections)
         ticket_id = f"FT-MASTER-{round_dt.strftime('%H%M')}-{uuid.uuid4().hex[:4].upper()}"
 
-
         slip = VirtualFrontTestSlip(
             ticket_id=ticket_id,
             booking_code=booking_code,
@@ -396,7 +403,7 @@ class VirtualFrontTestWorker:
             "league_name": league_name,
             "booking_code": booking_code,
             "actual_odds": total_odds,
-            "round_time_str": round_dt.strftime("%H:%M UTC"),
+            "round_time_str": _format_wat_time(round_dt),
             "selections": selections
         }
         sent = VirtualTelegramService.send_ticket_alert(slip_payload)
@@ -404,17 +411,27 @@ class VirtualFrontTestWorker:
             slip.telegram_dispatched = True
             db.commit()
 
+
     # -----------------------------------------------------------------
     @classmethod
     def _extract_final_scores(cls, ev_data: Dict[str, Any]) -> tuple[Optional[int], Optional[int]]:
         """
         Parses home and away scores from SportyBet API payload.
-        SportyBet returns scores as setScore='2:1', score='2:1', or score={'home': 2, 'away': 1}.
+        STRICT: Only returns scores if matchStatus == 'Ended' (or status == 3).
+        Prevents premature settlement during live 1st/2nd half!
         """
         if not ev_data:
             return None, None
 
-        # 1. Check setScore string (e.g. "2:1" or "3:0")
+        match_status = str(ev_data.get("matchStatus") or "").upper().strip()
+        status_num = ev_data.get("status")
+
+        # 1. STRICT STATUS CHECK: Must be fully ended
+        is_ended = ("ENDED" in match_status or status_num == 3)
+        if not is_ended:
+            return None, None
+
+        # 2. Check setScore string (e.g. "2:1" or "3:0")
         set_score = ev_data.get("setScore") or ev_data.get("score")
         if isinstance(set_score, str) and ":" in set_score:
             parts = set_score.split(":")
@@ -423,7 +440,7 @@ class VirtualFrontTestWorker:
             except (ValueError, IndexError):
                 pass
 
-        # 2. Check dictionary format
+        # 3. Check dictionary format
         if isinstance(set_score, dict):
             h = set_score.get("home") or set_score.get("homeScore")
             a = set_score.get("away") or set_score.get("awayScore")
@@ -433,36 +450,34 @@ class VirtualFrontTestWorker:
                 except ValueError:
                     pass
 
-        # 3. Check match outcome statuses
-        match_status = str(ev_data.get("matchStatus") or "").upper()
-        if "ENDED" in match_status or ev_data.get("status") == 3:
-            # Check market outcomes for settled flags
-            markets = ev_data.get("markets", [])
-            for m in markets:
-                if m.get("desc") == "1X2" or str(m.get("id")) == "1":
-                    for oc in m.get("outcomes", []):
-                        if oc.get("status") == 1 or oc.get("isWinner") == 1:
-                            desc = str(oc.get("desc") or "").upper()
-                            if "HOME" in desc or desc == "1":
-                                return 1, 0
-                            elif "AWAY" in desc or desc == "2":
-                                return 0, 1
-                            elif "DRAW" in desc or desc == "X":
-                                return 1, 1
+        # 4. Fallback check for market settlement flags
+        markets = ev_data.get("markets", [])
+        for m in markets:
+            if m.get("desc") == "1X2" or str(m.get("id")) == "1":
+                for oc in m.get("outcomes", []):
+                    if oc.get("status") == 1 or oc.get("isWinner") == 1:
+                        desc = str(oc.get("desc") or "").upper()
+                        if "HOME" in desc or desc == "1":
+                            return 1, 0
+                        elif "AWAY" in desc or desc == "2":
+                            return 0, 1
+                        elif "DRAW" in desc or desc == "X":
+                            return 1, 1
 
         return None, None
 
     @classmethod
     def _process_settlements(cls, db: Session):
         """
-        Settles pending slips once matches have finished (~2.5 mins post-kickoff).
+        Settles pending slips once matches have finished (~3.5-4 mins post-kickoff).
         """
         now = datetime.now(timezone.utc)
-        # Settle slips whose kickoff was at least 2 minutes ago
+        # Settle slips whose kickoff was at least 3.5 minutes ago
         pending = db.query(VirtualFrontTestSlip).filter(
             VirtualFrontTestSlip.status == "PENDING",
-            VirtualFrontTestSlip.round_time <= (now - timedelta(minutes=2))
+            VirtualFrontTestSlip.round_time <= (now - timedelta(minutes=3, seconds=30))
         ).all()
+
 
         for slip in pending:
             selections = slip.selections or []
