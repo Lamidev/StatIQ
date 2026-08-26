@@ -352,19 +352,6 @@ class VirtualFrontTestWorker:
         db.add(slip)
         db.commit()
 
-        # Send Telegram alert
-        slip_payload = {
-            "league_name": league_name,
-            "booking_code": booking_code,
-            "actual_odds": total_odds,
-            "round_time_str": _format_wat_time(round_dt),
-            "selections": selections
-        }
-        sent = VirtualTelegramService.send_ticket_alert(slip_payload)
-        if sent:
-            slip.telegram_dispatched = True
-            db.commit()
-
     @classmethod
     def _dispatch_master_ticket_if_needed(
         cls, db: Session, all_events: List[Dict], target_odds: float, mkt: str, now: datetime
@@ -384,7 +371,6 @@ class VirtualFrontTestWorker:
             VirtualFrontTestSlip.round_time >= (round_dt - timedelta(minutes=3)),
             VirtualFrontTestSlip.round_time <= (round_dt + timedelta(minutes=3))
         ).first()
-
 
         if existing:
             return
@@ -421,17 +407,6 @@ class VirtualFrontTestWorker:
         db.add(slip)
         db.commit()
 
-        slip_payload = {
-            "league_name": league_name,
-            "booking_code": booking_code,
-            "actual_odds": total_odds,
-            "round_time_str": _format_wat_time(round_dt),
-            "selections": selections
-        }
-        sent = VirtualTelegramService.send_ticket_alert(slip_payload)
-        if sent:
-            slip.telegram_dispatched = True
-            db.commit()
 
 
     # -----------------------------------------------------------------
