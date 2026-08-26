@@ -18,15 +18,18 @@ import {
   Ticket,
   ChevronRight,
   Flame,
-  ArrowUpRight
+  ArrowUpRight,
+  Trash2
 } from "lucide-react";
 import { 
   fetchFrontTestStatus, 
   toggleFrontTestAutomation, 
   updateFrontTestConfig, 
   triggerImmediateFrontTestScan, 
-  sendTelegramTestPing 
+  sendTelegramTestPing,
+  resetFrontTestLedger
 } from "../api/virtualClient";
+
 
 export default function VirtualFrontTesting() {
   const [data, setData] = useState(null);
@@ -132,6 +135,26 @@ export default function VirtualFrontTesting() {
       : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
   };
 
+  const handleResetLedger = async () => {
+    if (!window.confirm("Are you sure you want to clear all test history and start afresh on a clean slate?")) {
+      return;
+    }
+    setActionLoading(true);
+    try {
+      const res = await resetFrontTestLedger();
+      if (res && res.status === "SUCCESS") {
+        showToast("Ledger reset! Starting fresh on clean slate.");
+        await loadStatus();
+      } else {
+        showToast("Failed to reset ledger.");
+      }
+    } catch (err) {
+      showToast("Error resetting ledger.");
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
   const isEnabled = data?.is_enabled ?? false;
   const winRate = data?.win_rate_pct ?? 0;
   const totalSlips = data?.total_slips ?? 0;
@@ -142,7 +165,6 @@ export default function VirtualFrontTesting() {
 
   const pendingList = data?.recent_slips?.filter(s => s.status === "PENDING") || [];
   const settledList = data?.recent_slips?.filter(s => s.status !== "PENDING") || [];
-
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto pb-10">
@@ -198,6 +220,16 @@ export default function VirtualFrontTesting() {
           </button>
 
           <button
+            onClick={handleResetLedger}
+            disabled={actionLoading}
+            className="flex-1 lg:flex-none px-4 py-2.5 bg-rose-50 hover:bg-rose-100 text-rose-700 rounded-xl text-xs font-bold transition-all flex items-center justify-center space-x-1.5 border border-rose-200"
+            title="Clear all test history and start afresh"
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+            <span>Reset Ledger</span>
+          </button>
+
+          <button
             onClick={handleToggle}
             disabled={actionLoading}
             className={`w-full lg:w-auto px-6 py-2.5 rounded-xl text-xs font-black tracking-wide transition-all shadow-md flex items-center justify-center space-x-2 ${
@@ -211,6 +243,7 @@ export default function VirtualFrontTesting() {
           </button>
         </div>
       </div>
+
 
       {/* ── STEP 2: Live Front-Testing Performance KPIs ── */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">

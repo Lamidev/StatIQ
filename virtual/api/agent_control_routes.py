@@ -233,6 +233,22 @@ def generate_ticket_from_live(
     return {"status": "SUCCESS", "ticket": ticket}
 
 
+@router.post("/reset-ledger")
+def reset_fronttest_ledger(db: Session = Depends(get_db)):
+    """
+    Clears all front-testing slips and match history from the database to start afresh.
+    """
+    from virtual.models.virtual_models import VirtualFrontTestSlip, VirtualMatchHistory
+    deleted_slips = db.query(VirtualFrontTestSlip).delete()
+    deleted_history = db.query(VirtualMatchHistory).delete()
+    db.commit()
+    return {
+        "status": "SUCCESS",
+        "message": f"Ledger reset. Cleared {deleted_slips} slips and {deleted_history} history records."
+    }
+
+
+
 # ---------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------

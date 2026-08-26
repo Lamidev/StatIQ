@@ -243,6 +243,18 @@ export async function resetBankroll() {
   }
 }
 
+export async function resetFrontTestLedger() {
+  try {
+    const res = await fetch(`${VIRTUAL_API_BASE}/api/v1/virtual-trader/agent/reset-ledger`, { method: "POST" });
+    if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
+    return await res.json();
+  } catch (err) {
+    console.error("[VirtualClient] resetFrontTestLedger error:", err);
+    return null;
+  }
+}
+
+
 // ── Agent Controller & Live SportyBet Fixture Stream ─────────────────────────
 
 export async function fetchAgentState() {
