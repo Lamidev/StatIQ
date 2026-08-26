@@ -87,7 +87,12 @@ class VirtualFrontTestWorker:
         net_profit_units = sum(s.profit_loss for s in all_slips if s.profit_loss is not None)
 
         recent_slips = []
-        for s in all_slips[:15]:
+        seen_codes = set()
+        for s in all_slips:
+            code_key = s.booking_code or str(s.id)
+            if code_key in seen_codes:
+                continue
+            seen_codes.add(code_key)
             recent_slips.append({
                 "id": s.id,
                 "ticket_id": s.ticket_id,
@@ -101,6 +106,9 @@ class VirtualFrontTestWorker:
                 "selections": s.selections,
                 "created_at": s.created_at.isoformat() if s.created_at else None,
             })
+            if len(recent_slips) >= 15:
+                break
+
 
         return {
             "is_enabled": cls._enabled,
@@ -303,7 +311,8 @@ class VirtualFrontTestWorker:
         # Check if already booked for this round
         existing = db.query(VirtualFrontTestSlip).filter(
             VirtualFrontTestSlip.league_name == league_name,
-            VirtualFrontTestSlip.round_time == round_dt
+            VirtualFrontTestSlip.round_time >= (round_dt - timedelta(minutes=3)),
+            VirtualFrontTestSlip.round_time <= (round_dt + timedelta(minutes=3))
         ).first()
 
         if existing:
@@ -372,8 +381,10 @@ class VirtualFrontTestWorker:
         league_name = "Master Multi-League"
         existing = db.query(VirtualFrontTestSlip).filter(
             VirtualFrontTestSlip.league_name == league_name,
-            VirtualFrontTestSlip.round_time == round_dt
+            VirtualFrontTestSlip.round_time >= (round_dt - timedelta(minutes=3)),
+            VirtualFrontTestSlip.round_time <= (round_dt + timedelta(minutes=3))
         ).first()
+
 
         if existing:
             return
