@@ -111,19 +111,27 @@ export default function VirtualFrontTesting() {
 
   const handleSaveConfig = async () => {
     setActionLoading(true);
-    const res = await updateFrontTestConfig({
-      target_odds: parseFloat(targetOdds),
-      preferred_market: preferredMarket,
-      enable_per_league: enablePerLeague,
-      enable_master_slip: enableMasterSlip,
-      active_leagues: activeLeagues
-    });
-    if (res && res.status === "SUCCESS") {
-      showToast("Strategy presets and active leagues saved!");
-      await loadStatus();
+    try {
+      const res = await updateFrontTestConfig({
+        target_odds: parseFloat(targetOdds),
+        preferred_market: preferredMarket,
+        enable_per_league: enablePerLeague,
+        enable_master_slip: enableMasterSlip,
+        active_leagues: activeLeagues
+      });
+      if (res && res.status === "SUCCESS") {
+        showToast("✅ Strategy presets and active leagues saved successfully!");
+        await loadStatus();
+      } else {
+        showToast("⚠️ Could not reach backend API.");
+      }
+    } catch (e) {
+      showToast(`Error: ${e.message}`);
+    } finally {
+      setActionLoading(false);
     }
-    setActionLoading(false);
   };
+
 
 
   const handleTriggerNow = async () => {

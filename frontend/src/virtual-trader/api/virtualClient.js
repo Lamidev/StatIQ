@@ -3,7 +3,12 @@
  * Connects to the standalone virtual microservice (Port 8001).
  */
 
-const VIRTUAL_API_BASE = import.meta.env.VITE_VIRTUAL_API_URL || "http://localhost:8001";
+const VIRTUAL_API_BASE =
+  import.meta.env.VITE_VIRTUAL_API_URL ||
+  (typeof window !== "undefined" && window.location.hostname === "localhost"
+    ? "http://localhost:8000"
+    : "");
+
 
 export async function fetchVirtualDashboard() {
   try {
