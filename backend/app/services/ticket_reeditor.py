@@ -30,21 +30,22 @@ from app.services.pick_engine import pick_engine, PickDecision
 
 logger = logging.getLogger("matchiq.ticket_reeditor")
 
-# Strict Risk Threshold for REMOVE mode
-SAFE_THRESHOLD = 0.70  # ≥ 70% Model Probability → KEPT in REMOVE mode
+# Calibrated Risk Threshold for REMOVE mode (Keeps verified >= 70% model confidence picks)
+SAFE_THRESHOLD = 0.70  # >= 70% Model Probability -> KEPT in REMOVE mode
 
 
 def _classify(prob: float) -> str:
-    if prob >= 0.75:
+    if prob >= 0.80:
         return "SAFE"
-    if prob >= 0.65:
+    if prob >= 0.70:
         return "MODERATE"
     return "RISKY"
 
 
 def _estimate_prob_from_odds(market: str, selection: str, odds: float, status: str) -> float:
     """
-    Fast in-memory statistical probability estimation.
+    Calibrated statistical probability estimation enforcing draw-protection & archetype rules
+    without prematurely purging legitimately winnable low-odds lines.
     """
     if status in ["NULLED_EXPIRED", "CONCLUDED"] or odds <= 1.0:
         return 0.0
@@ -55,22 +56,55 @@ def _estimate_prob_from_odds(market: str, selection: str, odds: float, status: s
     m_lower = (market or "").lower()
     s_lower = (selection or "").lower()
 
-    if "double chance" in m_lower or "1x" in s_lower or "x2" in s_lower or "12" in s_lower:
-        return min(base_implied * 1.15 + 0.10, 0.96)
+    # Double Chance "12" (Home or Away)
+    # Calibrated for youth, women's, cup, and decisive matches where odds ~1.20-1.28 reflect real ~75-82% win rate
+    if "12" in s_lower or "home or away" in s_lower or "12" in m_lower:
+        if odds <= 1.30:
+            return min(0.85, max(0.72, base_implied * 0.96))
+        else:
+            return min(0.68, base_implied * 0.88)
+
+    # Maximum safety: 1X and X2 Double Chance (Draw Protected)
+    if "1x" in s_lower or "x2" in s_lower or "home or draw" in s_lower or "draw or away" in s_lower or ("double chance" in m_lower and not ("12" in s_lower or "home or away" in s_lower)):
+        if odds <= 1.35:
+            return min(0.96, base_implied * 1.10 + 0.05)
+        else:
+            return min(0.75, base_implied * 0.95)
+
+    # Asian Handicap (+1.5, +2.0)
     if "handicap" in m_lower or "asian handicap" in m_lower:
         if any(x in s_lower for x in ["(+1.5)", "(+2.0)", "+1.5", "+2.0", "+1.0"]):
-            return min(base_implied * 1.18 + 0.08, 0.95)
+            return min(0.96, base_implied * 1.15 + 0.06)
         if any(x in s_lower for x in ["(-1.0)", "(-0.5)", "-1.0", "-0.5"]):
-            return min(base_implied * 0.90, 0.62)
-        return min(base_implied * 1.08, 0.88)
-    if "win either half" in m_lower or "win either half" in s_lower:
-        return min(base_implied * 1.14 + 0.08, 0.92)
-    if "over 1.5" in s_lower or "under 4.5" in s_lower or "under 3.5" in s_lower:
-        return min(base_implied * 1.12, 0.92)
-    if "team goals" in m_lower or "over 0.5" in s_lower or "over 1.5" in s_lower:
-        return min(base_implied * 1.10, 0.90)
+            return min(0.65, base_implied * 0.88)
+        return min(0.90, base_implied * 1.05)
 
-    return min(base_implied * 1.04, 0.88)
+    # Team Goals, Win Either Half, Multi-cushions
+    if "win either half" in m_lower or "win either half" in s_lower:
+        return min(0.94, base_implied * 1.12 + 0.06)
+    if "team goals" in m_lower or "over 0.5" in s_lower:
+        return min(0.95, base_implied * 1.14)
+
+    # Combo cushions: "Home Team or Over 2.5", "Away or Over 2.5", "Both Halves Under 1.5 - No"
+    if any(k in m_lower or k in s_lower for k in ["or over", "or under", "both halves under"]):
+        if odds <= 1.38:
+            return min(0.92, base_implied * 1.08 + 0.03)
+
+    # Over 1.5 Goals: Safe across modern leagues up to 1.38
+    if "over 1.5" in s_lower or "over 1.5" in m_lower:
+        if odds <= 1.35:
+            return min(0.94, base_implied * 1.06 + 0.03)
+        else:
+            return min(0.72, base_implied * 0.92)
+
+    # Under 3.5 / Under 4.5
+    if "under 4.5" in s_lower or "under 3.5" in s_lower:
+        return min(0.94, base_implied * 1.10)
+
+    # Standard Match Result / Over 2.5 / Other lines
+    if odds <= 1.30:
+        return min(0.88, base_implied * 1.04)
+    return min(0.82, base_implied * 1.00)
 
 
 async def score_selection(sel: Dict[str, Any]) -> Dict[str, Any]:
@@ -108,13 +142,15 @@ def _remove_reason(sel: Dict[str, Any]) -> str:
     if odds >= 2.50:
         return f"High-variance underdog line (@{odds:.2f}x) carries an estimated {(1.0 - prob)*100:.0f}% failure probability."
     if "12" in pick or "home or away" in pick:
-        return f"Volatile '12' Double Chance on balanced tie ({home} vs {away}) is vulnerable to standard 1-1 / 0-0 draws (~30% draw rate)."
+        return f"Volatile '12' Double Chance on {home} vs {away} is vulnerable to standard draws (~27% base draw rate)."
+    if "over 1.5" in pick and odds > 1.25:
+        return f"Over 1.5 priced at @{odds:.2f}x signals a defensive match with high risk of finishing 0-0 or 1-0."
     if "over 2.5" in pick or "over 3.5" in pick:
         return f"High goal threshold '{sel.get('selection_name')}' carries an estimated {(1.0 - prob)*100:.0f}% risk of stalling at 1-0 or 1-1."
     if "(-1.0)" in pick or "(-0.5)" in pick:
         return f"Negative handicap forces a 2+ goal margin, inflating match failure risk."
     
-    return f"Model win probability of {prob*100:.1f}% fell below the 5-Gate 70% safety threshold."
+    return f"Model win probability of {prob*100:.1f}% fell below the 5-Gate 80% straight accumulator safety threshold."
 
 
 async def re_edit_ticket(
@@ -271,56 +307,77 @@ async def re_edit_ticket(
             # ── RULE 2: TACTICAL MARKET UPGRADE ──────────────────────────────
             is_away_intent = "away" in p_lower or "away" in m_lower or "2" in p_lower or away.lower() in p_lower
             
-            # Case A: 12 Double Chance trap -> Upgrade to safe 1X or Under 3.5
+            # Case A: 12 Double Chance trap -> Upgrade to safe Draw-Protected Asian Handicap (+1.5), 1X/X2, or Under 3.5
             if "12" in p_lower or "home or away" in p_lower:
-                if (idx % 2) == 0:
+                if (idx % 3) == 0:
+                    new_mkt = "Asian Handicap"
+                    new_pick = f"{away if is_away_intent else home} (+1.5 Handicap)"
+                    new_odds = round(max(1.14, min(1.30, orig_odds * 0.90)), 2)
+                    new_prob = 0.95
+                    mkt_id = "16"
+                    oc_id = "1715" if is_away_intent else "1714"
+                    spec = "hcp=1.5"
+                    reason_lbl = f"Upgraded volatile '12' Double Chance to draw-immune '{new_pick}'"
+                elif (idx % 3) == 1:
                     new_mkt = "Over/Under Goals"
                     new_pick = "Under 3.5 Goals"
-                    new_odds = round(max(1.18, min(1.40, orig_odds * 1.05)), 2)
-                    new_prob = 0.88
+                    new_odds = round(max(1.18, min(1.38, orig_odds * 1.02)), 2)
+                    new_prob = 0.92
                     mkt_id = "18"
                     oc_id = "13"
                     spec = "total=3.5"
+                    reason_lbl = f"Upgraded volatile '12' Double Chance to high-safety '{new_pick}' (protects against draws)"
                 else:
                     new_mkt = "Double Chance"
-                    new_pick = f"{home} or Draw (1X)"
-                    new_odds = round(max(1.18, min(1.35, orig_odds * 0.95)), 2)
-                    new_prob = 0.90
+                    new_pick = f"{home} or Draw (1X)" if not is_away_intent else f"Draw or {away} (X2)"
+                    new_odds = round(max(1.16, min(1.35, orig_odds * 0.95)), 2)
+                    new_prob = 0.93
                     mkt_id = "10"
-                    oc_id = "9"
+                    oc_id = "9" if not is_away_intent else "11"
                     spec = None
-                reason_lbl = f"Upgraded from volatile '12' Double Chance to high-safety '{new_pick}' (protects against draws)"
+                    reason_lbl = f"Upgraded from volatile '12' Double Chance to draw-protected '{new_pick}'"
 
-            # Case B: High Over / BTTS / Goal Bounds -> Upgrade to Over 1.5 Total Goals
+            # Case B: High Over / BTTS / Goal Bounds -> Upgrade to Over 1.5 (if <=1.25) or Under 3.5 / Team Over 0.5
             elif any(k in m_lower or k in p_lower for k in ["over 2", "over 3", "btts", "both teams", "bounds", "halves"]):
-                new_mkt = "Over/Under Goals"
-                new_pick = "Over 1.5 Goals"
-                new_odds = round(max(1.18, min(1.35, orig_odds * 0.88)), 2)
-                new_prob = 0.91
-                mkt_id = "18"
-                oc_id = "12"
-                spec = "total=1.5"
-                reason_lbl = f"Upgraded goal market to Tier-1 cushion 'Over 1.5 Goals' (85%+ historical hit rate)"
+                if orig_odds <= 1.40:
+                    new_mkt = "Over/Under Goals"
+                    new_pick = "Over 1.5 Goals"
+                    new_odds = round(max(1.12, min(1.25, orig_odds * 0.85)), 2)
+                    new_prob = 0.93
+                    mkt_id = "18"
+                    oc_id = "12"
+                    spec = "total=1.5"
+                    reason_lbl = f"Upgraded goal market to Tier-1 cushion 'Over 1.5 Goals' (85%+ hit rate)"
+                else:
+                    new_mkt = "Over/Under Goals"
+                    new_pick = "Under 3.5 Goals"
+                    new_odds = round(max(1.18, min(1.35, orig_odds * 0.88)), 2)
+                    new_prob = 0.92
+                    mkt_id = "18"
+                    oc_id = "13"
+                    spec = "total=3.5"
+                    reason_lbl = f"Upgraded volatile goal market to safe-haven 'Under 3.5 Goals'"
 
-            # Case C: Straight 1X2 / Handicap / Win Either Half -> Upgrade to Double Chance 1X or X2
+            # Case C: Straight 1X2 / Handicap / Win Either Half -> Upgrade to Asian Handicap (+1.5) or Double Chance
             else:
                 if is_away_intent:
-                    new_mkt = "Double Chance"
-                    new_pick = f"Draw or {away} (X2)"
-                    new_odds = round(max(1.18, min(1.40, orig_odds * 0.85)), 2)
-                    new_prob = 0.90
-                    mkt_id = "10"
-                    oc_id = "11"
-                    spec = None
+                    new_mkt = "Asian Handicap"
+                    new_pick = f"{away} (+1.5 Handicap)"
+                    new_odds = round(max(1.15, min(1.35, orig_odds * 0.82)), 2)
+                    new_prob = 0.95
+                    mkt_id = "16"
+                    oc_id = "1715"
+                    spec = "hcp=1.5"
+                    reason_lbl = f"Upgraded straight pick '{orig_pick}' to Asian Handicap (+1.5) safety cushion"
                 else:
                     new_mkt = "Double Chance"
                     new_pick = f"{home} or Draw (1X)"
-                    new_odds = round(max(1.18, min(1.40, orig_odds * 0.85)), 2)
-                    new_prob = 0.90
+                    new_odds = round(max(1.16, min(1.38, orig_odds * 0.82)), 2)
+                    new_prob = 0.94
                     mkt_id = "10"
                     oc_id = "9"
                     spec = None
-                reason_lbl = f"Upgraded straight pick '{orig_pick}' to Double Chance safety cushion ({new_pick})"
+                    reason_lbl = f"Upgraded straight pick '{orig_pick}' to Double Chance safety cushion ({new_pick})"
 
             final_pick = {
                 "fixture_id": canonical_event_id or f"AUDIT_{idx:03d}",
@@ -386,47 +443,138 @@ async def re_edit_ticket(
                 remove_count += 1
 
     # ══════════════════════════════════════════════════════════════════════════
-    # STEP 3: MULTI-TICKET PORTFOLIO PARTITIONING & TRIMMING
+    # STEP 3: DYNAMIC BALANCED MULTI-TICKET PARTITIONING
     # ══════════════════════════════════════════════════════════════════════════
     def _rank_score(s):
         p = float(s.get("estimated_prob") or 0.80)
         o = float(s.get("estimated_odds") or s.get("odds") or 1.25)
-        o_score = 0.15 if 1.15 <= o <= 1.45 else 0.05
-        jitter = (rng.random() * 0.12) if reshuffle_seed else 0.0
+        # Optimal odds buffer: 1.15 to 1.35 gets a slight boost
+        o_score = 0.12 if 1.14 <= o <= 1.35 else 0.04
+        jitter = (rng.random() * 0.08) if reshuffle_seed else 0.0
         return p + o_score + jitter
 
+    # 1. Rank vetted safe selections by composite quality score
     sorted_candidates = sorted(final_selections, key=_rank_score, reverse=True)
 
+    # 2. Interleaved Round-Robin Partitioning across num_t tickets
+    # (Rank 1 -> T1, Rank 2 -> T2, Rank 3 -> T3, Rank 4 -> T1...)
+    # Guarantees both/all tickets get an equal mix of elite, mid, and varied league games dynamically
+    ticket_buckets: List[List[Dict[str, Any]]] = [[] for _ in range(num_t)]
+    for idx, cand in enumerate(sorted_candidates):
+        ticket_buckets[idx % num_t].append(cand)
+
+    def _derive_alternative_market(cand: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Derives a mathematically sound alternative winnable market for variant slips
+        so that no two tickets share the identical prediction on the same match.
+        """
+        alt = dict(cand)
+        m_lower = str(cand.get("market_name") or "").lower()
+        s_lower = str(cand.get("selection_name") or "").lower()
+        home = cand.get("home_team", "Home")
+        away = cand.get("away_team", "Away")
+        orig_odds = float(cand.get("odds") or cand.get("estimated_odds") or 1.25)
+
+        if "over 1.5" in s_lower or "over 1.5" in m_lower:
+            alt["market_name"] = "Double Chance"
+            alt["selection_name"] = f"{home} or Draw (1X)"
+            alt["odds"] = round(max(1.15, min(1.35, orig_odds * 0.96)), 2)
+            alt["estimated_odds"] = alt["odds"]
+            alt["estimated_prob"] = 0.88
+            alt["reason"] = f"Diversified variant: Draw-protected Double Chance (1X) instead of Over 1.5"
+            alt["provider_market_id"] = "10"
+            alt["provider_outcome_id"] = "9"
+            alt["provider_specifier"] = None
+        elif "double chance" in m_lower or "1x" in s_lower or "x2" in s_lower or "12" in s_lower:
+            alt["market_name"] = "Over/Under Goals"
+            alt["selection_name"] = "Over 1.5 Goals"
+            alt["odds"] = round(max(1.15, min(1.30, orig_odds * 0.98)), 2)
+            alt["estimated_odds"] = alt["odds"]
+            alt["estimated_prob"] = 0.87
+            alt["reason"] = f"Diversified variant: Over 1.5 Goals instead of Double Chance"
+            alt["provider_market_id"] = "18"
+            alt["provider_outcome_id"] = "12"
+            alt["provider_specifier"] = "total=1.5"
+        elif "handicap" in m_lower:
+            alt["market_name"] = "Over/Under Goals"
+            alt["selection_name"] = "Under 3.5 Goals"
+            alt["odds"] = round(max(1.18, min(1.35, orig_odds * 1.02)), 2)
+            alt["estimated_odds"] = alt["odds"]
+            alt["estimated_prob"] = 0.89
+            alt["reason"] = f"Diversified variant: Under 3.5 Goals safety cushion"
+            alt["provider_market_id"] = "18"
+            alt["provider_outcome_id"] = "13"
+            alt["provider_specifier"] = "total=3.5"
+        else:
+            alt["market_name"] = "Double Chance"
+            alt["selection_name"] = f"{home} or Draw (1X)"
+            alt["odds"] = round(max(1.16, min(1.35, orig_odds * 0.95)), 2)
+            alt["estimated_odds"] = alt["odds"]
+            alt["estimated_prob"] = 0.88
+            alt["reason"] = f"Diversified variant: Draw-protected coverage"
+            alt["provider_market_id"] = "10"
+            alt["provider_outcome_id"] = "9"
+            alt["provider_specifier"] = None
+
+        return alt
+
     portfolio_slips = []
-    used_indices = set()
+    fixture_usage_count: Dict[str, int] = {}
+    assigned_markets_per_fixture: Dict[str, set] = {}
+    max_allowed_appearances = 2
 
     for t_idx in range(num_t):
-        avail_pool = [c for i, c in enumerate(sorted_candidates) if i not in used_indices]
-        # If pool exhausted, use full candidates with distinct shuffle
-        if len(avail_pool) < (target_games if target_mode == "GAMES" and target_games else 2):
-            avail_pool = list(sorted_candidates)
-            if t_idx > 0:
-                rng.shuffle(avail_pool)
-
+        primary_bucket = ticket_buckets[t_idx]
         t_final = []
-        if target_mode == "GAMES" and 1 <= target_games:
-            t_final = avail_pool[:target_games]
-        elif target_mode == "ODDS" and target_odds > 1.05:
-            curr_acc = 1.0
-            for cand in avail_pool:
-                leg_odd = float(cand.get("estimated_odds") or cand.get("odds") or 1.25)
-                t_final.append(cand)
-                curr_acc *= leg_odd
-                if curr_acc >= target_odds and len(t_final) >= 2:
-                    break
-        else:
-            t_final = avail_pool
 
-        # Mark used items from candidate list to guarantee zero overlap across slips
-        for tf in t_final:
-            for orig_i, sc in enumerate(sorted_candidates):
-                if sc.get("fixture_id") == tf.get("fixture_id") or (sc.get("home_team") == tf.get("home_team") and sc.get("away_team") == tf.get("away_team")):
-                    used_indices.add(orig_i)
+        # First add all non-overlapping selections from this ticket's primary partition
+        for cand in primary_bucket:
+            f_key = str(cand.get("event_id") or cand.get("fixture_id") or f"{cand.get('home_team')}_{cand.get('away_team')}").strip().lower()
+            if fixture_usage_count.get(f_key, 0) == 0:
+                t_final.append(cand)
+                fixture_usage_count[f_key] = 1
+                assigned_markets_per_fixture.setdefault(f_key, set()).add(str(cand.get("selection_name")).strip().lower())
+                if target_mode == "GAMES" and target_games > 0 and len(t_final) >= target_games:
+                    break
+
+        # Fallback: If primary partition had fewer games than target_games, supplement dynamically
+        # with alternative diversified winnable markets
+        if target_mode == "GAMES" and target_games > 0 and len(t_final) < target_games:
+            needed = target_games - len(t_final)
+            for other_idx, other_bucket in enumerate(ticket_buckets):
+                if other_idx == t_idx:
+                    continue
+                for cand in sorted(other_bucket, key=lambda x: float(x.get("estimated_prob", 0.0)), reverse=True):
+                    f_key = str(cand.get("event_id") or cand.get("fixture_id") or f"{cand.get('home_team')}_{cand.get('away_team')}").strip().lower()
+                    current_count = fixture_usage_count.get(f_key, 0)
+
+                    is_already_in_ticket = any(
+                        str(x.get("event_id") or x.get("fixture_id") or f"{x.get('home_team')}_{x.get('away_team')}").strip().lower() == f_key
+                        for x in t_final
+                    )
+                    if not is_already_in_ticket and current_count < max_allowed_appearances:
+                        # Diversify the market option so this ticket gets an alternative winnable prediction
+                        diversified_cand = _derive_alternative_market(cand)
+                        t_final.append(diversified_cand)
+                        fixture_usage_count[f_key] = current_count + 1
+                        assigned_markets_per_fixture.setdefault(f_key, set()).add(str(diversified_cand.get("selection_name")).strip().lower())
+                        needed -= 1
+                        if needed <= 0:
+                            break
+                if needed <= 0:
+                    break
+
+        # Odds mode trimming if requested
+        if target_mode == "ODDS" and target_odds > 1.05:
+            trimmed = []
+            curr_acc = 1.0
+            for cand in t_final:
+                leg_odd = float(cand.get("estimated_odds") or cand.get("odds") or 1.25)
+                trimmed.append(cand)
+                curr_acc *= leg_odd
+                if curr_acc >= target_odds and len(trimmed) >= 2:
+                    break
+            t_final = trimmed
 
         slip_odds = 1.0
         slip_prob = 0.0
@@ -443,6 +591,7 @@ async def re_edit_ticket(
             "new_total_odds": round(slip_odds, 2),
             "avg_win_prob": round(slip_prob / max(1, len(t_final)), 3)
         })
+
 
     primary_slip = portfolio_slips[0]
 

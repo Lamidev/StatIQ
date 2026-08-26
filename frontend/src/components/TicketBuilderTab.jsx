@@ -27,12 +27,22 @@ const AVAILABLE_LEAGUES = [
   { code: "POL", name: "Ekstraklasa", country: "Poland" },
   { code: "BRA", name: "Serie A", country: "Brazil" },
   { code: "MLS", name: "MLS", country: "USA" },
+  { code: "ARG", name: "Primera División", country: "Argentina" },
+  { code: "MEX", name: "Liga MX", country: "Mexico" },
+  { code: "COL", name: "Liga BetPlay", country: "Colombia" },
+  { code: "CHI", name: "Primera División", country: "Chile" },
+  { code: "CZE", name: "1. Liga", country: "Czech Republic" },
   { code: "RUS", name: "Premier League", country: "Russia" },
   { code: "UKR", name: "Premier League", country: "Ukraine" },
   { code: "ROU", name: "Superliga", country: "Romania" },
   { code: "ELC", name: "Championship", country: "England" },
+  { code: "SD", name: "LaLiga Hypermotion", country: "Spain" },
+  { code: "BL2", name: "2. Bundesliga", country: "Germany" },
+  { code: "IT2", name: "Serie B", country: "Italy" },
+  { code: "FL2", name: "Ligue 2", country: "France" },
   { code: "UCL", name: "Champions League", country: "Europe" },
   { code: "UEL", name: "Europa League", country: "Europe" },
+  { code: "UECL", name: "Conference League", country: "Europe" },
 ];
 
 export default function TicketBuilderTab() {
@@ -41,9 +51,13 @@ export default function TicketBuilderTab() {
   // Standard Accumulator State
   const [leagueScope, setLeagueScope] = useState("MULTI");
   const [singleLeague, setSingleLeague] = useState("PL");
-  const [gameweek, setGameweek] = useState(1);
-  const ALL_TOP_LEAGUE_CODES = AVAILABLE_LEAGUES.map(l => l.code);
   const TOP_5_LEAGUE_CODES = ["PL", "PD", "SA", "BL1", "FL1"];
+  const TOP_MAJOR_EUROPEAN_CODES = [
+    "PL", "PD", "SA", "BL1", "FL1", "DED", "PPL", "TUR", "BEL", "AUT",
+    "SCO", "SUI", "CRO", "DEN", "GRE", "NOR", "SWE", "POL", "ROU", "CZE", "RUS", "UKR", "SAU",
+    "UCL", "UEL", "UECL"
+  ];
+  const ALL_TOP_LEAGUE_CODES = TOP_MAJOR_EUROPEAN_CODES;
 
   const [targetOdds, setTargetOdds] = useState(2.0);
   const [targetMode, setTargetMode] = useState("ODDS"); // "ODDS" or "GAMES"
@@ -52,7 +66,7 @@ export default function TicketBuilderTab() {
   const [numTickets, setNumTickets] = useState(1); // 1, 2, 3 (Multi-Ticket Portfolio)
   const [activePortfolioIndex, setActivePortfolioIndex] = useState(0);
   const [portfolioTickets, setPortfolioTickets] = useState(null);
-  const [selectedLeagues, setSelectedLeagues] = useState(ALL_TOP_LEAGUE_CODES);
+  const [selectedLeagues, setSelectedLeagues] = useState(TOP_MAJOR_EUROPEAN_CODES);
   const [dateWindow, setDateWindow] = useState("TODAY");
   const [selectedFlexCut, setSelectedFlexCut] = useState("OFF");
   const [customOdds, setCustomOdds] = useState("500");
@@ -1846,11 +1860,10 @@ export default function TicketBuilderTab() {
                       🛡️ HEDGE & DIVERSIFY
                     </span>
                   </div>
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                     {[
                       { id: 1, label: "1 Ticket", desc: "Single optimal ticket" },
-                      { id: 2, label: "2 Tickets Portfolio", desc: "2 distinct non-overlapping slips" },
-                      { id: 3, label: "3 Tickets Portfolio", desc: "3 diversified slips (Max coverage)" },
+                      { id: 2, label: "2 Variant Tickets Portfolio", desc: "2 distinct non-overlapping / hedged slips" },
                     ].map(nt => (
                       <div
                         key={nt.id}

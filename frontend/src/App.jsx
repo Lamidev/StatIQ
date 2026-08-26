@@ -7,6 +7,7 @@ import BetHistoryTab from "./components/BetHistoryTab";
 import BacktesterTab from "./components/BacktesterTab";
 import AccessControlTab from "./components/AccessControlTab";
 import PasskeyAuthGate from "./components/PasskeyAuthGate";
+import VirtualTraderApp from "./virtual-trader/VirtualTraderApp";
 
 import { fetchTrackedTickets } from "./api/client";
 import { evaluateTicketStatus } from "./utils/ticketEvaluator";
@@ -90,6 +91,7 @@ export default function App() {
         )}
         {activeTab === "backtester" && <BacktesterTab />}
         {activeTab === "access" && <AccessControlTab currentUser={authenticatedUser} />}
+        {activeTab === "virtual-trader" && <VirtualTraderApp />}
       </main>
 
       {/* Footer */}

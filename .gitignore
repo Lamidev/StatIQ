@@ -52,3 +52,9 @@ yarn-error.log*
 backend/*.db
 backend/*.db-shm
 backend/*.db-wal
+virtual/*.db
+virtual/*.db-shm
+virtual/*.db-wal
+.vfootball_watermark.json
+virtual/.vfootball_watermark.json
+

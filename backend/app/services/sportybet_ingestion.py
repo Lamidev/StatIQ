@@ -55,10 +55,11 @@ class SportyBetIngestionService:
     def _get_client(cls) -> httpx.Client:
         if cls._shared_client is None or cls._shared_client.is_closed:
             cls._shared_client = httpx.Client(
-                timeout=4.0,
+                timeout=5.0,
                 headers=cls.HEADERS,
                 limits=httpx.Limits(max_keepalive_connections=50, max_connections=100),
-                follow_redirects=True
+                follow_redirects=True,
+                verify=False
             )
         return cls._shared_client
 
@@ -329,3 +330,158 @@ class SportyBetIngestionService:
             })
 
         return results
+
+
+    @classmethod
+    def fetch_h2h_stats(cls, event_id: str, home_team: str = "", away_team: str = "") -> Dict[str, Any]:
+        """
+        Fetches Head-to-Head stats from SportyBet's internal match stats endpoint.
+        Returns structured H2H data: home_wins, draws, away_wins, avg_goals, last_5_results.
+        Non-blocking: returns empty dict on timeout/error so caller always gets a result in <0.8s.
+        """
+        if not event_id:
+            return {}
+
+        cache_key = f"h2h_{event_id}"
+        now = time.time()
+        if cache_key in cls._cache:
+            entry = cls._cache[cache_key]
+            if (now - entry.get("timestamp", 0)) < 3600:  # 1 hour H2H cache
+                return entry.get("data", {})
+
+        url = f"https://www.sportybet.com/api/ng/factsCenter/h2h/{event_id}"
+        client = cls._get_client()
+        try:
+            resp = client.get(url, timeout=0.7)
+            if resp.status_code == 200:
+                j = resp.json()
+                raw = j.get("data") or j
+                h2h = cls._parse_h2h_stats(raw, home_team, away_team)
+                cls._cache[cache_key] = {"data": h2h, "timestamp": now}
+                return h2h
+        except Exception:
+            pass
+
+        return {}
+
+    @classmethod
+    def _parse_h2h_stats(cls, raw: Any, home_team: str, away_team: str) -> Dict[str, Any]:
+        """
+        Parses SportyBet H2H response into a canonical H2H summary dict.
+        """
+        if not raw or not isinstance(raw, dict):
+            return {}
+
+        result = {
+            "home_wins": 0,
+            "draws": 0,
+            "away_wins": 0,
+            "total_meetings": 0,
+            "avg_total_goals": 0.0,
+            "home_avg_goals_scored": 0.0,
+            "away_avg_goals_scored": 0.0,
+            "last_5": [],
+            "home_win_pct": 0.0,
+            "away_win_pct": 0.0,
+            "draw_pct": 0.0,
+        }
+
+        # SportyBet returns H2H in various formats — try each
+        h2h_section = raw.get("h2h") or raw.get("previousMeetings") or raw.get("meetings") or []
+        overview = raw.get("overview") or raw.get("matchStats") or {}
+
+        # Try to extract from overview block (e.g. wins/draws summary)
+        if isinstance(overview, dict):
+            result["home_wins"] = int(overview.get("homeWins", 0) or overview.get("home_wins", 0) or 0)
+            result["draws"] = int(overview.get("draws", 0) or 0)
+            result["away_wins"] = int(overview.get("awayWins", 0) or overview.get("away_wins", 0) or 0)
+
+        # Parse match-by-match records if available
+        meetings = h2h_section if isinstance(h2h_section, list) else []
+        total_goals = 0
+        home_goals = 0
+        away_goals = 0
+        parsed_count = 0
+        local_home_w = 0
+        local_draw = 0
+        local_away_w = 0
+
+        for m in meetings[:10]:  # Last 10 H2H meetings max
+            if not isinstance(m, dict):
+                continue
+            try:
+                hg = int(m.get("homeScore", m.get("home_score", 0) or 0))
+                ag = int(m.get("awayScore", m.get("away_score", 0) or 0))
+                total_goals += hg + ag
+                home_goals += hg
+                away_goals += ag
+                parsed_count += 1
+
+                if hg > ag:
+                    local_home_w += 1
+                elif ag > hg:
+                    local_away_w += 1
+                else:
+                    local_draw += 1
+
+                result["last_5"].append({
+                    "home_score": hg,
+                    "away_score": ag,
+                    "total_goals": hg + ag
+                })
+                if len(result["last_5"]) >= 5:
+                    break
+            except Exception:
+                continue
+
+        # Use parsed data if overview didn't have wins/draws
+        if result["home_wins"] == 0 and result["draws"] == 0 and result["away_wins"] == 0:
+            result["home_wins"] = local_home_w
+            result["draws"] = local_draw
+            result["away_wins"] = local_away_w
+
+        total = result["home_wins"] + result["draws"] + result["away_wins"]
+        result["total_meetings"] = total or parsed_count
+
+        if result["total_meetings"] > 0:
+            result["home_win_pct"] = round(result["home_wins"] / result["total_meetings"], 3)
+            result["away_win_pct"] = round(result["away_wins"] / result["total_meetings"], 3)
+            result["draw_pct"] = round(result["draws"] / result["total_meetings"], 3)
+
+        if parsed_count > 0:
+            result["avg_total_goals"] = round(total_goals / parsed_count, 2)
+            result["home_avg_goals_scored"] = round(home_goals / parsed_count, 2)
+            result["away_avg_goals_scored"] = round(away_goals / parsed_count, 2)
+
+        return result
+
+    @classmethod
+    def fetch_h2h_batch(cls, fixtures: List[Dict[str, Any]], max_items: int = 35) -> Dict[str, Dict[str, Any]]:
+        """
+        Batch-fetches H2H stats for fixtures in parallel with high concurrency.
+        Guaranteed to return in < 1 second.
+        """
+        import concurrent.futures
+        results = {}
+
+        def _fetch_one(fix):
+            ev_id = str(fix.get("event_id") or fix.get("eventId") or "")
+            h = str(fix.get("home_team") or "")
+            a = str(fix.get("away_team") or "")
+            if not ev_id:
+                return ev_id, {}
+            h2h = cls.fetch_h2h_stats(ev_id, h, a)
+            return ev_id, h2h
+
+        target_fixtures = fixtures[:max_items] if max_items else fixtures
+        try:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=35) as pool:
+                for ev_id, h2h_data in pool.map(_fetch_one, target_fixtures):
+                    if ev_id:
+                        results[ev_id] = h2h_data
+        except Exception as e:
+            logger.warning(f"[H2H Batch] Error: {e}")
+
+        return results
+
+

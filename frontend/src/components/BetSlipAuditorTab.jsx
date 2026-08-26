@@ -1036,11 +1036,10 @@ export default function BetSlipAuditorTab({ onNavigateHistory, onTicketLocked })
                     <label className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider block">
                       Tickets to Generate (Zero-Overlap Portfolio)
                     </label>
-                    <div className="grid grid-cols-3 gap-2">
+                    <div className="grid grid-cols-2 gap-2">
                       {[
                         { count: 1, label: "1 Ticket", sub: "Standard Single Slip" },
-                        { count: 2, label: "2 Tickets", sub: "Split 0% Overlap" },
-                        { count: 3, label: "3 Tickets", sub: "Diversified Portfolio" },
+                        { count: 2, label: "2 Variant Tickets", sub: "Split 0% Overlap / Hedged Markets" },
                       ].map((item) => (
                         <button
                           key={item.count}

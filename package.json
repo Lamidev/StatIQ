@@ -1,0 +1,13 @@
+{
+  "name": "statiq-monorepo",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev:backend": ".\\.venv\\Scripts\\python -m uvicorn app.main:app --reload --port 8000",
+    "dev:virtual": ".\\.venv\\Scripts\\python -m uvicorn virtual.main:app --reload --port 8001",
+    "dev:frontend": "cd frontend && npm run dev",
+    "virtual": "npm run dev:virtual",
+    "backend": "npm run dev:backend",
+    "frontend": "npm run dev:frontend"
+  }
+}

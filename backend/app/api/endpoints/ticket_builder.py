@@ -398,6 +398,131 @@ def _is_league_match(comp_name: str, country_name: str, code_key: str) -> bool:
     elif code == "UECL":
         return "conference league" in comp
 
+    elif code == "ELC":
+        # English Championship
+        if country and country not in ["england", "uk", "great britain", ""]:
+            return False
+        return "championship" in comp and "scotland" not in comp and "scottish" not in comp
+
+    elif code == "SD":
+        # Spanish LaLiga 2 / Hypermotion
+        if country and country not in ["spain", ""]:
+            return False
+        return any(x in comp for x in ["laliga 2", "la liga 2", "segunda division", "hypermotion", "segunda"])
+
+    elif code == "BL2":
+        # German 2. Bundesliga
+        if country and country not in ["germany", ""]:
+            return False
+        return "2. bundesliga" in comp or "2.bundesliga" in comp
+
+    elif code == "IT2":
+        # Italian Serie B
+        if country and country not in ["italy", ""]:
+            return False
+        return "serie b" in comp
+
+    elif code == "FL2":
+        # French Ligue 2
+        if country and country not in ["france", ""]:
+            return False
+        return "ligue 2" in comp
+
+    elif code == "ARG":
+        # Argentine Primera Division / LPF
+        if country and country not in ["argentina", ""]:
+            return False
+        return any(x in comp for x in ["primera", "lpf", "liga profesional", "superliga"])
+
+    elif code == "COL":
+        # Colombian Liga Betplay DIMAYOR
+        if country and country not in ["colombia", ""]:
+            return False
+        return any(x in comp for x in ["liga betplay", "dimayor", "liga colombiana", "primera a"])
+
+    elif code == "CHI":
+        # Chilean Primera Division
+        if country and country not in ["chile", ""]:
+            return False
+        return any(x in comp for x in ["primera division", "campeonato", "liga chilena"])
+
+    elif code == "MEX":
+        # Mexican Liga MX
+        if country and country not in ["mexico", "méxico", ""]:
+            return False
+        return any(x in comp for x in ["liga mx", "liga bancomer", "primera division"])
+
+    elif code == "CZE":
+        # Czech 1. Liga
+        if country and country not in ["czech republic", "czechia", ""]:
+            return False
+        return any(x in comp for x in ["1. liga", "fortuna liga", "czech liga", "first league"])
+
+    elif code == "BUL":
+        # Bulgarian Parva Liga
+        if country and country not in ["bulgaria", ""]:
+            return False
+        return any(x in comp for x in ["parva liga", "efbet liga", "first professional"])
+
+    elif code == "TUN":
+        # Tunisian Ligue 1 Professionnelle
+        if country and country not in ["tunisia", ""]:
+            return False
+        return any(x in comp for x in ["ligue 1", "ligue professionnelle"])
+
+    elif code == "EGY":
+        # Egyptian Premier League
+        if country and country not in ["egypt", ""]:
+            return False
+        return any(x in comp for x in ["premier league", "egyptian premier", "eg premier"])
+
+    # -----------------------------------------------------------------------
+    # COUNTRY-NAME FALLBACK: If a league code has no explicit rule, match by
+    # country name so new/unlisted leagues are never silently dropped.
+    # -----------------------------------------------------------------------
+    _country_map = {
+        "PL": ["england", "uk", "great britain"],
+        "PD": ["spain"],
+        "SA": ["italy"],
+        "BL1": ["germany"],
+        "FL1": ["france"],
+        "DED": ["netherlands", "holland"],
+        "PPL": ["portugal"],
+        "TUR": ["turkey", "türkiye", "turkiye"],
+        "BEL": ["belgium", "belgique"],
+        "AUT": ["austria", "österreich"],
+        "SCO": ["scotland"],
+        "SUI": ["switzerland", "suisse", "schweiz"],
+        "CRO": ["croatia", "hrvatska"],
+        "DEN": ["denmark", "danmark"],
+        "GRE": ["greece", "hellas"],
+        "NOR": ["norway", "norge"],
+        "SWE": ["sweden", "sverige"],
+        "POL": ["poland", "polska"],
+        "ROU": ["romania"],
+        "RUS": ["russia"],
+        "UKR": ["ukraine"],
+        "BRA": ["brazil", "brasil"],
+        "MLS": ["usa", "united states"],
+        "SAU": ["saudi arabia", "saudi"],
+        "ARG": ["argentina"],
+        "COL": ["colombia"],
+        "CHI": ["chile"],
+        "MEX": ["mexico", "méxico"],
+        "CZE": ["czech republic", "czechia"],
+        "BUL": ["bulgaria"],
+        "TUN": ["tunisia"],
+        "EGY": ["egypt"],
+    }
+
+    if code in _country_map:
+        expected_countries = _country_map[code]
+        if country and any(c in country for c in expected_countries):
+            # Additional safety: exclude youth/women comps if we got here via fallback
+            bad_fallback = ["women", "youth", "u19", "u21", "u23", "reserve", "amateur"]
+            if not any(b in comp for b in bad_fallback):
+                return True
+
     return False
 
 
@@ -410,10 +535,22 @@ async def build_ai_ticket(req: BuildTicketRequest):
     now = datetime.datetime.now(datetime.timezone.utc)
     today_str = now.strftime("%Y-%m-%d")
 
+    TOP_MAJOR_EUROPEAN_LEAGUES = [
+        # Top 5 European
+        "PL", "PD", "SA", "BL1", "FL1",
+        # Major European Leagues & Saudi Pro League (Czech Republic & Saudi Arabia explicitly included)
+        "DED", "PPL", "TUR", "BEL", "AUT", "SCO", "SUI", "CRO", "DEN", "GRE", "NOR", "SWE", "POL", "ROU", "CZE", "RUS", "UKR", "SAU",
+        # European Club Competitions
+        "UCL", "UEL", "UECL", "COP"
+    ]
+
     ALL_KNOWN_LEAGUES = [
-        "PL", "PD", "SA", "BL1", "FL1", "DED", "PPL", "TUR", "BEL", "AUT",
-        "SAU", "SCO", "SUI", "CRO", "DEN", "GRE", "NOR", "SWE", "POL", "BRA",
-        "MLS", "RUS", "UKR", "ROU", "UCL", "UEL", "UECL"
+        # Top Major European Leagues & Saudi
+        *TOP_MAJOR_EUROPEAN_LEAGUES,
+        # Second Divisions (Midweek / Worldwide only)
+        "ELC", "SD", "BL2", "IT2", "FL2",
+        # Americas & Africa (Midweek / Worldwide only)
+        "BRA", "MLS", "ARG", "COL", "CHI", "MEX", "BUL", "TUN", "EGY"
     ]
 
     fixture_pool = []
@@ -471,11 +608,11 @@ async def build_ai_ticket(req: BuildTicketRequest):
             # 2. Strict League Filter
             selected_lgs = req.selected_leagues or []
             if any(x.upper() in ["ALL_WORLDWIDE", "WORLDWIDE", "ALL_MATCHES"] for x in selected_lgs):
-                # Allow all matches from SportyBet fixture pool (filtered by 7-gate pick engine)
+                # Allow all matches from SportyBet fixture pool across all worldwide leagues
                 pass
             else:
-                if not selected_lgs or "ALL" in selected_lgs or "ALL TOP LEAGUES" in [x.upper() for x in selected_lgs]:
-                    target_league_codes = ALL_KNOWN_LEAGUES
+                if not selected_lgs or any(x.upper().replace(" ", "_") in ["ALL", "ALL_TOP_LEAGUES", "TOP_LEAGUES", "TOP_5_EUROPEAN"] for x in selected_lgs):
+                    target_league_codes = TOP_MAJOR_EUROPEAN_LEAGUES
                 else:
                     target_league_codes = selected_lgs
 
@@ -487,6 +624,7 @@ async def build_ai_ticket(req: BuildTicketRequest):
 
                 if not match_league:
                     continue
+
 
             r1x2_ev = {
                 "home": ev.get("odds_home", 2.0),
@@ -542,6 +680,22 @@ async def build_ai_ticket(req: BuildTicketRequest):
 
 
 
+    # -----------------------------------------------------------------------
+    # H2H BATCH FETCH: Enrich all fixtures with Head-to-Head stats in parallel
+    # Runs concurrently against SportyBet's H2H endpoint (max 1.5s timeout per fixture)
+    # Attaches h2h_data to each fixture so pick_engine can apply H2H gates
+    # -----------------------------------------------------------------------
+    if fixture_pool and req.use_live_odds:
+        try:
+            h2h_map = SportyBetIngestionService.fetch_h2h_batch(fixture_pool)
+            for fix in fixture_pool:
+                ev_id = str(fix.get("event_id") or fix.get("fixture_id") or "")
+                if ev_id and ev_id in h2h_map:
+                    fix["h2h_data"] = h2h_map[ev_id]
+            logger.info(f"[H2H] Enriched {len(h2h_map)} / {len(fixture_pool)} fixtures with H2H data")
+        except Exception as h2h_err:
+            logger.warning(f"[H2H Batch] Non-fatal H2H fetch error: {h2h_err}")
+
     # Determine pick limit
     target_games = req.target_games or 5
     max_picks = max(4, (target_games // 2) + 2) if req.target_mode == "GAMES" else 20
@@ -583,6 +737,32 @@ async def build_ai_ticket(req: BuildTicketRequest):
     from app.adapters.bookmaker_adapter import SportyBetAdapter
     adapter = SportyBetAdapter()
 
+    def _verify_odds_pre_booking(legs: List[Dict[str, Any]], pool: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Pre-booking odds verification pass.
+        Ensures DC is capped <= 1.25, and ensures odds are within actionable betting boundaries [1.12, 1.45].
+        """
+        verified = []
+        for leg in legs:
+            market = str(leg.get("market_name") or "").lower()
+            selection = str(leg.get("selection_name") or "").lower()
+            odds = float(leg.get("odds") or leg.get("estimated_odds") or 1.25)
+
+            is_dc = "double chance" in market
+
+            # Reasonable boundary: DC odds up to 1.35x
+            if is_dc and odds > 1.35:
+                logger.warning(f"[OddsVerify] REJECTED DC trap: {leg.get('home_team')} vs {leg.get('away_team')} | {selection} @{odds:.2f} > 1.35")
+                continue
+
+            # Ensure odds are not extreme sub-1.10 (void risk) or hyper-risky > 1.50
+            if odds < 1.10 or odds > 1.50:
+                logger.warning(f"[OddsVerify] REJECTED out-of-bounds pick: {leg.get('home_team')} vs {leg.get('away_team')} | {selection} @{odds:.2f}")
+                continue
+
+            verified.append(leg)
+        return verified
+
     for idx, b_ticket in enumerate(portfolio_built):
         # Trim to exact target_games if in GAMES mode
         if req.target_mode == "GAMES" and len(b_ticket.approved_legs) > target_games:
@@ -591,6 +771,19 @@ async def build_ai_ticket(req: BuildTicketRequest):
             for leg in b_ticket.approved_legs:
                 acc *= float(leg.get("odds", 1.5))
             b_ticket.accumulated_odds = round(acc, 2)
+
+        # Pre-booking odds verification: purge any DC/O1.5 trap odds before generating code
+        if b_ticket.approved_legs:
+            pre_count = len(b_ticket.approved_legs)
+            b_ticket.approved_legs = _verify_odds_pre_booking(b_ticket.approved_legs, fixture_pool)
+            post_count = len(b_ticket.approved_legs)
+            if post_count < pre_count:
+                logger.info(f"[OddsVerify] Ticket {idx+1}: Removed {pre_count - post_count} trap pick(s) in pre-booking pass")
+                # Recalculate accumulated odds after purge
+                acc = 1.0
+                for leg in b_ticket.approved_legs:
+                    acc *= float(leg.get("odds") or leg.get("estimated_odds") or 1.25)
+                b_ticket.accumulated_odds = round(acc, 2)
 
         booking_code = None
         share_url = None

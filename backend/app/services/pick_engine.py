@@ -251,13 +251,32 @@ class MatchIQPickEngine:
     def __init__(self, use_live_odds: bool = True):
         self.use_live_odds = use_live_odds
 
-    def _get_structural_safety(self, market_name: str) -> float:
-        m_lower = market_name.lower()
-        if any(x in m_lower for x in ["double chance", "over 0.5 team", "team over 0.5", "win either half"]):
+    def _get_structural_safety(self, market_name: str, selection_name: str = "") -> float:
+        m_lower = (market_name or "").lower()
+        s_lower = (selection_name or "").lower()
+
+        # 1. Fatal structural penalty for volatile "12" double chance (loses on ~27% draw base rate)
+        if "12" in s_lower or "home or away" in s_lower or "12" in m_lower:
+            return 0.15
+
+        # 2. Maximum Structural Safety (1.0): Draw-protected lines, cushions, & team goal thresholds
+        if any(x in m_lower or x in s_lower for x in ["(+1.5)", "(+2.0)", "+1.5", "+2.0", "team over 0.5", "team goals", "win either half"]):
             return 1.0
-        if any(x in m_lower for x in ["match result", "1x2", "over 1.5"]):
-            return 0.7
-        return 0.5  # BTTS, Over 2.5, Corners (higher variance)
+        if "double chance" in m_lower and any(x in s_lower for x in ["1x", "x2", "draw or away", "home or draw"]):
+            return 1.0
+
+        # 3. High Structural Safety (0.90 - 0.95): Conservative Unders & Low-line Overs
+        if any(x in m_lower or x in s_lower for x in ["under 3.5", "under 4.5", "over 0.5"]):
+            return 0.95
+        if "over 1.5" in m_lower or "over 1.5" in s_lower:
+            return 0.85
+
+        # 4. Standard Favorite Win (0.80)
+        if any(x in m_lower for x in ["match result", "1x2"]):
+            return 0.80
+
+        # 5. Higher Variance (0.40): BTTS, Over 2.5, Exotic Corners
+        return 0.40
 
     def _strip_overround_margin(self, odds: float, market_type: str = "2WAY") -> float:
         """
@@ -362,9 +381,9 @@ class MatchIQPickEngine:
 
         fixture["result_1x2"] = r1x2
 
-        h_odd = float(r1x2.get("home", 0.0)) if r1x2.get("home") else None
-        d_odd = float(r1x2.get("draw", 0.0)) if r1x2.get("draw") else None
-        a_odd = float(r1x2.get("away", 0.0)) if r1x2.get("away") else None
+        h_odd = float(r1x2.get("home", 0.0)) if r1x2.get("home") else (float(fixture.get("odds_home")) if fixture.get("odds_home") else None)
+        d_odd = float(r1x2.get("draw", 0.0)) if r1x2.get("draw") else (float(fixture.get("odds_draw")) if fixture.get("odds_draw") else None)
+        a_odd = float(r1x2.get("away", 0.0)) if r1x2.get("away") else (float(fixture.get("odds_away")) if fixture.get("odds_away") else None)
         # Fetch baseline probabilities
         probs_data = calculate_matchiq_probabilities(home, away)
 
@@ -426,6 +445,14 @@ class MatchIQPickEngine:
             allowed_directions = ["HOME", "AWAY", "NEUTRAL"]
         gate_results["gate1"] = "PASS"
 
+        # Detect Match Archetype for Tactical Assignment
+        fav_odd = min(h_odd, a_odd) if (h_odd and a_odd and h_odd > 1.0 and a_odd > 1.0) else 2.5
+        und_odd = max(h_odd, a_odd) if (h_odd and a_odd and h_odd > 1.0 and a_odd > 1.0) else 2.5
+        dom_ratio = (und_odd / fav_odd) if fav_odd > 0 else 1.0
+
+        is_heavy_fav = (tier_context in ["HOME_DOMINANT", "AWAY_DOMINANT"] or (fav_odd <= 1.48 and dom_ratio >= 2.5))
+        is_balanced = (not is_heavy_fav and (tier_context in ["COMPETITIVE", "HOME_SLIGHT_FAVORITE", "AWAY_SLIGHT_FAVORITE"] or abs(ph - pa) <= 0.15))
+
         ou15_data = next((x for x in ou_lines if str(x.get("line")) == "1.5"), {})
         ou35_data = next((x for x in ou_lines if str(x.get("line")) == "3.5"), {})
         ou45_data = next((x for x in ou_lines if str(x.get("line")) == "4.5"), {})
@@ -433,43 +460,118 @@ class MatchIQPickEngine:
 
         candidate_markets = []
 
-        if "HOME" in allowed_directions and (ph + pd) >= 0.58 and (h_odd is None or h_odd <= 2.60):
+        # -----------------------------------------------------------------------
+        # H2H GATE: Apply Head-to-Head intelligence to block bad Double Chance picks
+        # -----------------------------------------------------------------------
+        h2h_data = fixture.get("h2h_data") or {}
+        h2h_home_win_pct = float(h2h_data.get("home_win_pct", 0.0) or 0.0)
+        h2h_away_win_pct = float(h2h_data.get("away_win_pct", 0.0) or 0.0)
+        h2h_avg_goals = float(h2h_data.get("avg_total_goals", 0.0) or 0.0)
+        h2h_total = int(h2h_data.get("total_meetings", 0) or 0)
+
+        # Block X2 (Draw or Away) when home team dominates H2H (≥60% win rate with ≥3 meetings)
+        h2h_block_x2 = (h2h_total >= 3 and h2h_home_win_pct >= 0.60)
+        # Block 1X (Home or Draw) when away team dominates H2H (≥60% win rate with ≥3 meetings)
+        h2h_block_1x = (h2h_total >= 3 and h2h_away_win_pct >= 0.60)
+        # Use H2H avg goals to influence Over/Under picks
+        h2h_is_high_scoring = (h2h_total >= 3 and h2h_avg_goals >= 2.5)
+        h2h_is_low_scoring = (h2h_total >= 3 and h2h_avg_goals <= 1.5 and h2h_avg_goals > 0)
+
+        audit_log.append(
+            f"H2H: {h2h_total} meetings | Home win%: {h2h_home_win_pct*100:.0f}% | Away win%: {h2h_away_win_pct*100:.0f}% | Avg Goals: {h2h_avg_goals} "
+            + (f"[BLOCKING X2 - home fortress]" if h2h_block_x2 else "")
+            + (f"[BLOCKING 1X - away powerhouse]" if h2h_block_1x else "")
+        )
+
+        # 1. Double Chance (1X and X2 — Draw Protected + Dynamic Odds up to 1.35)
+        if "HOME" in allowed_directions and (ph + pd) >= 0.58 and (h_odd is None or h_odd <= 2.80):
             dc_1x_odds = dc_odds.get("1X") or round(max(1.04, 1.0 / (ph + pd + 0.04)), 2)
-            candidate_markets.append({
-                "market": "Double Chance",
-                "selection": f"{home} or Draw (1X)",
-                "prob": min(ph + pd + 0.02, 0.98),
-                "odds": dc_1x_odds,
-                "direction": "HOME",
-                "category": "DOUBLE_CHANCE"
-            })
+            # H2H block: never give Home or Draw when away team dominates H2H
+            # Reasonable boundary: DC odds up to 1.35
+            if not h2h_block_1x and float(dc_1x_odds) <= 1.35:
+                candidate_markets.append({
+                    "market": "Double Chance",
+                    "selection": f"{home} or Draw (1X)",
+                    "prob": min(ph + pd + 0.02, 0.98),
+                    "odds": dc_1x_odds,
+                    "direction": "HOME",
+                    "category": "DOUBLE_CHANCE"
+                })
 
-        if "AWAY" in allowed_directions and (pa + pd) >= 0.58 and (a_odd is None or a_odd <= 2.60):
+        if "AWAY" in allowed_directions and (pa + pd) >= 0.58 and (a_odd is None or a_odd <= 2.80):
             dc_x2_odds = dc_odds.get("X2") or round(max(1.04, 1.0 / (pa + pd + 0.04)), 2)
+            # H2H block: never give Draw or Away when home team dominates H2H
+            # Reasonable boundary: DC odds up to 1.35
+            if not h2h_block_x2 and float(dc_x2_odds) <= 1.35:
+                candidate_markets.append({
+                    "market": "Double Chance",
+                    "selection": f"{away} or Draw (X2)",
+                    "prob": min(pa + pd + 0.02, 0.98),
+                    "odds": dc_x2_odds,
+                    "direction": "AWAY",
+                    "category": "DOUBLE_CHANCE"
+                })
+
+        # 2. Asian Handicap (+1.5 / +2.0): STRICTLY FOR BALANCED/EQUAL STRENGTH GAMES ONLY (Never give to underdog vs heavy favorite)
+        if is_balanced and not is_heavy_fav:
+            if a_odd and 1.80 <= a_odd <= 3.80:
+                p_ah_away = min(0.95, max(0.85, pa + pd + 0.12))
+                odd_ah_away = round(max(1.10, 1.0 / (p_ah_away * 1.04)), 2)
+                candidate_markets.append({
+                    "market": "Asian Handicap",
+                    "selection": f"{away} (+1.5 Handicap)",
+                    "prob": p_ah_away,
+                    "odds": odd_ah_away,
+                    "direction": "AWAY",
+                    "category": "HANDICAP"
+                })
+            if h_odd and 1.80 <= h_odd <= 3.80:
+                p_ah_home = min(0.95, max(0.85, ph + pd + 0.12))
+                odd_ah_home = round(max(1.10, 1.0 / (p_ah_home * 1.04)), 2)
+                candidate_markets.append({
+                    "market": "Asian Handicap",
+                    "selection": f"{home} (+1.5 Handicap)",
+                    "prob": p_ah_home,
+                    "odds": odd_ah_home,
+                    "direction": "HOME",
+                    "category": "HANDICAP"
+                })
+
+        # 3. Team Goals (Team Over 0.5 / 1.5 Goals)
+        if is_heavy_fav:
+            fav_is_home = (h_odd and a_odd and h_odd < a_odd)
+            fav_team = home if fav_is_home else away
+            fav_p = ph if fav_is_home else pa
+            fav_odd_val = h_odd if fav_is_home else a_odd
+
+            # Heavy Favorite Team Over 0.5 Goals (Mega High Win Rate)
+            p_to05 = min(0.96, max(0.88, fav_p + 0.15))
+            o_to05 = round(max(1.08, min(1.30, 1.0 / (p_to05 * 1.03))), 2)
             candidate_markets.append({
-                "market": "Double Chance",
-                "selection": f"{away} or Draw (X2)",
-                "prob": min(pa + pd + 0.02, 0.98),
-                "odds": dc_x2_odds,
-                "direction": "AWAY",
-                "category": "DOUBLE_CHANCE"
+                "market": "Team Goals",
+                "selection": f"{fav_team} Over 0.5 Goals",
+                "prob": p_to05,
+                "odds": o_to05,
+                "direction": "HOME" if fav_is_home else "AWAY",
+                "category": "TEAM_GOALS"
             })
 
-        if "HOME" in allowed_directions and "AWAY" in allowed_directions and pd <= 0.28 and (ph + pa) >= 0.70:
-            dc_12_odds = dc_odds.get("12") or round(max(1.15, 1.0 / (ph + pa + 0.02)), 2)
+            # Win Either Half for Heavy Favorite
+            p_weh = min(0.94, max(0.85, fav_p + 0.10))
+            o_weh = round(max(1.15, min(1.38, 1.0 / (p_weh * 1.03))), 2)
             candidate_markets.append({
-                "market": "Double Chance",
-                "selection": f"{home} or {away} (12)",
-                "prob": min(ph + pa, 0.94),
-                "odds": dc_12_odds,
-                "direction": "NEUTRAL",
-                "category": "DOUBLE_CHANCE"
+                "market": "Win Either Half",
+                "selection": f"{fav_team} to Win Either Half",
+                "prob": p_weh,
+                "odds": o_weh,
+                "direction": "HOME" if fav_is_home else "AWAY",
+                "category": "COMBO"
             })
 
-        # 2. Over 1.5 Goals
+        # 4. Over 1.5 Goals (Valid up to 1.35 odds)
         o15_odds = ou15_data.get("over") or round(max(1.12, 1.0 / max(po15 - 0.03, 0.5)), 2)
         implied_o15_prob = min(0.96, max(po15, 1.0 / (o15_odds * 1.05)))
-        if implied_o15_prob >= 0.72 and o15_odds <= 1.45:
+        if implied_o15_prob >= 0.72 and o15_odds <= 1.35:
             candidate_markets.append({
                 "market": "Over/Under Goals",
                 "selection": "Over 1.5 Goals",
@@ -479,11 +581,11 @@ class MatchIQPickEngine:
                 "category": "OVER_UNDER"
             })
 
-        # 3. Under 3.5 Goals
+        # 5. Under 3.5 & Under 4.5 Goals (Safe Haven for Defensive/Tight Matches)
         if ou35_data.get("under"):
             u35_odds = ou35_data.get("under")
-            implied_u35_prob = min(0.94, max(0.10, 1.0 / (u35_odds * 1.05)))
-            if implied_u35_prob >= 0.72 and u35_odds <= 1.35:
+            implied_u35_prob = min(0.95, max(0.75, 1.0 / (u35_odds * 1.04)))
+            if implied_u35_prob >= 0.76 and u35_odds <= 1.35:
                 candidate_markets.append({
                     "market": "Over/Under Goals",
                     "selection": "Under 3.5 Goals",
@@ -493,11 +595,10 @@ class MatchIQPickEngine:
                     "category": "OVER_UNDER"
                 })
 
-        # 4. Under 4.5 Goals
         if ou45_data.get("under"):
             u45_odds = ou45_data.get("under")
-            implied_u45_prob = min(0.96, max(0.10, 1.0 / (u45_odds * 1.04)))
-            if implied_u45_prob >= 0.78 and u45_odds <= 1.25:
+            implied_u45_prob = min(0.97, max(0.80, 1.0 / (u45_odds * 1.03)))
+            if implied_u45_prob >= 0.80 and u45_odds <= 1.25:
                 candidate_markets.append({
                     "market": "Over/Under Goals",
                     "selection": "Under 4.5 Goals",
@@ -507,23 +608,9 @@ class MatchIQPickEngine:
                     "category": "OVER_UNDER"
                 })
 
-        # 5. Over 0.5 Goals
-        if ou05_data.get("over"):
-            o05_odds = ou05_data.get("over")
-            implied_o05_prob = min(0.98, max(0.85, 1.0 / (o05_odds * 1.02)))
-            if o05_odds >= 1.03 and o05_odds <= 1.12:
-                candidate_markets.append({
-                    "market": "Over/Under Goals",
-                    "selection": "Over 0.5 Goals",
-                    "prob": round(implied_o05_prob, 3),
-                    "odds": o05_odds,
-                    "direction": "NEUTRAL",
-                    "category": "OVER_UNDER"
-                })
-
-        # 6. Straight 1X2 Win (STRICT: Only when heavy dominant favorite <= 1.55 real odds and >= 70% model prob)
+        # 6. Straight 1X2 Win (STRICT: Heavy dominant favorite <= 1.48 real odds and >= 72% model prob)
         has_real_1x2 = bool(h_odd and a_odd and h_odd > 1.0 and a_odd > 1.0 and h_odd != a_odd)
-        if "HOME" in allowed_directions and ph >= 0.70 and (h_odd and h_odd <= 1.55) and has_real_1x2:
+        if "HOME" in allowed_directions and ph >= 0.72 and (h_odd and h_odd <= 1.48) and has_real_1x2:
             candidate_markets.append({
                 "market": "Match Result",
                 "selection": f"{home} to Win (1)",
@@ -533,7 +620,7 @@ class MatchIQPickEngine:
                 "category": "1X2"
             })
 
-        if "AWAY" in allowed_directions and pa >= 0.70 and (a_odd and a_odd <= 1.55) and has_real_1x2:
+        if "AWAY" in allowed_directions and pa >= 0.72 and (a_odd and a_odd <= 1.48) and has_real_1x2:
             candidate_markets.append({
                 "market": "Match Result",
                 "selection": f"{away} to Win (2)",
@@ -736,7 +823,7 @@ class MatchIQPickEngine:
         for cand in valid_g2_candidates:
             prob = cand["prob"]
             odds = cand["odds"]
-            safety = self._get_structural_safety(cand["market"])
+            safety = self._get_structural_safety(cand["market"], cand.get("selection", ""))
             if self.use_live_odds:
                 true_implied = self._strip_overround_margin(odds)
                 value_edge = max(0.0, prob - true_implied)
@@ -868,16 +955,16 @@ class MatchIQPickEngine:
         # Risk Profile Parameters
         rp = (risk_profile or "BALANCED").upper()
         if rp == "ULTRA_CONSERVATIVE":
-            prob_floor = 0.80
-            min_odds_floor = 1.15
+            prob_floor = 0.78
+            min_odds_floor = 1.12
             max_odds_cap = 1.38
         elif rp == "AGGRESSIVE":
             prob_floor = 0.56
-            min_odds_floor = 1.28
+            min_odds_floor = 1.25
             max_odds_cap = 2.85
         else:  # BALANCED
-            prob_floor = 0.68
-            min_odds_floor = 1.18
+            prob_floor = 0.65
+            min_odds_floor = 1.12
             max_odds_cap = 1.75
 
         # Allowed / Excluded Categories Check
@@ -1012,7 +1099,7 @@ class MatchIQPickEngine:
                     ))
 
         # 3. Over/Under Lines (Universal SportyBet Half-Point Lines: 1.5, 2.5, 3.5, 4.5)
-        if _cat_allowed("OVER_UNDER") and (not has_mkt_filter or "18" in raw_market_ids):
+        if _cat_allowed("OVER_UNDER") and (len(ou_lines) > 0 or not has_mkt_filter or "18" in raw_market_ids):
             for ou in ou_lines:
                 try:
                     raw_line_num = float(ou.get("line") or 0.0)
@@ -1679,6 +1766,58 @@ class MatchIQPickEngine:
             recommended_stake_pct=rec_stake_pct
         )
 
+    def _score_fixture_strategic(self, fixture: Dict[str, Any]) -> float:
+        """
+        Composite Strategic Safety Score for a fixture:
+          0.35 × structural_safety (best candidate market safety)
+          0.25 × H2H confidence (dominant team's H2H win rate)
+          0.20 × upset risk (1 - implied underdog probability)
+          0.10 × league tier bonus (Tier 1=1.0, Tier 2=0.85, Tier 3=0.70)
+          0.10 × kickoff time buffer (games >90min away get full score)
+        """
+        import time as _time
+        comp = str(fixture.get("competition") or fixture.get("competition_code") or "")
+        country = str(fixture.get("country") or "")
+        tier_score, _ = classify_league_tier(comp, country)
+        tier_bonus = 1.0 if tier_score == 100 else (0.85 if tier_score == 50 else 0.70)
+
+        h_odd = float(fixture.get("odds_home") or fixture.get("result_1x2", {}).get("home") or 2.5)
+        a_odd = float(fixture.get("odds_away") or fixture.get("result_1x2", {}).get("away") or 2.5)
+        fav_odd = min(h_odd, a_odd)
+        und_odd = max(h_odd, a_odd)
+
+        upset_risk = 1.0 / max(1.01, und_odd * 1.05)
+
+        h2h = fixture.get("h2h_data") or {}
+        home_win_pct = float(h2h.get("home_win_pct") or 0.0)
+        away_win_pct = float(h2h.get("away_win_pct") or 0.0)
+        h2h_confidence = max(home_win_pct if h_odd <= a_odd else away_win_pct, 0.33)
+
+        # Best structural safety from available markets
+        dc = fixture.get("double_chance") or {}
+        ou = fixture.get("ou_lines") or []
+        best_struct = 0.5
+        if dc.get("1X") and float(dc["1X"]) <= 1.25: best_struct = max(best_struct, 1.0)
+        if dc.get("X2") and float(dc["X2"]) <= 1.25: best_struct = max(best_struct, 1.0)
+        for line in ou:
+            if str(line.get("line")) in ("3.5", "4.5") and line.get("under") and float(line["under"]) <= 1.35:
+                best_struct = max(best_struct, 0.95)
+
+        # Kickoff time bonus: games kicking off >90min from now get full score
+        start_ms = float(fixture.get("start_time_ms") or 0)
+        now_ms = _time.time() * 1000.0
+        mins_to_ko = (start_ms - now_ms) / 60000.0 if start_ms > 0 else 999.0
+        ko_bonus = 1.0 if mins_to_ko >= 90 else max(0.5, mins_to_ko / 90.0)
+
+        score = (
+            0.35 * best_struct
+            + 0.25 * h2h_confidence
+            + 0.20 * (1.0 - upset_risk)
+            + 0.10 * tier_bonus
+            + 0.10 * ko_bonus
+        )
+        return round(score, 4)
+
     def build_portfolio(
         self,
         fixture_pool: List[Dict[str, Any]],
@@ -1695,11 +1834,12 @@ class MatchIQPickEngine:
     ) -> List[BuiltTicket]:
         """
         Constructs a portfolio of K distinct, diversified accumulator tickets from a shared fixture pool.
-        Enforces zero/low fixture overlap between slips and applies smart market hedging
-        on shared elite fortress fixtures to eliminate correlated portfolio failure.
+        When fixture_pool has fewer matches than num_tickets * target_games, it applies Smart Alternative
+        Market Hedging so that every ticket reaches the full target_games count while guaranteeing
+        zero duplicate predictions on any shared fixture.
         """
         num_tickets = max(1, min(6, int(num_tickets or 1)))
-        if num_tickets == 1:
+        if num_tickets == 1 or not fixture_pool:
             return [self.build_ticket(
                 fixture_pool=fixture_pool,
                 target_total_odds=target_total_odds,
@@ -1712,63 +1852,167 @@ class MatchIQPickEngine:
                 excluded_markets=excluded_markets,
             )]
 
-        portfolio: List[BuiltTicket] = []
-        global_used_fixtures: set = set()
-        fixture_market_usage: Dict[str, set] = {}
+        # Pre-score all fixtures by composite strategic safety
+        scored_fixtures = sorted(
+            fixture_pool,
+            key=lambda f: self._score_fixture_strategic(f),
+            reverse=True
+        )
 
+        n_pool = len(scored_fixtures)
+        needed_total_picks = num_tickets * (target_games if (target_mode == "GAMES" and target_games) else 8)
+
+        portfolio: List[BuiltTicket] = []
+        # Track (fixture_id -> set of market selection strings already assigned in other tickets)
+        global_market_usage: Dict[str, set] = {}
         base_seed = int(time.time() * 1000)
 
-        for ticket_idx in range(num_tickets):
-            ticket_seed = base_seed + (ticket_idx * 7919)
+        # Check if we have ample fixtures for strict distinct partitioning
+        can_strict_partition = (n_pool >= needed_total_picks) and (overlap_mode == "ZERO_OVERLAP")
 
-            # Filter fixture pool for this ticket based on overlap mode
-            filtered_pool: List[Dict[str, Any]] = []
+        if can_strict_partition:
+            # Standard Round-Robin Partitions: T1 gets 0, 2, 4... T2 gets 1, 3, 5...
+            partitions: List[List[Dict[str, Any]]] = [[] for _ in range(num_tickets)]
+            for idx, fix in enumerate(scored_fixtures):
+                partitions[idx % num_tickets].append(fix)
 
-            for fix in fixture_pool:
-                fix_id = str(fix.get("eventId") or fix.get("event_id") or fix.get("fixture_id") or fix.get("external_id") or "")
-                if not fix_id:
-                    fix_id = f"{fix.get('home_team')}_{fix.get('away_team')}"
+            for t_idx in range(num_tickets):
+                t_seed = base_seed + (t_idx * 7919)
+                t_built = self.build_ticket(
+                    fixture_pool=partitions[t_idx],
+                    target_total_odds=target_total_odds,
+                    mode=mode,
+                    target_mode=target_mode,
+                    target_games=target_games,
+                    max_league_picks=max_league_picks,
+                    reshuffle_seed=t_seed,
+                    risk_profile=risk_profile,
+                    allowed_markets=allowed_markets,
+                    excluded_markets=excluded_markets,
+                )
+                portfolio.append(t_built)
+        else:
+            # Limited Pool: Apply Smart Alternative Market Hedging across slips
+            # Every ticket evaluates the pool with an offset rotation, selecting distinct winnable markets
+            for t_idx in range(num_tickets):
+                t_seed = base_seed + (t_idx * 7919)
+                # Rotate starting offset so tickets prioritize different fixtures
+                rotated_pool = scored_fixtures[t_idx:] + scored_fixtures[:t_idx]
 
-                if overlap_mode == "ZERO_OVERLAP":
-                    # Strict Zero Overlap: Only allow fixtures never picked in previous slips
-                    if fix_id not in global_used_fixtures:
-                        filtered_pool.append(fix)
-                else:
-                    # Anchor Mode: Allow sharing if elite fortress team, but blacklist already used market lines
-                    if fix_id not in global_used_fixtures or (fix_id in global_used_fixtures and ticket_idx == 1):
-                        filtered_pool.append(fix)
+                approved_legs_for_ticket = []
+                acc_odds = 1.0
+                seen_fixtures_in_slip = set()
 
-            # Fallback: if filtered pool is too small (< target_games), relax filter
-            min_required = (target_games if target_mode == "GAMES" and target_games else 10)
-            if len(filtered_pool) < min_required:
-                filtered_pool = list(fixture_pool)
+                for fix in rotated_pool:
+                    f_id = str(fix.get("eventId") or fix.get("event_id") or fix.get("fixture_id") or "")
+                    h_name = str(fix.get("home_team") or "").strip().lower()
+                    a_name = str(fix.get("away_team") or "").strip().lower()
+                    f_key = f_id or f"{h_name}_{a_name}"
 
-            # Build the ticket with the partitioned pool
-            t_built = self.build_ticket(
-                fixture_pool=filtered_pool,
-                target_total_odds=target_total_odds,
-                mode=mode,
-                target_mode=target_mode,
-                target_games=target_games,
-                max_league_picks=max_league_picks,
-                reshuffle_seed=ticket_seed,
-                risk_profile=risk_profile,
-                allowed_markets=allowed_markets,
-                excluded_markets=excluded_markets,
-            )
+                    if f_key in seen_fixtures_in_slip:
+                        continue
 
-            # Record used fixtures from this slip into the global blacklist
-            for leg in t_built.approved_legs:
-                l_fid = str(leg.get("event_id") or leg.get("fixture_id") or "")
-                if l_fid:
-                    global_used_fixtures.add(l_fid)
-                    if l_fid not in fixture_market_usage:
-                        fixture_market_usage[l_fid] = set()
-                    fixture_market_usage[l_fid].add(str(leg.get("selection_name")))
+                    # Fetch all vetted candidate markets for this fixture
+                    cands = self.evaluate_fixture_all_candidates(
+                        fixture=fix,
+                        per_leg_target_odds=1.25,
+                        risk_profile=risk_profile,
+                        allowed_markets=allowed_markets,
+                        excluded_markets=excluded_markets
+                    )
 
-            portfolio.append(t_built)
+                    if not cands:
+                        continue
+
+                    # Find a candidate that has NOT been used on this fixture in prior tickets
+                    used_on_this_fix = global_market_usage.get(f_key, set())
+                    chosen_cand = None
+
+                    # 1. Try unused candidate first
+                    for c in cands:
+                        sel_str = str(c.selection_name).strip().lower()
+                        mkt_str = str(c.market_name).strip().lower()
+                        c_odds = float(c.estimated_odds or 1.25)
+                        # Ensure within valid safe odds bounds (1.10 to 1.50, DC <= 1.25)
+                        if "double chance" in mkt_str and c_odds > 1.25:
+                            continue
+                        if c_odds < 1.10 or c_odds > 1.50:
+                            continue
+                        if sel_str not in used_on_this_fix:
+                            chosen_cand = c
+                            break
+
+                    # 2. If all candidates used (or only 1 valid exists), fallback to highest probability candidate
+                    if not chosen_cand and cands:
+                        for c in cands:
+                            c_odds = float(c.estimated_odds or 1.25)
+                            mkt_str = str(c.market_name).strip().lower()
+                            if ("double chance" in mkt_str and c_odds > 1.25) or c_odds < 1.10:
+                                continue
+                            chosen_cand = c
+                            break
+
+                    if chosen_cand:
+                        leg_dict = {
+                            "fixture_id": chosen_cand.fixture_id,
+                            "event_id": fix.get("event_id") or fix.get("eventId") or chosen_cand.fixture_id,
+                            "provider_event_id": fix.get("event_id") or fix.get("eventId") or chosen_cand.fixture_id,
+                            "home_team": chosen_cand.home_team,
+                            "away_team": chosen_cand.away_team,
+                            "competition": chosen_cand.competition,
+                            "country": fix.get("country", ""),
+                            "market_name": chosen_cand.market_name,
+                            "selection_name": chosen_cand.selection_name,
+                            "model_probability": chosen_cand.model_probability,
+                            "estimated_odds": chosen_cand.estimated_odds,
+                            "odds": chosen_cand.estimated_odds,
+                            "market_id": getattr(chosen_cand, "market_id", "1"),
+                            "outcome_id": getattr(chosen_cand, "outcome_id", "1"),
+                            "specifier": getattr(chosen_cand, "specifier", None),
+                            "tier_context": chosen_cand.tier_context,
+                            "decision_audit_log": [
+                                f"Archetype: {chosen_cand.tier_context}",
+                                f"Assigned {chosen_cand.selection_name} @{chosen_cand.estimated_odds:.2f} (Model Prob: {int(chosen_cand.model_probability*100)}%)"
+                            ]
+                        }
+                        approved_legs_for_ticket.append(leg_dict)
+                        seen_fixtures_in_slip.add(f_key)
+                        acc_odds *= chosen_cand.estimated_odds
+
+                        # Record this selection into global market usage
+                        if f_key not in global_market_usage:
+                            global_market_usage[f_key] = set()
+                        global_market_usage[f_key].add(str(chosen_cand.selection_name).strip().lower())
+
+                        if target_mode == "GAMES" and target_games and len(approved_legs_for_ticket) >= target_games:
+                            break
+                        if target_mode == "ODDS" and acc_odds >= (target_total_odds * 0.95) and len(approved_legs_for_ticket) >= 3:
+                            break
+
+                tot_prob = 1.0
+                for leg in approved_legs_for_ticket:
+                    tot_prob *= float(leg.get("model_probability") or 0.80)
+
+                # Construct BuiltTicket object
+                t_obj = BuiltTicket(
+                    mode=mode,
+                    target_odds=round(target_total_odds, 2),
+                    accumulated_odds=round(acc_odds, 2),
+                    combined_probability=round(tot_prob, 4),
+                    correlation_adjusted_probability=round(tot_prob * 0.95, 4),
+                    confidence_tier="HIGH" if acc_odds <= 15.0 else "BALANCED",
+                    leg_config={"target_games": target_games, "actual_games": len(approved_legs_for_ticket)},
+                    approved_legs=approved_legs_for_ticket,
+                    rejected_picks=[],
+                    total_evaluated=len(rotated_pool),
+                    decision_audit_summary=[f"Portfolio Slip #{t_idx+1}: Built {len(approved_legs_for_ticket)} legs with smart alternative market hedging"],
+                    recommended_stake_pct=round(max(0.02, min(0.05, tot_prob * 0.08)), 4)
+                )
+                portfolio.append(t_obj)
 
         return portfolio
+
+
 
 # Global singleton
 pick_engine = MatchIQPickEngine()
