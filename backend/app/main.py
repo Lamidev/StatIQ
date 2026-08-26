@@ -1,5 +1,14 @@
+import os
+import sys
+
+# Ensure root workspace directory is on sys.path so 'virtual' module is always found
+root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+if root_dir not in sys.path:
+    sys.path.insert(0, root_dir)
+
 from typing import Optional
 from fastapi import FastAPI, Depends
+
 from fastapi.middleware.cors import CORSMiddleware
 from app.api.endpoints.predictions import router as predictions_router
 from app.api.endpoints.markets import router as markets_router
