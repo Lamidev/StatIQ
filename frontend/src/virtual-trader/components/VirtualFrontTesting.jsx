@@ -172,21 +172,21 @@ export default function VirtualFrontTesting() {
       : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
   };
 
-  const handleResetLedger = async () => {
-    if (!window.confirm("Are you sure you want to clear all test history and start afresh on a clean slate?")) {
-      return;
-    }
+  const [showResetModal, setShowResetModal] = useState(false);
+
+  const confirmResetLedger = async () => {
+    setShowResetModal(false);
     setActionLoading(true);
     try {
       const res = await resetFrontTestLedger();
       if (res && res.status === "SUCCESS") {
-        showToast("Ledger reset! Starting fresh on clean slate.");
+        showToast("✅ Ledger wiped clean! Ready on a fresh slate.");
         await loadStatus();
       } else {
-        showToast("Failed to reset ledger.");
+        showToast("⚠️ Could not reset ledger. Please check backend connection.");
       }
     } catch (err) {
-      showToast("Error resetting ledger.");
+      showToast(`Error: ${err.message}`);
     } finally {
       setActionLoading(false);
     }
@@ -205,6 +205,37 @@ export default function VirtualFrontTesting() {
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto pb-10">
+      {/* Reset Confirmation Modal */}
+      {showResetModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4">
+          <div className="bg-white rounded-3xl p-6 max-w-md w-full shadow-2xl border border-slate-200 animate-in fade-in zoom-in duration-150">
+            <div className="w-12 h-12 rounded-2xl bg-rose-50 border border-rose-200 text-rose-600 flex items-center justify-center mb-4">
+              <Trash2 className="w-6 h-6" />
+            </div>
+            <h3 className="text-base font-black text-slate-900">Reset Front-Testing Ledger?</h3>
+            <p className="text-xs text-slate-500 mt-1.5 leading-relaxed">
+              This will wipe all historical front-test slips, win/loss stats, and start your live engine on a completely clean slate.
+            </p>
+            <div className="flex gap-3 mt-6">
+              <button
+                type="button"
+                onClick={() => setShowResetModal(false)}
+                className="flex-1 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition-all cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={confirmResetLedger}
+                className="flex-1 py-2.5 bg-rose-600 hover:bg-rose-500 text-white rounded-xl text-xs font-bold transition-all shadow-md shadow-rose-600/20 cursor-pointer"
+              >
+                Yes, Reset Ledger
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Toast Alert */}
       {toastMessage && (
         <div className="fixed bottom-6 right-6 z-50 bg-slate-900 text-white px-5 py-3 rounded-xl shadow-2xl border border-slate-700 text-xs font-bold flex items-center space-x-2 animate-bounce">
@@ -212,6 +243,7 @@ export default function VirtualFrontTesting() {
           <span>{toastMessage}</span>
         </div>
       )}
+
 
       {/* ── STEP 1: Command Header & Quick State ── */}
       <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm flex flex-col lg:flex-row items-start lg:items-center justify-between gap-6">
@@ -257,14 +289,15 @@ export default function VirtualFrontTesting() {
           </button>
 
           <button
-            onClick={handleResetLedger}
+            onClick={() => setShowResetModal(true)}
             disabled={actionLoading}
-            className="flex-1 lg:flex-none px-4 py-2.5 bg-rose-50 hover:bg-rose-100 text-rose-700 rounded-xl text-xs font-bold transition-all flex items-center justify-center space-x-1.5 border border-rose-200"
+            className="flex-1 lg:flex-none px-4 py-2.5 bg-rose-50 hover:bg-rose-100 text-rose-700 rounded-xl text-xs font-bold transition-all flex items-center justify-center space-x-1.5 border border-rose-200 cursor-pointer"
             title="Clear all test history and start afresh"
           >
             <Trash2 className="w-3.5 h-3.5" />
             <span>Reset Ledger</span>
           </button>
+
 
           <button
             onClick={handleToggle}

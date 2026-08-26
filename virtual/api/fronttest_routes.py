@@ -53,7 +53,22 @@ def update_fronttest_config(payload: FrontTestConfigUpdate, db: Session = Depend
         "message": "Front-testing configuration updated."
     }
 
+@router.post("/reset-ledger")
+def reset_fronttest_ledger(db: Session = Depends(get_db)):
+    """
+    Clears all front-testing slips and match history from the database to start afresh.
+    """
+    from virtual.models.virtual_models import VirtualFrontTestSlip, VirtualMatchHistory
+    deleted_slips = db.query(VirtualFrontTestSlip).delete()
+    deleted_history = db.query(VirtualMatchHistory).delete()
+    db.commit()
+    return {
+        "status": "SUCCESS",
+        "message": f"Ledger reset. Cleared {deleted_slips} slips and {deleted_history} history records."
+    }
+
 @router.post("/trigger-now")
+
 def trigger_immediate_round_scan(db: Session = Depends(get_db)):
     """
     Manually triggers an immediate scan of all vFootball leagues,
