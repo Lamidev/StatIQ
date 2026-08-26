@@ -69,7 +69,8 @@ class VirtualTelegramService:
     @classmethod
     def send_ticket_alert(cls, slip: Dict[str, Any]) -> bool:
         """
-        Dispatches a pre-match vFootball 2.0x ticket with a direct SportyBet preload link.
+        Dispatches a pre-match vFootball 2.0x ticket with clear demarcation
+        and a direct SportyBet preload link.
         """
         league = slip.get("league_name", "vFootball")
         code = slip.get("booking_code", "N/A")
@@ -81,12 +82,14 @@ class VirtualTelegramService:
         preload_url = f"https://www.sportybet.com/ng/?shareCode={code}"
 
         lines = [
-            f"🎯 <b>StatIQ vFootball Signal — {league}</b>",
+            "━━━━━━━━━━━━━━━━━━━━━━",
+            f"🎯 <b>NEW ROUND BOOKED — {league}</b>",
+            "━━━━━━━━━━━━━━━━━━━━━━",
             f"⏱ <b>Kickoff:</b> <code>{round_time}</code>",
             f"🎫 <b>SportyBet Code:</b> <code>{code}</code>",
             f"📊 <b>Total Odds:</b> <code>{total_odds}x</code>",
             "",
-            "📋 <b>Picks:</b>"
+            "📋 <b>Selected Matches & Picks:</b>"
         ]
 
         for idx, s in enumerate(selections, 1):
@@ -107,23 +110,36 @@ class VirtualTelegramService:
     @classmethod
     def send_kickoff_alert(cls, slip: Dict[str, Any]) -> bool:
         """
-        Dispatches an in-play alert when a round officially starts.
+        Dispatches an in-play alert when a round officially starts, listing matches.
         """
         league = slip.get("league_name", "vFootball")
         code = slip.get("booking_code", "N/A")
         total_odds = slip.get("actual_odds", 2.0)
         round_time = slip.get("round_time_str", "Now")
+        selections = slip.get("selections", [])
 
         lines = [
             f"▶️ <b>[ROUND LIVE / IN-PLAY] {league}</b>",
             f"⏱ <b>Started:</b> <code>{round_time}</code>",
-            f"🎫 <b>Ticket Code:</b> <code>{code}</code> (Odds: {total_odds}x)",
+            f"🎫 <b>Ticket Code:</b> <code>{code}</code> (Odds: <b>{total_odds}x</b>)",
             "",
-            "<i>Match simulations are now running. Result audit in ~2-3 mins!</i>"
+            "📋 <b>Matches In-Play:</b>"
         ]
+
+        for idx, s in enumerate(selections, 1):
+            match = s.get("match", "Match")
+            pick = s.get("pick", "Pick")
+            odds = s.get("odds", "1.00")
+            lines.append(f"  {idx}. <b>{match}</b> → <i>{pick}</i> (@ {odds}x)")
+
+        lines.extend([
+            "",
+            "<i>⚡ Match simulations in progress. Result audit at Full-Time!</i>"
+        ])
 
         msg = "\n".join(lines)
         return cls.send_message(msg)
+
 
     @classmethod
     def send_settlement_alert(cls, slip: Dict[str, Any], is_won: bool, stats: Dict[str, Any]) -> bool:

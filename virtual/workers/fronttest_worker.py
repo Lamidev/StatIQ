@@ -138,10 +138,13 @@ class VirtualFrontTestWorker:
     # Kickoff In-Play Alerts
     # -----------------------------------------------------------------
 
+    _sent_kickoff_codes: set = set()
+
     @classmethod
     def _process_kickoff_alerts(cls, db: Session):
         """
         Sends an alert to Telegram when an upcoming round starts playing.
+        Strictly deduplicated to ensure each ticket fires at most once!
         """
         now = datetime.now(timezone.utc)
         # Slips whose round time has just arrived (within last 3 minutes)
@@ -153,16 +156,24 @@ class VirtualFrontTestWorker:
         ).all()
 
         for slip in active_slips:
+            if slip.booking_code in cls._sent_kickoff_codes:
+                slip.kickoff_alert_sent = True
+                db.commit()
+                continue
+
+            cls._sent_kickoff_codes.add(slip.booking_code)
+            slip.kickoff_alert_sent = True
+            db.commit()
+
             slip_payload = {
                 "league_name": slip.league_name,
                 "booking_code": slip.booking_code,
                 "actual_odds": slip.actual_odds,
-                "round_time_str": _format_wat_time(slip.round_time)
+                "round_time_str": _format_wat_time(slip.round_time),
+                "selections": slip.selections or []
             }
-            sent = VirtualTelegramService.send_kickoff_alert(slip_payload)
-            if sent:
-                slip.kickoff_alert_sent = True
-                db.commit()
+            VirtualTelegramService.send_kickoff_alert(slip_payload)
+
 
     # -----------------------------------------------------------------
     # Midnight 12:00 AM Daily Performance Report
