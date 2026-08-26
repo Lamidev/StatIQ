@@ -436,25 +436,30 @@ class VirtualFrontTestWorker:
 
     # -----------------------------------------------------------------
     @classmethod
-    def _extract_final_scores(cls, ev_data: Dict[str, Any]) -> tuple[Optional[int], Optional[int]]:
+    def _extract_final_scores(cls, ev_data: Dict[str, Any], time_since_kickoff: float = 0.0) -> tuple[Optional[int], Optional[int]]:
         """
         Parses home and away scores from SportyBet API payload.
-        STRICT: Only returns scores if matchStatus == 'Ended' (or status == 3).
-        Prevents premature settlement during live 1st/2nd half!
+        Ensures match is at full time (matchStatus FT/Ended, status 3, or elapsed simulation >= 130s).
         """
         if not ev_data:
             return None, None
 
         match_status = str(ev_data.get("matchStatus") or "").upper().strip()
         status_num = ev_data.get("status")
+        set_score = ev_data.get("setScore") or ev_data.get("score")
 
-        # 1. STRICT STATUS CHECK: Must be fully ended
-        is_ended = ("ENDED" in match_status or status_num == 3)
+        # 1. Full-time check: must be ended/FT, or simulation has completed (>= 130s)
+        is_ended = (
+            "ENDED" in match_status or 
+            "FT" in match_status or 
+            "FINISHED" in match_status or 
+            status_num == 3 or 
+            (time_since_kickoff >= 130.0 and set_score is not None)
+        )
         if not is_ended:
             return None, None
 
         # 2. Check setScore string (e.g. "2:1" or "3:0")
-        set_score = ev_data.get("setScore") or ev_data.get("score")
         if isinstance(set_score, str) and ":" in set_score:
             parts = set_score.split(":")
             try:
@@ -491,15 +496,14 @@ class VirtualFrontTestWorker:
     @classmethod
     def _process_settlements(cls, db: Session):
         """
-        Settles pending slips once matches have finished (~3.5-4 mins post-kickoff).
+        Settles pending slips once matches have finished (~2 to 3 mins post-kickoff).
         """
         now = datetime.now(timezone.utc)
-        # Settle slips whose kickoff was at least 3.5 minutes ago
+        # Settle slips whose kickoff was at least 2 minutes ago
         pending = db.query(VirtualFrontTestSlip).filter(
             VirtualFrontTestSlip.status == "PENDING",
-            VirtualFrontTestSlip.round_time <= (now - timedelta(minutes=3, seconds=30))
+            VirtualFrontTestSlip.round_time <= (now - timedelta(minutes=2))
         ).all()
-
 
         for slip in pending:
             selections = slip.selections or []
@@ -511,11 +515,15 @@ class VirtualFrontTestWorker:
                 r_time = r_time.replace(tzinfo=timezone.utc)
             time_since_kickoff = (now - (r_time or now)).total_seconds()
 
-
             for s in selections:
+                # If score already saved in selection from prior poll
+                saved_score = s.get("final_score")
+                if saved_score and "-" in saved_score:
+                    continue
+
                 game_id = s.get("game_id")
                 ev_data = VirtualSportyBetClient.fetch_event_result(game_id)
-                h_score, a_score = cls._extract_final_scores(ev_data)
+                h_score, a_score = cls._extract_final_scores(ev_data, time_since_kickoff=time_since_kickoff)
 
                 if h_score is None or a_score is None:
                     # If game was played more than 20 mins ago and result closed without score
@@ -532,6 +540,11 @@ class VirtualFrontTestWorker:
                 leg_won = cls._evaluate_leg(s, h_score, a_score)
                 s["final_score"] = f"{h_score} - {a_score}"
                 s["leg_won"] = leg_won
+                # Flag db modified for JSON column
+                from sqlalchemy.orm.attributes import flag_modified
+                flag_modified(slip, "selections")
+                db.commit()
+
 
                 if not leg_won:
                     all_won = False
