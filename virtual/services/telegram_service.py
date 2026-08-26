@@ -212,7 +212,11 @@ class VirtualTelegramService:
         ])
 
         msg = "\n".join(lines)
-        return cls.send_message(msg)
+        sent = cls.send_message(msg)
+        if sent and code and code != "N/A":
+            cls._dispatched_alert_keys.add(alert_key)
+        return sent
+
 
 
     @classmethod

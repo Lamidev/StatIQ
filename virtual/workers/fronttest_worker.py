@@ -448,16 +448,20 @@ class VirtualFrontTestWorker:
         status_num = ev_data.get("status")
         set_score = ev_data.get("setScore") or ev_data.get("score")
 
-        # 1. Full-time check: must be ended/FT, or simulation has completed (>= 130s)
+        # 1. STRICT LIVE BLOCKER: If it is playing (H1, H2, HT, Live), NEVER settle
+        if any(live_tag in match_status for live_tag in ["H1", "H2", "HT", "1ST", "2ND", "HALF", "LIVE", "NOT START"]):
+            return None, None
+
+        # 2. Full-time check: must be ended/FT/FINISHED or status 3
         is_ended = (
             "ENDED" in match_status or 
             "FT" in match_status or 
             "FINISHED" in match_status or 
-            status_num == 3 or 
-            (time_since_kickoff >= 130.0 and set_score is not None)
+            status_num == 3
         )
         if not is_ended:
             return None, None
+
 
         # 2. Check setScore string (e.g. "2:1" or "3:0")
         if isinstance(set_score, str) and ":" in set_score:
