@@ -50,6 +50,16 @@ app.include_router(notifications_router, prefix="/api/v1/notifications", tags=["
 from app.api.endpoints.reconciliation import router as reconciliation_router
 app.include_router(reconciliation_router, prefix="/api/v1/ticket-tracker", tags=["Tracking Reconciliation & Health"])
 
+# Mount Virtual Trader & 24/7 Front-Testing Engine
+try:
+    from virtual.api.router import router as virtual_api_router
+    from virtual.core.db import engine as virtual_engine, Base as VirtualBase
+    import virtual.models.virtual_models
+    VirtualBase.metadata.create_all(bind=virtual_engine)
+    app.include_router(virtual_api_router, prefix="/api/v1/virtual-trader", tags=["Virtual Trader Engine"])
+except Exception as e:
+    print(f"[VirtualTrader] Router mount note: {e}")
+
 from app.db.session import get_db
 from sqlalchemy.orm import Session
 from app.services.live_scheduler import LiveTrackingScheduler
@@ -72,9 +82,18 @@ def start_background_ticket_sync_worker():
     # Start V2.0 Autonomous Tracking Scheduler
     LiveTrackingScheduler.start_scheduler()
 
+    # Start 24/7 Virtual Front-Testing Daemon
+    try:
+        from virtual.workers.fronttest_worker import VirtualFrontTestWorker
+        VirtualFrontTestWorker.start()
+        print("[VirtualTrader] 24/7 vFootball Front-Testing Worker started in background daemon.")
+    except Exception as e:
+        print(f"[VirtualTrader] Worker startup note: {e}")
+
     import threading
     import time
     import gc
+
 
     def _auto_sync_loop():
         print("[TicketTrackerWorker] Dynamic live score polling daemon active (rapid 15s background sync).")
