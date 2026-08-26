@@ -507,10 +507,13 @@ class VirtualFrontTestWorker:
                 h_score, a_score = cls._extract_final_scores(ev_data)
 
                 if h_score is None or a_score is None:
-                    # If game was played more than 15 mins ago and result is closed by SportyBet,
-                    # resolve based on last known snapshot or mark resolved
-                    if time_since_kickoff > 900:
-                        h_score, a_score = 1, 1  # Graceful fallback for expired test data
+                    # If game was played more than 20 mins ago and result closed without score
+                    if time_since_kickoff > 1200:
+                        all_resolved = False
+                        slip.status = "EXPIRED"
+                        slip.profit_loss = 0.0
+                        db.commit()
+                        break
                     else:
                         all_resolved = False
                         break
@@ -518,6 +521,7 @@ class VirtualFrontTestWorker:
                 leg_won = cls._evaluate_leg(s, h_score, a_score)
                 s["final_score"] = f"{h_score} - {a_score}"
                 s["leg_won"] = leg_won
+
                 if not leg_won:
                     all_won = False
 
