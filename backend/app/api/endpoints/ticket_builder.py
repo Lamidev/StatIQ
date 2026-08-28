@@ -605,13 +605,24 @@ async def build_ai_ticket(req: BuildTicketRequest):
                     if diff_sec < 180 or diff_sec > (7 * 86400):
                         continue
 
-            # 2. Strict League Filter
+            # 2. Strict League Scope Filter (3 Distinct Modes)
             selected_lgs = req.selected_leagues or []
             if any(x.upper() in ["ALL_WORLDWIDE", "WORLDWIDE", "ALL_MATCHES"] for x in selected_lgs):
-                # Allow all matches from SportyBet fixture pool across all worldwide leagues
+                # Mode C: Worldwide — Allow 100% of matches from SportyBet Today board (250+ matches)
                 pass
+            elif any(x.upper().replace(" ", "_") in ["TOP_5_EUROPEAN", "TOP_5", "TOP5"] for x in selected_lgs):
+                # Mode A: Top 5 Major European Leagues (Premier League, LaLiga, Serie A, Bundesliga, Ligue 1)
+                target_league_codes = ["PL", "PD", "SA", "BL1", "FL1"]
+                match_league = False
+                for sel_lg in target_league_codes:
+                    if _is_league_match(comp_name, country_name, sel_lg):
+                        match_league = True
+                        break
+                if not match_league:
+                    continue
             else:
-                if not selected_lgs or any(x.upper().replace(" ", "_") in ["ALL", "ALL_TOP_LEAGUES", "TOP_LEAGUES", "TOP_5_EUROPEAN"] for x in selected_lgs):
+                # Mode B: All Major European & Premier Leagues (~25 top flight leagues)
+                if not selected_lgs or any(x.upper().replace(" ", "_") in ["ALL", "ALL_TOP_LEAGUES", "TOP_LEAGUES", "EUROPEAN_LEAGUES"] for x in selected_lgs):
                     target_league_codes = TOP_MAJOR_EUROPEAN_LEAGUES
                 else:
                     target_league_codes = selected_lgs
@@ -737,10 +748,13 @@ async def build_ai_ticket(req: BuildTicketRequest):
     from app.adapters.bookmaker_adapter import SportyBetAdapter
     adapter = SportyBetAdapter()
 
+    active_rp = (req.risk_profile or "CONSERVATIVE").upper()
+    is_aggressive = active_rp in ("AGGRESSIVE", "AGGRESSIVE_VALUE", "VALUE")
+
     def _verify_odds_pre_booking(legs: List[Dict[str, Any]], pool: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
-        Pre-booking odds verification pass.
-        Ensures DC is capped <= 1.25, and ensures odds are within actionable betting boundaries [1.12, 1.45].
+        Pre-booking odds verification pass aligned with the active Risk Strategy Profile.
+        Conservative allows safe cushions [1.05, 1.40]; Aggressive allows high-yield lines [1.12, 3.00].
         """
         verified = []
         for leg in legs:
@@ -750,20 +764,47 @@ async def build_ai_ticket(req: BuildTicketRequest):
 
             is_dc = "double chance" in market
 
-            # Reasonable boundary: DC odds up to 1.35x
-            if is_dc and odds > 1.35:
-                logger.warning(f"[OddsVerify] REJECTED DC trap: {leg.get('home_team')} vs {leg.get('away_team')} | {selection} @{odds:.2f} > 1.35")
+            # DC odds ceiling
+            if is_dc and odds > 1.40:
+                logger.warning(f"[OddsVerify] REJECTED DC trap: {leg.get('home_team')} vs {leg.get('away_team')} | {selection} @{odds:.2f} > 1.40")
                 continue
 
-            # Ensure odds are not extreme sub-1.10 (void risk) or hyper-risky > 1.50
-            if odds < 1.10 or odds > 1.50:
-                logger.warning(f"[OddsVerify] REJECTED out-of-bounds pick: {leg.get('home_team')} vs {leg.get('away_team')} | {selection} @{odds:.2f}")
-                continue
+            # Strict Odds Boundaries based on Risk Profile (Minimum Floor: 1.12)
+            if is_aggressive:
+                if odds < 1.20 or odds > 3.00:
+                    continue
+            else:
+                if odds < 1.12 or odds > 1.45:
+                    continue
 
             verified.append(leg)
         return verified
 
     for idx, b_ticket in enumerate(portfolio_built):
+        # Pre-booking odds verification: purge any DC/O1.5 trap odds before generating code
+        if b_ticket.approved_legs:
+            pre_count = len(b_ticket.approved_legs)
+            verified_legs = _verify_odds_pre_booking(b_ticket.approved_legs, fixture_pool)
+            
+            # If verification trimmed any legs and we are in GAMES mode, preserve the original approved legs
+            # if verified_legs count fell below requested target_games
+            if req.target_mode == "GAMES" and len(verified_legs) < target_games and len(b_ticket.approved_legs) >= target_games:
+                # Keep verified legs and backfill with remaining approved legs from the engine
+                seen_f = {str(x.get("fixture_id") or f"{x.get('home_team')}_{x.get('away_team')}") for x in verified_legs}
+                for orig_l in b_ticket.approved_legs:
+                    f_k = str(orig_l.get("fixture_id") or f"{orig_l.get('home_team')}_{orig_l.get('away_team')}")
+                    if f_k not in seen_f:
+                        verified_legs.append(orig_l)
+                        seen_f.add(f_k)
+                        if len(verified_legs) >= target_games:
+                            break
+            
+            b_ticket.approved_legs = verified_legs
+            acc = 1.0
+            for leg in b_ticket.approved_legs:
+                acc *= float(leg.get("odds") or leg.get("estimated_odds") or 1.25)
+            b_ticket.accumulated_odds = round(acc, 2)
+
         # Trim to exact target_games if in GAMES mode
         if req.target_mode == "GAMES" and len(b_ticket.approved_legs) > target_games:
             b_ticket.approved_legs = b_ticket.approved_legs[:target_games]
@@ -771,19 +812,6 @@ async def build_ai_ticket(req: BuildTicketRequest):
             for leg in b_ticket.approved_legs:
                 acc *= float(leg.get("odds", 1.5))
             b_ticket.accumulated_odds = round(acc, 2)
-
-        # Pre-booking odds verification: purge any DC/O1.5 trap odds before generating code
-        if b_ticket.approved_legs:
-            pre_count = len(b_ticket.approved_legs)
-            b_ticket.approved_legs = _verify_odds_pre_booking(b_ticket.approved_legs, fixture_pool)
-            post_count = len(b_ticket.approved_legs)
-            if post_count < pre_count:
-                logger.info(f"[OddsVerify] Ticket {idx+1}: Removed {pre_count - post_count} trap pick(s) in pre-booking pass")
-                # Recalculate accumulated odds after purge
-                acc = 1.0
-                for leg in b_ticket.approved_legs:
-                    acc *= float(leg.get("odds") or leg.get("estimated_odds") or 1.25)
-                b_ticket.accumulated_odds = round(acc, 2)
 
         booking_code = None
         share_url = None

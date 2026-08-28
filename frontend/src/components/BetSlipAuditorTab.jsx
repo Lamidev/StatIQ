@@ -955,11 +955,11 @@ export default function BetSlipAuditorTab({ onNavigateHistory, onTicketLocked })
                           >
                             All {ticketData?.selections?.length || ""} Games
                           </button>
-                          {[1.5, 2.0, 3.0, 5.0, 10.0, 20.0, 50.0].map((val) => (
+                          {[1.5, 2.0, 3.0, 5.0, 10.0, 20.0, 50.0, 100.0, 200.0, 500.0].map((val) => (
                             <button
                               key={val}
                               onClick={() => { setTargetOdds(val); setUseCustomOdds(false); setReEditResult(null); }}
-                              className={`px-4 py-2 rounded-xl text-xs font-extrabold transition-all border ${
+                              className={`px-3.5 py-2 rounded-xl text-xs font-extrabold transition-all border ${
                                 !useCustomOdds && targetOdds === val
                                   ? "bg-slate-900 border-slate-900 text-white shadow-sm"
                                   : "bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100"

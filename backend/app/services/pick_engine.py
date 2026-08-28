@@ -952,20 +952,20 @@ class MatchIQPickEngine:
 
         tier_score, tier_label = classify_league_tier(comp, country)
 
-        # Risk Profile Parameters
-        rp = (risk_profile or "BALANCED").upper()
-        if rp == "ULTRA_CONSERVATIVE":
-            prob_floor = 0.78
-            min_odds_floor = 1.12
-            max_odds_cap = 1.38
-        elif rp == "AGGRESSIVE":
-            prob_floor = 0.56
+        # Risk Profile Parameters (2 Distinct Operational Modes)
+        rp = (risk_profile or "CONSERVATIVE").upper()
+        is_aggressive = rp in ("AGGRESSIVE", "AGGRESSIVE_VALUE", "VALUE")
+        
+        if is_aggressive:
+            # AGGRESSIVE MODE: Focus on high-yield outright wins, Over 2.5 goals, handicaps & dominant odds
+            prob_floor = 0.55
             min_odds_floor = 1.25
             max_odds_cap = 2.85
-        else:  # BALANCED
-            prob_floor = 0.65
+        else:
+            # CONSERVATIVE MODE: Focus on ultra-safe cushions (80%+ win rate, Double Chance, Over 1.5, Team Goals)
+            prob_floor = 0.74
             min_odds_floor = 1.12
-            max_odds_cap = 1.75
+            max_odds_cap = 1.38
 
         # Allowed / Excluded Categories Check
         allowed_list = [x.upper() for x in allowed_markets] if (allowed_markets and len(allowed_markets) > 0 and "ALL" not in [x.upper() for x in allowed_markets]) else ["DOUBLE_CHANCE", "OVER_UNDER", "TEAM_GOALS", "1X2"]
@@ -1001,13 +1001,12 @@ class MatchIQPickEngine:
         if isinstance(raw_markets, dict):
             raw_markets = list(raw_markets.values())
         raw_market_ids = {str(m.get("id") or m.get("market_id") or "") for m in raw_markets if isinstance(m, dict)}
-        has_mkt_filter = len(raw_market_ids) > 0
 
         candidates: List[PickDecision] = []
         seen_selections = set()
 
         # 1. Double Chance Lines
-        if _cat_allowed("DOUBLE_CHANCE") and (not has_mkt_filter or "10" in raw_market_ids):
+        if _cat_allowed("DOUBLE_CHANCE"):
             # Ensure dc_odds has values
             dc_work = dict(dc_odds)
             if "1X" not in dc_work and r_home > 1.0 and r_draw > 1.0:
@@ -1031,7 +1030,7 @@ class MatchIQPickEngine:
                 if dc_key == "X2" and (tier_context == "HOME_DOMINANT" or (r_home <= 1.65 and r_away >= 2.50) or ph >= 0.55):
                     continue
 
-                if dc_val and min_odds_floor <= float(dc_val) <= max_odds_cap:
+                if dc_val and min_odds_floor <= float(dc_val) <= max(1.35, max_odds_cap):
                     if dc_key == "1X":
                         prob = min(0.96, ph + pd)
                         sel_lbl = f"{home} or Draw (1X)"
@@ -1061,8 +1060,13 @@ class MatchIQPickEngine:
                             tactical_archetype=archetype_type, tactical_score=t_boost
                         ))
 
+        def _mkt_available(mid: str) -> bool:
+            if not raw_market_ids:
+                return True
+            return str(mid) in raw_market_ids
+
         # 2. Asian Handicaps (+1.5 for 50/50 games, -1.0 for Heavy Favorites)
-        if _cat_allowed("HANDICAP") and (has_mkt_filter and "16" in raw_market_ids):
+        if _cat_allowed("HANDICAP") and _mkt_available("16"):
             if is_even_match:
                 # Home +1.5 Asian Handicap (wins on Home win, draw, or 1-goal loss)
                 prob_h_p15 = min(0.93, 0.60 + (ph * 0.40) + (pd * 0.35))
@@ -1099,7 +1103,7 @@ class MatchIQPickEngine:
                     ))
 
         # 3. Over/Under Lines (Universal SportyBet Half-Point Lines: 1.5, 2.5, 3.5, 4.5)
-        if _cat_allowed("OVER_UNDER") and (len(ou_lines) > 0 or not has_mkt_filter or "18" in raw_market_ids):
+        if _cat_allowed("OVER_UNDER") and len(ou_lines) > 0 and _mkt_available("18"):
             for ou in ou_lines:
                 try:
                     raw_line_num = float(ou.get("line") or 0.0)
@@ -1152,7 +1156,7 @@ class MatchIQPickEngine:
 
         # 4. Team Goals (Team Over 0.5 / 1.5 Goals)
         if _cat_allowed("TEAM_GOALS"):
-            if ph >= 0.52 and r_home <= 2.10 and (not has_mkt_filter or "19" in raw_market_ids):
+            if ph >= 0.52 and r_home <= 2.10 and _mkt_available("19"):
                 prob_h_o05 = min(0.95, 0.72 + (ph * 0.25))
                 odd_h_o05 = round(1.0 / (prob_h_o05 * 1.04), 2)
                 sel_h05 = f"{home} Over 0.5 Goals"
@@ -1187,7 +1191,7 @@ class MatchIQPickEngine:
                             league_tier=tier_label, league_tier_score=tier_score, tactical_archetype=archetype_type, tactical_score=25.0
                         ))
 
-            if pa >= 0.52 and r_away <= 2.10 and (not has_mkt_filter or "20" in raw_market_ids):
+            if pa >= 0.52 and r_away <= 2.10 and _mkt_available("20"):
                 prob_a_o05 = min(0.95, 0.72 + (pa * 0.25))
                 odd_a_o05 = round(1.0 / (prob_a_o05 * 1.04), 2)
                 sel_a05 = f"{away} Over 0.5 Goals"
@@ -1225,7 +1229,7 @@ class MatchIQPickEngine:
         # 5. Advanced Tactical Options: Win Either Half & Home/Away or Over 2.5
         if _cat_allowed("COMBO") or _cat_allowed("DOUBLE_CHANCE"):
             # Home to Win Either Half
-            if ph >= 0.55 and r_home <= 1.85 and (not has_mkt_filter or "73" in raw_market_ids):
+            if ph >= 0.55 and r_home <= 1.85 and _mkt_available("73"):
                 prob_h_weh = min(0.92, 0.58 + (ph * 0.38))
                 odd_h_weh = round(1.0 / (prob_h_weh * 1.04), 2)
                 sel_h_weh = f"{home} to Win Either Half"
@@ -1243,7 +1247,7 @@ class MatchIQPickEngine:
                     ))
 
             # Home or Over 2.5 Goals
-            if ph >= 0.55 and (not has_mkt_filter or "62" in raw_market_ids):
+            if ph >= 0.55 and _mkt_available("62"):
                 prob_h_o25 = min(0.93, ph + 0.22)
                 odd_h_o25 = round(1.0 / (prob_h_o25 * 1.04), 2)
                 sel_h_o25 = f"{home} or Over 2.5 Goals"
@@ -1261,7 +1265,7 @@ class MatchIQPickEngine:
                     ))
 
             # Away to Win Either Half
-            if pa >= 0.55 and r_away <= 1.85 and (not has_mkt_filter or "74" in raw_market_ids):
+            if pa >= 0.55 and r_away <= 1.85 and _mkt_available("74"):
                 prob_a_weh = min(0.92, 0.58 + (pa * 0.38))
                 odd_a_weh = round(1.0 / (prob_a_weh * 1.04), 2)
                 sel_a_weh = f"{away} to Win Either Half"
@@ -1279,7 +1283,7 @@ class MatchIQPickEngine:
                     ))
 
             # Away or Over 2.5 Goals
-            if pa >= 0.55 and (not has_mkt_filter or "62" in raw_market_ids):
+            if pa >= 0.55 and _mkt_available("62"):
                 prob_a_o25 = min(0.93, pa + 0.22)
                 odd_a_o25 = round(1.0 / (prob_a_o25 * 1.04), 2)
                 sel_a_o25 = f"{away} or Over 2.5 Goals"
@@ -1297,7 +1301,7 @@ class MatchIQPickEngine:
                     ))
 
         # 6. 1X2 Match Result Lines
-        if _cat_allowed("1X2") and (not has_mkt_filter or "1" in raw_market_ids):
+        if _cat_allowed("1X2"):
             if r_home and min_odds_floor <= r_home <= max_odds_cap and ph >= prob_floor:
                 sel_h = f"{home} to Win (1)"
                 if sel_h not in seen_selections:
@@ -1370,18 +1374,22 @@ class MatchIQPickEngine:
         import random
         import time
 
+        rp_clean = (risk_profile or "CONSERVATIVE").upper()
         if target_mode == "GAMES" and target_games:
             target_legs_count = max(1, min(50, target_games))
-            if target_games >= 15:
-                per_leg_target = 1.18
-                min_prob_threshold = 0.85
-                risk_profile = "ULTRA_CONSERVATIVE"
-            elif target_games >= 8:
-                per_leg_target = 1.25
-                min_prob_threshold = 0.78
+            if rp_clean == "AGGRESSIVE":
+                per_leg_target = 1.45
+                min_prob_threshold = 0.58
             else:
-                per_leg_target = 1.35
-                min_prob_threshold = 0.74
+                if target_games >= 15:
+                    per_leg_target = 1.18
+                    min_prob_threshold = 0.76
+                elif target_games >= 8:
+                    per_leg_target = 1.25
+                    min_prob_threshold = 0.75
+                else:
+                    per_leg_target = 1.30
+                    min_prob_threshold = 0.74
             max_league_picks = max(max_league_picks, (target_games // 3) + 2)
             leg_config = {
                 "ideal_legs": target_legs_count,
@@ -1509,12 +1517,13 @@ class MatchIQPickEngine:
             best_combo: List[PickDecision] = []
             best_diff = float("inf")
 
-            # Search 1-leg, 2-leg, 3-leg, 4-leg, 5-leg combinations to find optimal target match
-            for leg_k in range(1, min(6, len(avail_fix_keys) + 1)):
-                fix_subsets = list(itertools.combinations(avail_fix_keys[:20], leg_k))
+            # Search 1-leg, 2-leg, 3-leg, 4-leg combinations to find optimal target match
+            # Limit candidate depth per fixture and subset size to ensure sub-10ms response
+            for leg_k in range(1, min(5, len(avail_fix_keys) + 1)):
+                fix_subsets = list(itertools.combinations(avail_fix_keys[:15], leg_k))
                 rng.shuffle(fix_subsets)
-                for subset in fix_subsets[:100]:
-                    subset_cands = [fixtures_dict[fk][:6] for fk in subset]
+                for subset in fix_subsets[:30]:
+                    subset_cands = [fixtures_dict[fk][:3] for fk in subset]
                     for cand_tuple in itertools.product(*subset_cands):
                         combo_odds = 1.0
                         combo_prob = 1.0
@@ -1534,13 +1543,13 @@ class MatchIQPickEngine:
                         if score < best_diff:
                             best_diff = score
                             best_combo = list(cand_tuple)
-                            if abs(combo_odds - target) <= 0.03 and combo_prob >= 0.50:
+                            if abs(combo_odds - target) <= 0.04 and combo_prob >= 0.55:
                                 break
 
                     if best_combo:
                         tot_o = 1.0
                         for c in best_combo: tot_o *= c.estimated_odds
-                        if abs(tot_o - target) <= 0.03:
+                        if abs(tot_o - target) <= 0.04:
                             break
 
             if best_combo:
@@ -1616,8 +1625,19 @@ class MatchIQPickEngine:
 
                     if curr_odds >= (target_total_odds * 0.95):
                         break
-                    if len(candidate_combo) >= 25:
+                    if len(candidate_combo) >= 50:
                         break
+
+                # If still under target_total_odds, pull additional safe picks from remaining fixtures
+                if curr_odds < (target_total_odds * 0.90):
+                    for d in elite_candidate_pool:
+                        fix_k = str(d.fixture_id or f"{d.home_team}_{d.away_team}")
+                        if fix_k not in seen_fixtures:
+                            candidate_combo.append(d)
+                            seen_fixtures.add(fix_k)
+                            curr_odds *= d.estimated_odds
+                            if curr_odds >= (target_total_odds * 0.95) or len(candidate_combo) >= 50:
+                                break
 
                 selected_decisions = candidate_combo if candidate_combo else elite_candidate_pool[:target_legs_count]
             else:
@@ -1650,6 +1670,30 @@ class MatchIQPickEngine:
                         fix_k = str(d.fixture_id or f"{d.home_team}_{d.away_team}")
                         if fix_k not in seen_fixtures:
                             selected_decisions.append(d)
+                            seen_fixtures.add(fix_k)
+                            if len(selected_decisions) >= target_legs_count:
+                                break
+
+                # Pass 3: If still under target_legs_count, evaluate remaining unselected fixtures from fixture_pool
+                if len(selected_decisions) < target_legs_count:
+                    for fix in fixture_pool:
+                        f_id = str(fix.get("eventId") or fix.get("event_id") or fix.get("fixture_id") or "")
+                        h_n = str(fix.get("home_team") or "").strip().lower()
+                        a_n = str(fix.get("away_team") or "").strip().lower()
+                        fix_k = str(fix.get("fixture_id") or f"{fix.get('home_team')}_{fix.get('away_team')}")
+                        if fix_k in seen_fixtures:
+                            continue
+                        relaxed_cands = self.evaluate_fixture_all_candidates(
+                            fixture=fix,
+                            per_leg_target_odds=1.28,
+                            min_prob_threshold=0.60,
+                            risk_profile=risk_profile,
+                            allowed_markets=allowed_markets,
+                            excluded_markets=excluded_markets,
+                        )
+                        if relaxed_cands:
+                            best_c = max(relaxed_cands, key=lambda x: (x.model_probability, float(getattr(x, "tactical_score", 0.0))))
+                            selected_decisions.append(best_c)
                             seen_fixtures.add(fix_k)
                             if len(selected_decisions) >= target_legs_count:
                                 break
@@ -1860,10 +1904,11 @@ class MatchIQPickEngine:
         )
 
         n_pool = len(scored_fixtures)
-        needed_total_picks = num_tickets * (target_games if (target_mode == "GAMES" and target_games) else 8)
+        target_legs_count = target_games if (target_mode == "GAMES" and target_games) else 8
+        needed_total_picks = num_tickets * target_legs_count
 
         portfolio: List[BuiltTicket] = []
-        # Track (fixture_id -> set of market selection strings already assigned in other tickets)
+        # Track (f_key -> set of selection names already assigned across prior tickets)
         global_market_usage: Dict[str, set] = {}
         base_seed = int(time.time() * 1000)
 
@@ -1893,11 +1938,15 @@ class MatchIQPickEngine:
                 portfolio.append(t_built)
         else:
             # Limited Pool: Apply Smart Alternative Market Hedging across slips
-            # Every ticket evaluates the pool with an offset rotation, selecting distinct winnable markets
+            # Distribute fixtures with offset rotation so tickets prioritize different fixtures first
+            offset_step = max(1, n_pool // num_tickets) if n_pool > 0 else 0
+
             for t_idx in range(num_tickets):
                 t_seed = base_seed + (t_idx * 7919)
-                # Rotate starting offset so tickets prioritize different fixtures
-                rotated_pool = scored_fixtures[t_idx:] + scored_fixtures[:t_idx]
+                rng = random.Random(t_seed)
+                # Offset starting rotation so each ticket starts on a different fixture
+                shift = (t_idx * offset_step) % max(1, n_pool)
+                rotated_pool = scored_fixtures[shift:] + scored_fixtures[:shift]
 
                 approved_legs_for_ticket = []
                 acc_odds = 1.0
@@ -1907,7 +1956,7 @@ class MatchIQPickEngine:
                     f_id = str(fix.get("eventId") or fix.get("event_id") or fix.get("fixture_id") or "")
                     h_name = str(fix.get("home_team") or "").strip().lower()
                     a_name = str(fix.get("away_team") or "").strip().lower()
-                    f_key = f_id or f"{h_name}_{a_name}"
+                    f_key = f"{h_name}_vs_{a_name}" if (h_name and a_name) else f_id
 
                     if f_key in seen_fixtures_in_slip:
                         continue
@@ -1924,35 +1973,38 @@ class MatchIQPickEngine:
                     if not cands:
                         continue
 
-                    # Find a candidate that has NOT been used on this fixture in prior tickets
                     used_on_this_fix = global_market_usage.get(f_key, set())
                     chosen_cand = None
 
-                    # 1. Try unused candidate first
+                    # Filter candidates for valid odds bounds
+                    valid_cands = []
                     for c in cands:
                         sel_str = str(c.selection_name).strip().lower()
                         mkt_str = str(c.market_name).strip().lower()
                         c_odds = float(c.estimated_odds or 1.25)
-                        # Ensure within valid safe odds bounds (1.10 to 1.50, DC <= 1.25)
-                        if "double chance" in mkt_str and c_odds > 1.25:
+                        if "double chance" in mkt_str and c_odds > 1.35:
                             continue
-                        if c_odds < 1.10 or c_odds > 1.50:
+                        if c_odds < 1.08 or c_odds > 1.65:
                             continue
-                        if sel_str not in used_on_this_fix:
-                            chosen_cand = c
-                            break
+                        valid_cands.append(c)
 
-                    # 2. If all candidates used (or only 1 valid exists), fallback to highest probability candidate
-                    if not chosen_cand and cands:
-                        for c in cands:
-                            c_odds = float(c.estimated_odds or 1.25)
-                            mkt_str = str(c.market_name).strip().lower()
-                            if ("double chance" in mkt_str and c_odds > 1.25) or c_odds < 1.10:
-                                continue
-                            chosen_cand = c
-                            break
+                    if not valid_cands:
+                        valid_cands = cands
+
+                    # 1. Prioritize unused candidates for this fixture
+                    unused_cands = [c for c in valid_cands if str(c.selection_name).strip().lower() not in used_on_this_fix]
+                    
+                    if unused_cands:
+                        # Sort by combination of model_probability and tactical score
+                        unused_cands.sort(key=lambda x: (x.model_probability, float(getattr(x, "tactical_score", 0.0))), reverse=True)
+                        chosen_cand = unused_cands[0]
+                    else:
+                        # If all vetted candidates for this fixture have already been used in prior slips,
+                        # skip this fixture on first pass to let other fixtures with unique markets be selected!
+                        continue
 
                     if chosen_cand:
+                        sel_clean_str = str(chosen_cand.selection_name).strip().lower()
                         leg_dict = {
                             "fixture_id": chosen_cand.fixture_id,
                             "event_id": fix.get("event_id") or fix.get("eventId") or chosen_cand.fixture_id,
@@ -1982,7 +2034,7 @@ class MatchIQPickEngine:
                         # Record this selection into global market usage
                         if f_key not in global_market_usage:
                             global_market_usage[f_key] = set()
-                        global_market_usage[f_key].add(str(chosen_cand.selection_name).strip().lower())
+                        global_market_usage[f_key].add(sel_clean_str)
 
                         if target_mode == "GAMES" and target_games and len(approved_legs_for_ticket) >= target_games:
                             break

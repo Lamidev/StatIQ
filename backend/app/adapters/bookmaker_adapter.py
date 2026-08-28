@@ -932,24 +932,66 @@ class SportyBetAdapter(BookmakerAdapter):
                                 "verified": True
                             }
 
-                # Resilient Self-Healing Fallback: Repair any failed item into universal Double Chance or Over 1.5
+                # Resilient Directional Self-Healing Fallback: Repair any unsupported boutique market
+                # preserving Home vs Away intent (NEVER flip an Away favourite pick to 1X!)
                 valid_items = []
-                for item in selections_payload:
+                for idx, item in enumerate(selections_payload):
+                    orig_s = selections[idx] if idx < len(selections) else {}
+                    s_name = str(orig_s.get("selection_name") or orig_s.get("selection") or "").lower()
+                    m_name = str(orig_s.get("market_name") or orig_s.get("market") or "").lower()
+                    h_team = str(orig_s.get("home_team") or "").lower()
+                    a_team = str(orig_s.get("away_team") or "").lower()
+
+                    is_away_pick = (
+                        "x2" in s_name or "draw or away" in s_name or "(2)" in s_name or 
+                        "away" in s_name or (a_team and a_team in s_name and "vs" not in s_name) or
+                        item.get("marketId") == "20" or item.get("outcomeId") in ("3", "11", "1715")
+                    )
+                    is_goals_pick = "over" in s_name or "under" in s_name or "goals" in m_name or item.get("marketId") in ("18", "19", "20")
+
                     try:
                         r_single = client.post(url_share, json={"selections": [item]})
                         if r_single.status_code == 200 and r_single.json().get("bizCode") == 10000:
                             valid_items.append(item)
                         else:
-                            # Attempt self-healing repair to universal Double Chance (1X) or Over 1.5 Goals
-                            repaired_dc = {"eventId": item["eventId"], "marketId": "10", "outcomeId": "9"}
-                            r_dc = client.post(url_share, json={"selections": [repaired_dc]})
-                            if r_dc.status_code == 200 and r_dc.json().get("bizCode") == 10000:
-                                valid_items.append(repaired_dc)
-                            else:
+                            # 1. If it was an Away pick: repair to Draw or Away (X2 - outcome 11) or Over 1.5 Goals
+                            if is_away_pick:
+                                repaired_x2 = {"eventId": item["eventId"], "marketId": "10", "outcomeId": "11"}
+                                r_x2 = client.post(url_share, json={"selections": [repaired_x2]})
+                                if r_x2.status_code == 200 and r_x2.json().get("bizCode") == 10000:
+                                    valid_items.append(repaired_x2)
+                                    continue
                                 repaired_o15 = {"eventId": item["eventId"], "marketId": "18", "outcomeId": "12", "specifier": "total=1.5"}
                                 r_o15 = client.post(url_share, json={"selections": [repaired_o15]})
                                 if r_o15.status_code == 200 and r_o15.json().get("bizCode") == 10000:
                                     valid_items.append(repaired_o15)
+                                    continue
+
+                            # 2. If it was a Goals pick: repair to Over 1.5 Goals
+                            elif is_goals_pick:
+                                repaired_o15 = {"eventId": item["eventId"], "marketId": "18", "outcomeId": "12", "specifier": "total=1.5"}
+                                r_o15 = client.post(url_share, json={"selections": [repaired_o15]})
+                                if r_o15.status_code == 200 and r_o15.json().get("bizCode") == 10000:
+                                    valid_items.append(repaired_o15)
+                                    continue
+                                repaired_dc = {"eventId": item["eventId"], "marketId": "10", "outcomeId": "9"}
+                                r_dc = client.post(url_share, json={"selections": [repaired_dc]})
+                                if r_dc.status_code == 200 and r_dc.json().get("bizCode") == 10000:
+                                    valid_items.append(repaired_dc)
+                                    continue
+
+                            # 3. Default Home pick: repair to Home or Draw (1X - outcome 9)
+                            else:
+                                repaired_dc = {"eventId": item["eventId"], "marketId": "10", "outcomeId": "9"}
+                                r_dc = client.post(url_share, json={"selections": [repaired_dc]})
+                                if r_dc.status_code == 200 and r_dc.json().get("bizCode") == 10000:
+                                    valid_items.append(repaired_dc)
+                                    continue
+                                repaired_o15 = {"eventId": item["eventId"], "marketId": "18", "outcomeId": "12", "specifier": "total=1.5"}
+                                r_o15 = client.post(url_share, json={"selections": [repaired_o15]})
+                                if r_o15.status_code == 200 and r_o15.json().get("bizCode") == 10000:
+                                    valid_items.append(repaired_o15)
+                                    continue
                     except Exception:
                         pass
 

@@ -327,7 +327,7 @@ export default function TicketBuilderTab() {
   const [generatedCodes, setGeneratedCodes] = useState({});
 
   // Risk Profile & Market Preferences
-  const [riskProfile, setRiskProfile] = useState("BALANCED"); // "ULTRA_CONSERVATIVE", "BALANCED", "AGGRESSIVE"
+  const [riskProfile, setRiskProfile] = useState("CONSERVATIVE"); // "CONSERVATIVE" (Safety Cushions) or "AGGRESSIVE" (Value Maximizer)
   const [selectedMarketCategories, setSelectedMarketCategories] = useState([
     "DOUBLE_CHANCE",
     "OVER_UNDER",
@@ -545,52 +545,59 @@ export default function TicketBuilderTab() {
     setRolloverResult(null);
     setExpandedAuditLogs({});
 
-    const payload = {
-      target_odds: dailyTargetOdds,
-      target_mode: "ODDS",
-      mode: "ROLLOVER",
-      selected_leagues: selectedLeagues,
-      date_window: dateWindow,
-      league_scope: "MULTI",
-      single_league: "PL",
-      gameweek: gameweek,
-      use_live_odds: true,
-      kickoff_scope: dateWindow,
-      strict_mode: strictMode,
-      reshuffle_seed: Date.now(),
-      risk_profile: riskProfile,
-      allowed_market_categories: selectedMarketCategories
-    };
+    try {
+      const payload = {
+        target_odds: dailyTargetOdds,
+        target_mode: "ODDS",
+        mode: "ROLLOVER",
+        selected_leagues: selectedLeagues,
+        date_window: dateWindow,
+        league_scope: "MULTI",
+        single_league: "PL",
+        use_live_odds: true,
+        kickoff_scope: dateWindow,
+        strict_mode: strictMode,
+        reshuffle_seed: Date.now(),
+        risk_profile: riskProfile,
+        allowed_market_categories: selectedMarketCategories
+      };
 
-    const res = await buildAiTicket(payload);
-    setLoading(false);
+      const res = await buildAiTicket(payload);
 
-    if (!res || res.status === "NO_FIXTURES" || !res.ticket || !res.ticket.approved_legs || res.ticket.approved_legs.length === 0) {
-      setErrorMsg(
-        res?.message ||
-        res?.ticket?.error ||
-        "No suitable ultra-safe matches found for the selected leagues and timeframe. Try adjusting your league selection or schedule window."
-      );
-      return;
+      if (!res || res.status === "TIMEOUT" || res.status === "HTTP_ERROR" || res.status === "ERROR" || res.status === "NO_FIXTURES" || !res.ticket || !res.ticket.approved_legs || res.ticket.approved_legs.length === 0) {
+        setErrorMsg(
+          res?.message ||
+          res?.ticket?.error ||
+          (res?.status === "TIMEOUT"
+            ? "Rollover analysis timed out. Please try again."
+            : "No suitable ultra-safe matches found for the selected leagues and timeframe. Try adjusting your league selection or schedule window.")
+        );
+        return;
+      }
+
+      const legs = res.ticket.approved_legs;
+      const totalMultiplier = res.ticket.accumulated_odds || roundOddsVal(legs.reduce((acc, curr) => acc * (curr.estimated_odds || curr.odds || 1.3), 1.0));
+      const finalEstimatedPayout = roundOddsVal(startingStake * totalMultiplier);
+
+      const codeRes = await generateSportyBetCode(legs);
+      const code = codeRes.booking_code || res.ticket.booking_code || "BC-ROLLOVER-LIVE";
+
+      setRolloverResult({
+        picks: legs,
+        totalMultiplier: totalMultiplier,
+        finalEstimatedPayout: finalEstimatedPayout,
+        bookingCode: code,
+        confidence_tier: res.ticket.confidence_tier || "HIGH",
+        recommended_stake_pct: res.ticket.recommended_stake_pct,
+        decision_audit_summary: res.ticket.decision_audit_summary,
+        rejected_picks: res.ticket.rejected_picks
+      });
+    } catch (err) {
+      console.error("Rollover generation error:", err);
+      setErrorMsg("Error generating rollover ticket: " + (err.message || "Unknown error"));
+    } finally {
+      setLoading(false);
     }
-
-    const legs = res.ticket.approved_legs;
-    const totalMultiplier = res.ticket.accumulated_odds || roundOddsVal(legs.reduce((acc, curr) => acc * (curr.estimated_odds || curr.odds || 1.3), 1.0));
-    const finalEstimatedPayout = roundOddsVal(startingStake * totalMultiplier);
-
-    const codeRes = await generateSportyBetCode(legs);
-    const code = codeRes.booking_code || res.ticket.booking_code || "BC-ROLLOVER-LIVE";
-
-    setRolloverResult({
-      picks: legs,
-      totalMultiplier: totalMultiplier,
-      finalEstimatedPayout: finalEstimatedPayout,
-      bookingCode: code,
-      confidence_tier: res.ticket.confidence_tier || "HIGH",
-      recommended_stake_pct: res.ticket.recommended_stake_pct,
-      decision_audit_summary: res.ticket.decision_audit_summary,
-      rejected_picks: res.ticket.rejected_picks
-    });
   };
 
   const roundOddsVal = (val) => Math.round(val * 100) / 100;
@@ -758,7 +765,7 @@ export default function TicketBuilderTab() {
       status: res.status,
       verificationSummary: res.reconciliation_summary || "All selections verified 100% with zero false positives.",
       totalOdds: res.total_odds,
-      label: scenarioLabel || `Gameweek ${gameweek} AI Ticket`,
+      label: scenarioLabel || "StatIQ AI Ticket",
       selections,
       loadUrl: res.share_url || `https://www.sportybet.com/ng/?shareCode=${code}`
     });
@@ -1748,12 +1755,12 @@ export default function TicketBuilderTab() {
                   <div className="space-y-3">
                     <p className="text-xs text-slate-500">Select target odds or enter custom multiplier:</p>
                     <div className="flex flex-wrap gap-2">
-                      {[2.0, 5.0, 10.0, 20.0, 50.0, 100.0].map((val) => (
+                      {[2.0, 5.0, 10.0, 20.0, 50.0, 100.0, 200.0, 500.0].map((val) => (
                         <button
                           key={val}
                           type="button"
                           onClick={() => { setTargetOdds(val); setCustomOdds(""); setUseCustom(false); }}
-                          className={`px-4 py-2 rounded-xl text-xs font-extrabold transition-all ${
+                          className={`px-3.5 py-2 rounded-xl text-xs font-extrabold transition-all ${
                             !useCustom && targetOdds === val
                               ? "bg-slate-900 text-white shadow-sm"
                               : "bg-slate-100 text-slate-700 hover:bg-slate-200"
@@ -1785,14 +1792,14 @@ export default function TicketBuilderTab() {
                   </div>
                 ) : (
                   <div className="space-y-3">
-                    <p className="text-xs text-slate-500">How many games do you want in your ticket?</p>
+                    <p className="text-xs text-slate-500">How many games do you want in your ticket (up to 50)?</p>
                     <div className="flex flex-wrap gap-2">
-                      {[3, 5, 8, 10, 15, 20].map((num) => (
+                      {[5, 10, 15, 20, 25, 30, 40, 50].map((num) => (
                         <button
                           key={num}
                           type="button"
                           onClick={() => { setTargetGames(num); setCustomGamesInput(String(num)); }}
-                          className={`px-4 py-2 rounded-xl text-xs font-extrabold transition-all ${
+                          className={`px-3.5 py-2 rounded-xl text-xs font-extrabold transition-all ${
                             targetGames === num
                               ? "bg-slate-900 text-white shadow-sm"
                               : "bg-slate-100 text-slate-700 hover:bg-slate-200"
@@ -1893,11 +1900,10 @@ export default function TicketBuilderTab() {
                 {/* Risk Strategy Profile */}
                 <div className="pt-2">
                   <label className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider block mb-2">Risk Strategy Profile</label>
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                     {[
-                      { id: "ULTRA_CONSERVATIVE", label: "Ultra-Conservative", desc: "Tier-1 cushions only (85%+ win rate: Double Chance, Over 1.5)" },
-                      { id: "BALANCED", label: "Balanced Safety", desc: "Default optimal mix of Tier-1 cushions & high-confidence value" },
-                      { id: "AGGRESSIVE", label: "Aggressive Value", desc: "Targets straight 1X2 wins, Over 2.5 goals & handicaps" },
+                      { id: "CONSERVATIVE", label: "Conservative (Safety Cushions)", desc: "Tier-1 cushions (80%+ win rate: Double Chance, Over 1.5, Team Goals, Win Either Half)" },
+                      { id: "AGGRESSIVE", label: "Aggressive (Value Maximizer)", desc: "Direct value & higher odds (Straight 1X2 wins, Over 2.5 goals & Asian handicaps)" },
                     ].map(r => (
                       <div
                         key={r.id}
@@ -2149,11 +2155,10 @@ export default function TicketBuilderTab() {
           {/* Risk Strategy Profile for Rollover */}
           <div className="space-y-2 pt-2 border-t border-slate-100">
             <label className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider block">5. Risk Strategy Profile</label>
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
               {[
-                { id: "ULTRA_CONSERVATIVE", label: "Ultra-Conservative", desc: "Tier-1 cushions only (80%+ win rate: Double Chance, Over 1.5)" },
-                { id: "BALANCED", label: "Balanced Safety", desc: "Default optimal mix of Tier-1 cushions & high-confidence value" },
-                { id: "AGGRESSIVE", label: "Aggressive Value", desc: "Targets straight 1X2 wins, Over 2.5 goals & handicaps" },
+                { id: "CONSERVATIVE", label: "Conservative (Safety Cushions)", desc: "Tier-1 cushions (80%+ win rate: Double Chance, Over 1.5, Team Goals)" },
+                { id: "AGGRESSIVE", label: "Aggressive (Value Maximizer)", desc: "Direct value & higher odds (Straight 1X2 wins, Over 2.5 goals, Handicaps)" },
               ].map(r => (
                 <div
                   key={r.id}
