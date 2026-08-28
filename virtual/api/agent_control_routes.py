@@ -15,161 +15,465 @@ from datetime import datetime, timezone
 import logging
 
 from virtual.core.db import get_db
-from virtual.models.virtual_models import VirtualLeague, VirtualEvent, VirtualOddsSnapshot, VirtualBankroll
+from virtual.models.virtual_models import (
+    VirtualLeague, VirtualEvent, VirtualOddsSnapshot, VirtualBankroll,
+    VirtualAgentConfig, VirtualAgentHeartbeat, VirtualAgentAuditLog, VirtualFrontTestSlip
+)
 from virtual.ingestion.virtual_sportybet_client import VirtualSportyBetClient
 from virtual.paper.paper_trader import PaperTrader
 
 logger = logging.getLogger("statiq.virtual.agent_control")
 router = APIRouter()
 
-# ---------------------------------------------------------------
-# In-memory Agent Control State
-# ---------------------------------------------------------------
-AGENT_STATE = {
-    "is_active": True,
-    "target_odds": 2.0,
-    "num_games": 2,
-    "stake_amount": 1000.0,
-    "preferred_market": "ALL",   # ALL | 1X2_HOME | 1X2_AWAY | OVER_1.5 | OVER_2.5 | DOUBLE_CHANCE
-    "last_generated_ticket": None,
-    "last_ticket_timestamp": None,
-}
 
-
-class AgentConfigUpdate(BaseModel):
-    is_active: Optional[bool] = None
-    target_odds: Optional[float] = None
-    num_games: Optional[int] = None
-    stake_amount: Optional[float] = None
-    preferred_market: Optional[str] = None
-
-
-# ---------------------------------------------------------------
-# LIVE vFootball Fixtures from SportyBet API
-# ---------------------------------------------------------------
-
-@router.get("/vfootball/live")
-def get_live_vfootball_fixtures(
-    league: Optional[str] = Query(None, description="Filter by league: england, spain, italy, germany, france, turkey")
-):
+def get_or_create_agent_config(db: Session) -> VirtualAgentConfig:
     """
-    Fetches current vFootball fixtures DIRECTLY from the SportyBet API.
-    Returns real team names, real odds, real gameIds — exactly as on the site.
-    Auto-polls fresh data every call.
+    Authoritative Single Source of Truth for the Virtual Agent.
+    Guarantees a persistent database configuration row exists.
     """
+    cfg = db.query(VirtualAgentConfig).filter(VirtualAgentConfig.id == "default").first()
+    if not cfg:
+        cfg = VirtualAgentConfig(
+            id="default",
+            enabled=True,
+            emergency_stop=False,
+            target_odds=2.0,
+            stake_amount=1000.0,
+            league_count=2,
+            selected_leagues=["England Virtual", "Spain Virtual"],
+            strategy="ADAPTIVE",
+            risk_profile="CONSERVATIVE",
+            preferred_market="ALL",
+            execution_mode="PAPER",
+            max_consecutive_losses=3,
+            max_daily_loss=5000.0,
+            config_version=1
+        )
+        db.add(cfg)
+        db.commit()
+        db.refresh(cfg)
+    return cfg
+
+
+def log_agent_audit(db: Session, event_type: str, payload: Dict[str, Any], config_version: int, operator: str = "UI"):
+    """Records an immutable audit trail entry for state changes."""
     try:
-        raw_events = VirtualSportyBetClient.fetch_upcoming_virtual_events()
+        audit_entry = VirtualAgentAuditLog(
+            event_type=event_type,
+            payload=payload,
+            config_version=config_version,
+            operator=operator,
+            created_at=datetime.now(timezone.utc)
+        )
+        db.add(audit_entry)
+        db.commit()
     except Exception as e:
-        logger.error(f"[LiveFixtures] Error fetching from SportyBet: {e}")
-        raise HTTPException(status_code=503, detail=f"Could not reach SportyBet API: {e}")
+        logger.error(f"[AuditLog] Failed to record audit log: {e}")
 
-    fixtures = []
-    for ev in raw_events:
-        sport = ev.get("sport", {})
-        cat = sport.get("category", {}) if isinstance(sport, dict) else {}
-        cat_name = cat.get("name", "Virtual")  # England / Spain / Italy etc.
 
-        # Apply league filter
-        if league and cat_name.lower() != league.lower():
+class PersistentAgentConfigUpdate(BaseModel):
+    enabled: Optional[bool] = None
+    emergency_stop: Optional[bool] = None
+    target_odds: Optional[float] = None
+    stake_amount: Optional[float] = None
+    league_count: Optional[int] = None
+    selected_leagues: Optional[List[str]] = None
+    strategy: Optional[str] = None
+    risk_profile: Optional[str] = None
+    preferred_market: Optional[str] = None
+    execution_mode: Optional[str] = None
+    max_consecutive_losses: Optional[int] = None
+    max_daily_loss: Optional[float] = None
+
+
+# ---------------------------------------------------------------
+# Authoritative Control Plane Endpoints (PRD v4.0)
+# ---------------------------------------------------------------
+
+@router.get("/agent/status")
+@router.get("/status")
+def get_agent_status(db: Session = Depends(get_db)):
+    """
+    Returns authoritative DB config, live VPS worker heartbeat, config sync state,
+    and cumulative performance ledger metrics.
+    """
+    cfg = get_or_create_agent_config(db)
+    heartbeat = db.query(VirtualAgentHeartbeat).filter(VirtualAgentHeartbeat.worker_id == "vfootball_fronttest_worker").first()
+
+    now_utc = datetime.now(timezone.utc)
+    is_online = False
+    heartbeat_age_sec = 999.0
+    worker_state = "OFFLINE"
+    worker_version = 0
+
+    if heartbeat and heartbeat.last_seen:
+        hb_ts = heartbeat.last_seen
+        if hb_ts.tzinfo is None:
+            hb_ts = hb_ts.replace(tzinfo=timezone.utc)
+        heartbeat_age_sec = (now_utc - hb_ts).total_seconds()
+        is_online = heartbeat_age_sec < 30.0
+        worker_version = heartbeat.config_version or 0
+        worker_state = heartbeat.worker_state if is_online else "OFFLINE"
+
+    is_synced = is_online and (worker_version == cfg.config_version)
+
+    # Calculate ledger performance metrics
+    all_slips = db.query(VirtualFrontTestSlip).order_by(VirtualFrontTestSlip.created_at.desc()).all()
+    total_slips = len(all_slips)
+    won_slips = sum(1 for s in all_slips if s.status == "WON")
+    lost_slips = sum(1 for s in all_slips if s.status == "LOST")
+    pending_slips = sum(1 for s in all_slips if s.status == "PENDING")
+    settled = won_slips + lost_slips
+    win_rate = round((won_slips / settled) * 100.0, 1) if settled > 0 else 0.0
+    net_profit = sum(s.profit_loss for s in all_slips if s.profit_loss is not None)
+
+    recent_slips = []
+    seen_codes = set()
+    for s in all_slips:
+        code_key = s.booking_code or str(s.id)
+        if code_key in seen_codes:
             continue
-
-        home = ev.get("homeTeamName", "?")
-        away = ev.get("awayTeamName", "?")
-        game_id = str(ev.get("gameId", ""))
-        event_id = ev.get("eventId", "")
-        start_ms = ev.get("estimateStartTime", 0)
-        start_dt = datetime.fromtimestamp(start_ms / 1000, tz=timezone.utc).isoformat() if start_ms else None
-
-        markets = ev.get("markets", [])
-        odds_1x2 = _extract_1x2(markets)
-        odds_ou_list = _extract_ou_markets(markets)
-
-        fixtures.append({
-            "game_id": game_id,
-            "event_id": event_id,
-            "league": f"{cat_name} Virtual",
-            "country": cat_name,
-            "home_team": home,
-            "away_team": away,
-            "kick_off": start_dt,
-            "kick_off_display": datetime.fromtimestamp(start_ms / 1000, tz=timezone.utc).strftime("%H:%M") if start_ms else "--:--",
-            "status": ev.get("matchStatus", "Not start"),
-            "odds_1x2": odds_1x2,
-            "odds_ou": odds_ou_list,
-            "market_count": len(markets),
+        seen_codes.add(code_key)
+        recent_slips.append({
+            "id": s.id,
+            "ticket_id": s.ticket_id,
+            "booking_code": s.booking_code,
+            "league_name": s.league_name,
+            "round_time": s.round_time.isoformat() if s.round_time else None,
+            "actual_odds": s.actual_odds,
+            "num_games": s.num_games,
+            "status": s.status,
+            "profit_loss": s.profit_loss,
+            "selections": s.selections,
+            "created_at": s.created_at.isoformat() if s.created_at else None,
         })
-
-    # Group by league for display
-    leagues: Dict[str, List] = {}
-    for f in fixtures:
-        key = f["country"]
-        if key not in leagues:
-            leagues[key] = []
-        leagues[key].append(f)
+        if len(recent_slips) >= 15:
+            break
 
     return {
-        "total": len(fixtures),
-        "fetched_at": datetime.now(timezone.utc).isoformat(),
-        "leagues": leagues,
-        "fixtures": fixtures,
+        "status": "SUCCESS",
+        "config": {
+            "enabled": cfg.enabled,
+            "emergency_stop": cfg.emergency_stop,
+            "target_odds": cfg.target_odds,
+            "stake_amount": cfg.stake_amount,
+            "league_count": cfg.league_count,
+            "selected_leagues": cfg.selected_leagues or [],
+            "strategy": cfg.strategy,
+            "risk_profile": cfg.risk_profile,
+            "preferred_market": cfg.preferred_market,
+            "execution_mode": cfg.execution_mode,
+            "config_version": cfg.config_version,
+            "updated_at": cfg.updated_at.isoformat() if cfg.updated_at else None
+        },
+        "heartbeat": {
+            "is_online": is_online,
+            "worker_state": worker_state,
+            "heartbeat_age_seconds": round(heartbeat_age_sec, 1),
+            "worker_config_version": worker_version,
+            "server_config_version": cfg.config_version,
+            "is_synced": is_synced,
+            "current_round": heartbeat.current_round if heartbeat else None,
+            "current_league": heartbeat.current_league if heartbeat else None,
+            "last_seen": heartbeat.last_seen.isoformat() if heartbeat and heartbeat.last_seen else None
+        },
+        "performance": {
+            "total_slips": total_slips,
+            "won_slips": won_slips,
+            "lost_slips": lost_slips,
+            "pending_slips": pending_slips,
+            "win_rate_pct": win_rate,
+            "net_profit_units": round(net_profit, 2),
+            "recent_slips": recent_slips
+        }
     }
 
 
-@router.get("/vfootball/event/{game_id}")
-def get_vfootball_event(game_id: str):
-    """Fetch full detail for a single vFootball event by its gameId."""
-    ev = VirtualSportyBetClient.fetch_event_by_game_id(game_id)
-    if not ev:
-        raise HTTPException(status_code=404, detail=f"vFootball event gameId={game_id} not found or not upcoming")
-
-    sport = ev.get("sport", {})
-    cat = sport.get("category", {}) if isinstance(sport, dict) else {}
+@router.get("/agent/config")
+def get_agent_config_endpoint(db: Session = Depends(get_db)):
+    """Returns the persistent agent configuration record."""
+    cfg = get_or_create_agent_config(db)
     return {
-        "game_id": game_id,
-        "event_id": ev.get("eventId"),
-        "league": f"{cat.get('name', 'Virtual')} Virtual",
-        "home_team": ev.get("homeTeamName"),
-        "away_team": ev.get("awayTeamName"),
-        "kick_off": datetime.fromtimestamp(ev.get("estimateStartTime", 0) / 1000, tz=timezone.utc).isoformat(),
-        "status": ev.get("matchStatus"),
-        "markets": ev.get("markets", []),
+        "enabled": cfg.enabled,
+        "emergency_stop": cfg.emergency_stop,
+        "target_odds": cfg.target_odds,
+        "stake_amount": cfg.stake_amount,
+        "league_count": cfg.league_count,
+        "selected_leagues": cfg.selected_leagues or [],
+        "strategy": cfg.strategy,
+        "risk_profile": cfg.risk_profile,
+        "preferred_market": cfg.preferred_market,
+        "execution_mode": cfg.execution_mode,
+        "max_consecutive_losses": cfg.max_consecutive_losses,
+        "max_daily_loss": cfg.max_daily_loss,
+        "config_version": cfg.config_version,
+        "updated_at": cfg.updated_at.isoformat() if cfg.updated_at else None
+    }
+
+
+@router.post("/agent/config")
+def update_persistent_agent_config(payload: PersistentAgentConfigUpdate, db: Session = Depends(get_db)):
+    """
+    Authoritative configuration update with monotonic version increment and audit logging.
+    """
+    cfg = get_or_create_agent_config(db)
+    changes = payload.dict(exclude_unset=True)
+
+    if not changes:
+        return {"status": "NO_OP", "message": "No configuration parameters provided.", "config_version": cfg.config_version}
+
+    for k, v in changes.items():
+        if hasattr(cfg, k):
+            setattr(cfg, k, v)
+
+    cfg.config_version += 1
+    cfg.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(cfg)
+
+    log_agent_audit(db, "CONFIG_UPDATE", changes, cfg.config_version)
+
+    return {
+        "status": "SUCCESS",
+        "message": f"Configuration updated to v{cfg.config_version}.",
+        "config_version": cfg.config_version,
+        "config": {
+            "enabled": cfg.enabled,
+            "emergency_stop": cfg.emergency_stop,
+            "target_odds": cfg.target_odds,
+            "stake_amount": cfg.stake_amount,
+            "league_count": cfg.league_count,
+            "selected_leagues": cfg.selected_leagues,
+            "strategy": cfg.strategy,
+            "risk_profile": cfg.risk_profile,
+            "preferred_market": cfg.preferred_market,
+            "execution_mode": cfg.execution_mode
+        }
+    }
+
+
+@router.post("/agent/pause")
+def pause_agent_endpoint(db: Session = Depends(get_db)):
+    """Pauses ticket generation and execution across the VPS worker."""
+    cfg = get_or_create_agent_config(db)
+    cfg.enabled = False
+    cfg.config_version += 1
+    cfg.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(cfg)
+
+    log_agent_audit(db, "PAUSE", {"enabled": False}, cfg.config_version)
+
+    return {
+        "status": "SUCCESS",
+        "worker_state": "PAUSED",
+        "enabled": False,
+        "config_version": cfg.config_version,
+        "message": f"Agent execution paused (Config v{cfg.config_version})."
+    }
+
+
+@router.post("/agent/resume")
+def resume_agent_endpoint(db: Session = Depends(get_db)):
+    """Resumes agent ticket generation and execution."""
+    cfg = get_or_create_agent_config(db)
+    cfg.enabled = True
+    cfg.emergency_stop = False
+    cfg.config_version += 1
+    cfg.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(cfg)
+
+    log_agent_audit(db, "RESUME", {"enabled": True, "emergency_stop": False}, cfg.config_version)
+
+    return {
+        "status": "SUCCESS",
+        "worker_state": "RUNNING",
+        "enabled": True,
+        "config_version": cfg.config_version,
+        "message": f"Agent execution resumed (Config v{cfg.config_version})."
+    }
+
+
+@router.post("/agent/emergency-stop")
+def emergency_stop_endpoint(db: Session = Depends(get_db)):
+    """Locks all execution unconditionally under EMERGENCY_STOP state."""
+    cfg = get_or_create_agent_config(db)
+    cfg.enabled = False
+    cfg.emergency_stop = True
+    cfg.config_version += 1
+    cfg.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(cfg)
+
+    log_agent_audit(db, "EMERGENCY_STOP", {"emergency_stop": True, "enabled": False}, cfg.config_version)
+
+    return {
+        "status": "SUCCESS",
+        "worker_state": "EMERGENCY_STOPPED",
+        "emergency_stop": True,
+        "config_version": cfg.config_version,
+        "message": f"EMERGENCY STOP engaged. All execution blocked (Config v{cfg.config_version})."
+    }
+
+
+@router.post("/agent/presets/{preset_name}")
+def apply_agent_preset(preset_name: str, db: Session = Depends(get_db)):
+    """
+    Applies validated quantitative configuration presets.
+    Presets: CONSERVATIVE, BALANCED, AGGRESSIVE, ROLLOVER
+    """
+    cfg = get_or_create_agent_config(db)
+    p_name = preset_name.upper().strip()
+
+    presets = {
+        "CONSERVATIVE": {
+            "target_odds": 1.50,
+            "league_count": 1,
+            "risk_profile": "CONSERVATIVE",
+            "strategy": "CONSERVATIVE",
+            "preferred_market": "DOUBLE_CHANCE",
+            "stake_amount": 1000.0
+        },
+        "BALANCED": {
+            "target_odds": 2.00,
+            "league_count": 2,
+            "risk_profile": "BALANCED",
+            "strategy": "ADAPTIVE",
+            "preferred_market": "ALL",
+            "stake_amount": 1000.0
+        },
+        "AGGRESSIVE": {
+            "target_odds": 3.00,
+            "league_count": 3,
+            "risk_profile": "AGGRESSIVE",
+            "strategy": "VALUE",
+            "preferred_market": "ALL",
+            "stake_amount": 1000.0
+        },
+        "ROLLOVER": {
+            "target_odds": 2.00,
+            "league_count": 2,
+            "risk_profile": "CONSERVATIVE",
+            "strategy": "ROLLOVER",
+            "preferred_market": "ALL",
+            "stake_amount": 2000.0
+        }
+    }
+
+    if p_name not in presets:
+        raise HTTPException(status_code=400, detail=f"Unknown preset '{preset_name}'. Supported: {list(presets.keys())}")
+
+    p_vals = presets[p_name]
+    for k, v in p_vals.items():
+        setattr(cfg, k, v)
+
+    cfg.config_version += 1
+    cfg.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(cfg)
+
+    log_agent_audit(db, f"PRESET_{p_name}", p_vals, cfg.config_version)
+
+    return {
+        "status": "SUCCESS",
+        "preset_applied": p_name,
+        "config_version": cfg.config_version,
+        "config": {
+            "target_odds": cfg.target_odds,
+            "league_count": cfg.league_count,
+            "risk_profile": cfg.risk_profile,
+            "strategy": cfg.strategy,
+            "preferred_market": cfg.preferred_market,
+            "stake_amount": cfg.stake_amount
+        }
+    }
+
+
+@router.post("/agent/toggle")
+def toggle_agent_endpoint(enabled: bool = Query(...), db: Session = Depends(get_db)):
+    """Backward-compatible toggle endpoint mapped to persistent DB config."""
+    if enabled:
+        return resume_agent_endpoint(db)
+    else:
+        return pause_agent_endpoint(db)
+
+
+@router.get("/agent/audit-log")
+def get_audit_log_endpoint(limit: int = 50, db: Session = Depends(get_db)):
+    """Returns recent audit log records for observability."""
+    logs = db.query(VirtualAgentAuditLog).order_by(VirtualAgentAuditLog.created_at.desc()).limit(limit).all()
+    return {
+        "total": len(logs),
+        "logs": [
+            {
+                "id": l.id,
+                "event_type": l.event_type,
+                "payload": l.payload,
+                "config_version": l.config_version,
+                "operator": l.operator,
+                "created_at": l.created_at.isoformat() if l.created_at else None
+            }
+            for l in logs
+        ]
     }
 
 
 # ---------------------------------------------------------------
-# Agent State & Control
+# Backward Compatibility Wrappers
 # ---------------------------------------------------------------
 
 @router.get("/state")
-def get_agent_state(db: Session = Depends(get_db)):
-    """Returns agent ON/OFF status, config, bankroll, and current ticket immediately."""
+def get_legacy_agent_state(db: Session = Depends(get_db)):
+    """Returns legacy state format backed by persistent DB config."""
+    cfg = get_or_create_agent_config(db)
     bankroll = PaperTrader.get_bankroll_summary(db)
     return {
-        "agent": AGENT_STATE,
+        "agent": {
+            "is_active": cfg.enabled and not cfg.emergency_stop,
+            "target_odds": cfg.target_odds,
+            "num_games": cfg.league_count,
+            "stake_amount": cfg.stake_amount,
+            "preferred_market": cfg.preferred_market,
+            "config_version": cfg.config_version,
+        },
         "bankroll": bankroll,
     }
 
 
-
 @router.post("/config")
-def update_agent_config(config: AgentConfigUpdate, db: Session = Depends(get_db)):
-    """Update agent ON/OFF, Target Odds, Game Count, Stake, or Market preference."""
-    if config.is_active is not None:
-        AGENT_STATE["is_active"] = config.is_active
-    if config.target_odds is not None:
-        AGENT_STATE["target_odds"] = config.target_odds
-    if config.num_games is not None:
-        AGENT_STATE["num_games"] = config.num_games
-    if config.stake_amount is not None:
-        AGENT_STATE["stake_amount"] = config.stake_amount
-    if config.preferred_market is not None:
-        AGENT_STATE["preferred_market"] = config.preferred_market
+def update_legacy_agent_config(payload: Dict[str, Any], db: Session = Depends(get_db)):
+    """Legacy config updater mapped to persistent DB config."""
+    cfg = get_or_create_agent_config(db)
+    if "is_active" in payload and payload["is_active"] is not None:
+        cfg.enabled = bool(payload["is_active"])
+    if "target_odds" in payload and payload["target_odds"] is not None:
+        cfg.target_odds = float(payload["target_odds"])
+    if "num_games" in payload and payload["num_games"] is not None:
+        cfg.league_count = int(payload["num_games"])
+    if "stake_amount" in payload and payload["stake_amount"] is not None:
+        cfg.stake_amount = float(payload["stake_amount"])
+    if "preferred_market" in payload and payload["preferred_market"] is not None:
+        cfg.preferred_market = str(payload["preferred_market"])
 
-    # Regenerate ticket with new settings
-    if AGENT_STATE["is_active"]:
-        _auto_generate_ticket(db)
+    cfg.config_version += 1
+    cfg.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(cfg)
 
-    return {"message": "Agent configuration updated.", "agent": AGENT_STATE}
+    log_agent_audit(db, "LEGACY_CONFIG_UPDATE", payload, cfg.config_version)
+
+    return {
+        "message": f"Agent configuration updated to v{cfg.config_version}.",
+        "config_version": cfg.config_version,
+        "agent": {
+            "is_active": cfg.enabled and not cfg.emergency_stop,
+            "target_odds": cfg.target_odds,
+            "num_games": cfg.league_count,
+            "stake_amount": cfg.stake_amount,
+            "preferred_market": cfg.preferred_market,
+        }
+    }
 
 
 @router.post("/generate-ticket")
@@ -233,19 +537,23 @@ def generate_ticket_from_live(
     return {"status": "SUCCESS", "ticket": ticket}
 
 
+@router.post("/agent/admin/purge")
 @router.post("/reset-ledger")
-def reset_fronttest_ledger(db: Session = Depends(get_db)):
+def purge_virtual_database_endpoint(
+    force_override: bool = Query(False, description="Override active bet safety lock"),
+    db: Session = Depends(get_db)
+):
     """
-    Clears all front-testing slips and match history from the database to start afresh.
+    Safely purges historical virtual events, odds snapshots, match results, and slips.
+    Guarantees that active bets are checked and agent configuration is strictly preserved.
     """
-    from virtual.models.virtual_models import VirtualFrontTestSlip, VirtualMatchHistory
-    deleted_slips = db.query(VirtualFrontTestSlip).delete()
-    deleted_history = db.query(VirtualMatchHistory).delete()
-    db.commit()
-    return {
-        "status": "SUCCESS",
-        "message": f"Ledger reset. Cleared {deleted_slips} slips and {deleted_history} history records."
-    }
+    from virtual.services.purge_service import VirtualDatabasePurgeService
+    res = VirtualDatabasePurgeService.purge_virtual_database(db, force_override=force_override, operator="UI_ADMIN")
+    if res.get("status") == "BLOCKED":
+        raise HTTPException(status_code=409, detail=res)
+    elif res.get("status") == "FAILED":
+        raise HTTPException(status_code=500, detail=res)
+    return res
 
 
 
@@ -348,141 +656,16 @@ def _extract_double_chance(markets: List[Dict]) -> Dict:
 
 def _pick_selections(events: List[Dict], market: str, count: int, target_odds: float, db: Optional[Session] = None) -> List[Dict]:
     """
-    Assembles 2 to 3 safe selections (max 3) to reach ~target_odds.
-    STRICTLY NO STRAIGHT 1X2 WINS: Uses Double Chance (1X/X2) and Over 1.5 Goals only.
-    Enriched with rolling team goal distributions and cold-trap elimination.
+    Uses VirtualMarketEngine to assemble 2-to-3 calibrated, multi-market selections.
+    Enforces Fail-Closed behavior: Returns [] (NO_BET) if no combination satisfies the bracket.
     """
-    from virtual.services.virtual_stats_enricher import VirtualStatsEnricher
-
-    candidates = []
-
-    for ev in events:
-        sport = ev.get("sport", {})
-        cat = sport.get("category", {}) if isinstance(sport, dict) else {}
-        league = f"{cat.get('name', 'Virtual')} Virtual"
-        home = ev.get("homeTeamName", "?")
-        away = ev.get("awayTeamName", "?")
-        game_id = str(ev.get("gameId", ""))
-        event_id = str(ev.get("eventId") or f"sr:match:{game_id}")
-        markets = ev.get("markets", [])
-
-        # Evaluate statistical safety if DB session provided
-        safety_meta = {}
-        if db:
-            safety_meta = VirtualStatsEnricher.evaluate_fixture_safety(db, home, away, league)
-            # Skip cold-trap matches (low goal frequency)
-            if safety_meta.get("is_cold_trap"):
-                continue
-
-        # 1. Double Chance (1X / X2) — Draw-Protected
-        dc = _extract_double_chance(markets)
-        if dc["1x"] and 1.15 <= float(dc["1x"]) <= 1.45:
-            dc_safety = safety_meta.get("dc_1x_safety", 0.75)
-            candidates.append({
-                "game_id": game_id,
-                "event_id": event_id,
-                "league": league,
-                "match": f"{home} vs {away}",
-                "pick": f"{home} or Draw (1X)",
-                "pick_code": "1x",
-                "market_type": "DC",
-                "market_id": dc.get("market_id", "10"),
-                "outcome_id": "9",
-                "specifier": None,
-                "odds": float(dc["1x"]),
-                "safety_score": (1.0 / float(dc["1x"])) * (1.0 + (dc_safety * 0.2)),
-            })
-        elif dc["x2"] and 1.15 <= float(dc["x2"]) <= 1.45:
-            dc_safety = safety_meta.get("dc_x2_safety", 0.75)
-            candidates.append({
-                "game_id": game_id,
-                "event_id": event_id,
-                "league": league,
-                "match": f"{home} vs {away}",
-                "pick": f"Draw or {away} (X2)",
-                "pick_code": "x2",
-                "market_type": "DC",
-                "market_id": dc.get("market_id", "10"),
-                "outcome_id": "11",
-                "specifier": None,
-                "odds": float(dc["x2"]),
-                "safety_score": (1.0 / float(dc["x2"])) * (1.0 + (dc_safety * 0.2)),
-            })
-
-        # 2. Over 1.5 Total Goals
-        for ou in _extract_ou_markets(markets):
-            if ou["line"] == "1.5" and ou["over"] and 1.15 <= float(ou["over"]) <= 1.48:
-                o_odds = float(ou["over"])
-                exp_g = safety_meta.get("expected_goals", 2.9)
-                prob = safety_meta.get("over_15_prob", 0.80)
-                candidates.append({
-                    "game_id": game_id,
-                    "event_id": event_id,
-                    "league": league,
-                    "match": f"{home} vs {away}",
-                    "pick": "Over 1.5 Goals",
-                    "pick_code": "over_1.5",
-                    "market_type": "OU",
-                    "market_id": ou.get("market_id", "18"),
-                    "outcome_id": ou.get("over_outcome_id", "12"),
-                    "specifier": ou.get("specifier", "total=1.5"),
-                    "odds": o_odds,
-                    "safety_score": (1.0 / o_odds) * (1.0 + (prob * 0.2)),
-                })
-
-
-    if not candidates:
-        return []
-
-    if not candidates:
-        return []
-
-    # Sort candidates by safety score descending
-    candidates.sort(key=lambda x: x["safety_score"], reverse=True)
-
-    # Consider top 8 highest-safety candidate picks for combination search
-    pool = candidates[:8]
-
-    best_combo = []
-    best_score = float("inf")
-    target = float(target_odds or 2.0)
-    min_bracket = target * 0.90  # e.g., 1.80x for 2.0x target
-    max_bracket = target * 1.15  # e.g., 2.30x for 2.0x target
-
-    # 1. Search 2-leg combinations
-    from itertools import combinations
-    for combo in combinations(pool, 2):
-        if combo[0]["game_id"] == combo[1]["game_id"]:
-            continue
-        tot_odds = round(combo[0]["odds"] * combo[1]["odds"], 2)
-        dist = abs(tot_odds - target)
-        
-        # Prefer combos within bracket
-        bracket_penalty = 0.0 if (min_bracket <= tot_odds <= max_bracket) else (2.0 + dist)
-        avg_safety = (combo[0]["safety_score"] + combo[1]["safety_score"]) / 2.0
-        score = bracket_penalty + (dist * 1.5) - (avg_safety * 0.3)
-
-        if score < best_score:
-            best_score = score
-            best_combo = list(combo)
-
-    # 2. Search 3-leg combinations
-    for combo in combinations(pool, 3):
-        gids = {c["game_id"] for c in combo}
-        if len(gids) < 3:
-            continue
-        tot_odds = round(combo[0]["odds"] * combo[1]["odds"] * combo[2]["odds"], 2)
-        dist = abs(tot_odds - target)
-
-        bracket_penalty = 0.0 if (min_bracket <= tot_odds <= max_bracket) else (2.0 + dist)
-        avg_safety = (combo[0]["safety_score"] + combo[1]["safety_score"] + combo[2]["safety_score"]) / 3.0
-        score = bracket_penalty + (dist * 1.5) - (avg_safety * 0.3)
-
-        if score < best_score:
-            best_score = score
-            best_combo = list(combo)
-
-    return best_combo if best_combo else candidates[:2]
+    from virtual.services.virtual_market_engine import VirtualMarketEngine
+    return VirtualMarketEngine.build_ticket_from_events(
+        events=events,
+        target_odds=target_odds,
+        preferred_market=market,
+        db=db
+    )
 
 
 

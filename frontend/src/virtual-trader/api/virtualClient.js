@@ -412,6 +412,50 @@ export async function triggerImmediateFrontTestScan() {
   }
 }
 
+export async function fetchAgentStatus() {
+  try {
+    const res = await fetch(`${VIRTUAL_API_BASE}/api/v1/virtual-trader/agent/status`);
+    if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
+    return await res.json();
+  } catch (err) {
+    console.error("[VirtualClient] fetchAgentStatus error:", err);
+    return null;
+  }
+}
+
+export async function pauseAgent() {
+  try {
+    const res = await fetch(`${VIRTUAL_API_BASE}/api/v1/virtual-trader/agent/pause`, { method: "POST" });
+    if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
+    return await res.json();
+  } catch (err) {
+    console.error("[VirtualClient] pauseAgent error:", err);
+    return null;
+  }
+}
+
+export async function resumeAgent() {
+  try {
+    const res = await fetch(`${VIRTUAL_API_BASE}/api/v1/virtual-trader/agent/resume`, { method: "POST" });
+    if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
+    return await res.json();
+  } catch (err) {
+    console.error("[VirtualClient] resumeAgent error:", err);
+    return null;
+  }
+}
+
+export async function emergencyStopAgent() {
+  try {
+    const res = await fetch(`${VIRTUAL_API_BASE}/api/v1/virtual-trader/agent/emergency-stop`, { method: "POST" });
+    if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
+    return await res.json();
+  } catch (err) {
+    console.error("[VirtualClient] emergencyStopAgent error:", err);
+    return null;
+  }
+}
+
 export async function sendTelegramTestPing() {
   try {
     const res = await fetch(`${VIRTUAL_API_BASE}/api/v1/virtual-trader/fronttest/telegram-test`, {
@@ -421,6 +465,17 @@ export async function sendTelegramTestPing() {
     return await res.json();
   } catch (err) {
     console.error("[VirtualClient] sendTelegramTestPing error:", err);
+    return null;
+  }
+}
+
+export async function applyAgentPreset(presetName) {
+  try {
+    const res = await fetch(`${VIRTUAL_API_BASE}/api/v1/virtual-trader/agent/presets/${presetName}`, { method: "POST" });
+    if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
+    return await res.json();
+  } catch (err) {
+    console.error("[VirtualClient] applyAgentPreset error:", err);
     return null;
   }
 }

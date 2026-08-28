@@ -9,63 +9,78 @@ from sqlalchemy.orm import Session
 from virtual.core.db import get_db
 from virtual.workers.fronttest_worker import VirtualFrontTestWorker
 from virtual.services.telegram_service import VirtualTelegramService
+from virtual.api.agent_control_routes import (
+    get_or_create_agent_config, get_agent_status,
+    pause_agent_endpoint, resume_agent_endpoint,
+    update_persistent_agent_config, PersistentAgentConfigUpdate
+)
 
 router = APIRouter(prefix="/fronttest", tags=["Virtual Front-Testing"])
 
 class FrontTestConfigUpdate(BaseModel):
     target_odds: Optional[float] = 2.0
     preferred_market: Optional[str] = "ALL"
-    enable_per_league: Optional[bool] = True
-    enable_master_slip: Optional[bool] = True
+    league_count: Optional[int] = 2
     stake_amount: Optional[float] = 1000.0
-    active_leagues: Optional[List[str]] = ["Master Multi-League", "England Virtual"]
+    selected_leagues: Optional[List[str]] = None
+    enabled: Optional[bool] = None
 
 
 @router.get("/status")
 def get_fronttest_status(db: Session = Depends(get_db)):
     """
-    Returns current automation status, win rate, P&L, and recent dispatched slips.
+    Returns authoritative automation status, win rate, P&L, and recent dispatched slips.
     """
-    return VirtualFrontTestWorker.get_status(db)
+    return get_agent_status(db)
 
 @router.post("/toggle")
 def toggle_fronttest_automation(enabled: bool = Query(...), db: Session = Depends(get_db)):
     """
-    Switch the automated front-testing agent ON or OFF.
+    Switch the automated front-testing agent ON or OFF with authoritative DB persistence.
     """
-    VirtualFrontTestWorker.set_enabled(enabled)
+    if enabled:
+        res = resume_agent_endpoint(db)
+    else:
+        res = pause_agent_endpoint(db)
+    
     return {
         "status": "SUCCESS",
-        "is_enabled": VirtualFrontTestWorker.is_enabled(),
-        "message": f"Front-testing automation is now {'ENABLED (Active 24/7)' if enabled else 'PAUSED'}."
+        "is_enabled": enabled,
+        "worker_state": res.get("worker_state"),
+        "config_version": res.get("config_version"),
+        "message": f"Front-testing automation is now {'ENABLED (Active 24/7)' if enabled else 'PAUSED'} (Config v{res.get('config_version')})."
     }
 
 @router.post("/config")
 def update_fronttest_config(payload: FrontTestConfigUpdate, db: Session = Depends(get_db)):
     """
-    Update preset target odds, preferred betting markets, and slip types.
+    Update preset target odds, preferred betting markets, and league counts with DB persistence.
     """
-    cfg = payload.dict(exclude_unset=True)
-    VirtualFrontTestWorker.update_config(cfg)
-    return {
-        "status": "SUCCESS",
-        "config": VirtualFrontTestWorker.config,
-        "message": "Front-testing configuration updated."
-    }
+    update_payload = PersistentAgentConfigUpdate(
+        target_odds=payload.target_odds,
+        preferred_market=payload.preferred_market,
+        league_count=payload.league_count,
+        stake_amount=payload.stake_amount,
+        selected_leagues=payload.selected_leagues,
+        enabled=payload.enabled
+    )
+    return update_persistent_agent_config(update_payload, db)
 
 @router.post("/reset-ledger")
-def reset_fronttest_ledger(db: Session = Depends(get_db)):
+def reset_fronttest_ledger(
+    force_override: bool = Query(False, description="Override active bet safety lock"),
+    db: Session = Depends(get_db)
+):
     """
-    Clears all front-testing slips and match history from the database to start afresh.
+    Safely purges historical virtual events, odds snapshots, and slips with active bet locks.
     """
-    from virtual.models.virtual_models import VirtualFrontTestSlip, VirtualMatchHistory
-    deleted_slips = db.query(VirtualFrontTestSlip).delete()
-    deleted_history = db.query(VirtualMatchHistory).delete()
-    db.commit()
-    return {
-        "status": "SUCCESS",
-        "message": f"Ledger reset. Cleared {deleted_slips} slips and {deleted_history} history records."
-    }
+    from virtual.services.purge_service import VirtualDatabasePurgeService
+    res = VirtualDatabasePurgeService.purge_virtual_database(db, force_override=force_override, operator="UI_FRONTTEST")
+    if res.get("status") == "BLOCKED":
+        raise HTTPException(status_code=409, detail=res)
+    elif res.get("status") == "FAILED":
+        raise HTTPException(status_code=500, detail=res)
+    return res
 
 @router.post("/trigger-now")
 

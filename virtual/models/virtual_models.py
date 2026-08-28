@@ -309,4 +309,98 @@ class VirtualMatchHistory(Base):
     created_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), default=datetime.datetime.utcnow)
 
 
+class VirtualAgentConfig(Base):
+    """
+    Authoritative Single Source of Truth for the Virtual Trading Agent.
+    All UI toggles, limits, and presets are persisted here with version tracking.
+    """
+    __tablename__ = "virtual_agent_config"
+
+    id: Mapped[str] = mapped_column(String(50), primary_key=True, default="default")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    emergency_stop: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    
+    target_odds: Mapped[float] = mapped_column(Float, default=2.0)
+    stake_amount: Mapped[float] = mapped_column(Float, default=1000.0)
+    league_count: Mapped[int] = mapped_column(Integer, default=2)
+    selected_leagues: Mapped[Any] = mapped_column(JSON, default=list)  # e.g. ["England Virtual", "Spain Virtual"]
+    
+    strategy: Mapped[str] = mapped_column(String(50), default="ADAPTIVE")  # ADAPTIVE, CONSERVATIVE, VALUE, ROLLOVER
+    risk_profile: Mapped[str] = mapped_column(String(50), default="CONSERVATIVE")  # CONSERVATIVE, BALANCED, AGGRESSIVE
+    preferred_market: Mapped[str] = mapped_column(String(50), default="ALL")  # ALL, DOUBLE_CHANCE, OVER_1.5, etc.
+    execution_mode: Mapped[str] = mapped_column(String(30), default="PAPER")  # OFF, PAPER, SIGNAL, LIVE
+    
+    max_consecutive_losses: Mapped[int] = mapped_column(Integer, default=3)
+    max_daily_loss: Mapped[float] = mapped_column(Float, default=5000.0)
+    
+    config_version: Mapped[int] = mapped_column(Integer, default=1, index=True)
+    updated_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+
+
+class VirtualAgentHeartbeat(Base):
+    """
+    Real-time liveness and execution telemetry emitted by the VPS background worker.
+    Allows the UI to verify true worker health (<30s threshold) and config synchronization.
+    """
+    __tablename__ = "virtual_agent_heartbeat"
+
+    worker_id: Mapped[str] = mapped_column(String(64), primary_key=True, default="vfootball_fronttest_worker")
+    last_seen: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), default=datetime.datetime.utcnow, index=True)
+    worker_state: Mapped[str] = mapped_column(String(30), default="RUNNING")  # RUNNING, PAUSED, EMERGENCY_STOPPED, OFFLINE
+    
+    current_round: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    current_league: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    config_version: Mapped[int] = mapped_column(Integer, default=1)
+    
+    last_ingestion_ts: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_prediction_ts: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_execution_ts: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    error_count: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class VirtualAgentAuditLog(Base):
+    """
+    Immutable audit trail recording every state change, pause/resume, config update, and admin action.
+    """
+    __tablename__ = "virtual_agent_audit_log"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    event_type: Mapped[str] = mapped_column(String(50), index=True)  # PAUSE, RESUME, EMERGENCY_STOP, CONFIG_UPDATE, LEAGUE_CHANGE, PURGE
+    payload: Mapped[Any] = mapped_column(JSON)
+    config_version: Mapped[int] = mapped_column(Integer, default=1)
+    operator: Mapped[str] = mapped_column(String(50), default="SYSTEM")
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), default=datetime.datetime.utcnow, index=True)
+
+
+class VirtualStrategyPerformance(Base):
+    """
+    Tracks empirical out-of-sample performance breakdown by strategy, league, market, and odds range.
+    Powers backtesting validation and continuous model calibration.
+    """
+    __tablename__ = "virtual_strategy_performance"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    strategy_id: Mapped[str] = mapped_column(String(50), index=True)
+    model_version: Mapped[str] = mapped_column(String(30), index=True)
+    league_name: Mapped[str] = mapped_column(String(50), index=True)
+    market_type: Mapped[str] = mapped_column(String(50), index=True)
+    odds_bucket: Mapped[str] = mapped_column(String(30), default="1.15-1.35")  # e.g., "1.12-1.25", "1.25-1.40"
+    
+    sample_size: Mapped[int] = mapped_column(Integer, default=0)
+    wins: Mapped[int] = mapped_column(Integer, default=0)
+    losses: Mapped[int] = mapped_column(Integer, default=0)
+    win_rate: Mapped[float] = mapped_column(Float, default=0.0)
+    roi_pct: Mapped[float] = mapped_column(Float, default=0.0)
+    
+    brier_score: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    log_loss: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    max_drawdown: Mapped[Optional[float]] = mapped_column(Float, default=0.0)
+    max_loss_streak: Mapped[int] = mapped_column(Integer, default=0)
+    
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), default=datetime.datetime.utcnow)
+    updated_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+
+
+
+
 

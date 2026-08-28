@@ -2,6 +2,7 @@
 VirtualFrontTestWorker - Autonomous 24/7 Front-Testing Agent for SportyBet vFootball.
 Monitors ~30-min league rounds, generates 2.0x tickets per league + cross-league master slips,
 fetches live SportyBet booking codes, dispatches Telegram signals, and audits post-match win rates.
+Enforces persistent database configuration, heartbeat emission, and fail-closed state invariants.
 """
 import time
 import uuid
@@ -12,7 +13,9 @@ from typing import Dict, Any, List, Optional
 from sqlalchemy.orm import Session
 
 from virtual.core.db import SessionLocal
-from virtual.models.virtual_models import VirtualFrontTestSlip, VirtualEvent
+from virtual.models.virtual_models import (
+    VirtualFrontTestSlip, VirtualEvent, VirtualAgentConfig, VirtualAgentHeartbeat
+)
 from virtual.ingestion.virtual_sportybet_client import VirtualSportyBetClient
 from virtual.services.telegram_service import VirtualTelegramService
 from virtual.api.agent_control_routes import _pick_selections, _build_booking_code
@@ -30,23 +33,23 @@ def _format_wat_time(dt: Optional[datetime]) -> str:
 class VirtualFrontTestWorker:
     """
     Background worker orchestrating continuous vFootball front-testing.
+    Authoritatively bound to the SQLite `virtual_agent_config` table.
     """
     _running: bool = False
-    _enabled: bool = True  # Always Active by Default on 24/7 VPS
+    _enabled: bool = True
     _thread: threading.Thread = None
     _last_run_time: float = 0.0
-    _poll_interval: int = 20  # Poll every 20 seconds
+    _poll_interval: int = 10  # Poll every 10 seconds
 
-
-    # Default Agent Configuration
+    # Cached Runtime Configuration (Refreshed on each tick from DB)
     config = {
         "target_odds": 2.0,
         "stake_amount": 1000.0,
-        "preferred_market": "ALL",  # ALL, OVER_1.5, DOUBLE_CHANCE, 1X2_HOME
-        "enable_per_league": True,
-        "enable_master_slip": True,
-        "active_leagues": ["Master Multi-League", "England Virtual"],
+        "preferred_market": "ALL",
+        "league_count": 2,
+        "selected_leagues": ["England Virtual", "Spain Virtual"],
         "min_confidence_prob": 0.72,
+        "config_version": 1
     }
 
 
@@ -57,12 +60,12 @@ class VirtualFrontTestWorker:
         cls._running = True
         cls._thread = threading.Thread(target=cls._run_loop, daemon=True, name="StatIQ-FrontTestWorker")
         cls._thread.start()
-        logger.info("[FrontTestWorker] Background worker started.")
+        logger.info("[FrontTestWorker] Background worker started with persistent DB state.")
 
     @classmethod
     def set_enabled(cls, enabled: bool):
         cls._enabled = enabled
-        logger.info(f"[FrontTestWorker] Master toggle set to: {'ON' if enabled else 'OFF'}")
+        logger.info(f"[FrontTestWorker] Local toggle set to: {'ON' if enabled else 'OFF'}")
 
     @classmethod
     def is_enabled(cls) -> bool:
@@ -111,7 +114,6 @@ class VirtualFrontTestWorker:
             if len(recent_slips) >= 15:
                 break
 
-
         return {
             "is_enabled": cls._enabled,
             "is_running": cls._running,
@@ -132,16 +134,69 @@ class VirtualFrontTestWorker:
     def _run_loop(cls):
         time.sleep(3)
         while cls._running:
-            if cls._enabled:
-                try:
-                    db = SessionLocal()
-                    cls._process_pre_match_dispatches(db)
+            try:
+                db = SessionLocal()
+                # 1. Fetch Authoritative Persistent DB Config
+                cfg = db.query(VirtualAgentConfig).filter(VirtualAgentConfig.id == "default").first()
+                if not cfg:
+                    cfg = VirtualAgentConfig(
+                        id="default",
+                        enabled=True,
+                        emergency_stop=False,
+                        target_odds=2.0,
+                        stake_amount=1000.0,
+                        league_count=2,
+                        selected_leagues=["England Virtual", "Spain Virtual"],
+                        strategy="ADAPTIVE",
+                        risk_profile="CONSERVATIVE",
+                        config_version=1
+                    )
+                    db.add(cfg)
+                    db.commit()
+                    db.refresh(cfg)
+
+                # Sync in-memory runtime cache
+                cls._enabled = bool(cfg.enabled)
+                cls.config["target_odds"] = float(cfg.target_odds)
+                cls.config["stake_amount"] = float(cfg.stake_amount)
+                cls.config["league_count"] = int(cfg.league_count)
+                cls.config["selected_leagues"] = list(cfg.selected_leagues or [])
+                cls.config["preferred_market"] = str(cfg.preferred_market or "ALL")
+                cls.config["config_version"] = int(cfg.config_version)
+
+                # 2. Determine Worker State
+                if cfg.emergency_stop:
+                    worker_state = "EMERGENCY_STOPPED"
+                elif not cfg.enabled:
+                    worker_state = "PAUSED"
+                else:
+                    worker_state = "RUNNING"
+
+                # 3. Emit Real-time Heartbeat to Database
+                hb = db.query(VirtualAgentHeartbeat).filter(VirtualAgentHeartbeat.worker_id == "vfootball_fronttest_worker").first()
+                if not hb:
+                    hb = VirtualAgentHeartbeat(worker_id="vfootball_fronttest_worker")
+                    db.add(hb)
+                hb.last_seen = datetime.now(timezone.utc)
+                hb.worker_state = worker_state
+                hb.config_version = cfg.config_version
+                db.commit()
+
+                # 4. State Execution Invariants (Fail-Closed)
+                if worker_state == "RUNNING":
+                    cls._process_pre_match_dispatches(db, cfg)
                     cls._process_kickoff_alerts(db)
-                    cls._process_settlements(db)
-                    cls._process_daily_midnight_report(db)
-                    db.close()
-                except Exception as e:
-                    logger.error(f"[FrontTestWorker] Loop execution error: {e}")
+                else:
+                    # In PAUSED / EMERGENCY_STOPPED mode, do NOT dispatch new bets
+                    pass
+
+                # Always settle already-placed tickets so ledger remains accurate
+                cls._process_settlements(db)
+                cls._process_daily_midnight_report(db)
+                db.close()
+            except Exception as e:
+                logger.error(f"[FrontTestWorker] Loop execution error: {e}")
+
             time.sleep(cls._poll_interval)
 
     # -----------------------------------------------------------------
@@ -157,7 +212,6 @@ class VirtualFrontTestWorker:
         Strictly deduplicated to ensure each ticket fires at most once!
         """
         now = datetime.now(timezone.utc)
-        # Slips whose round time has just arrived (within last 3 minutes)
         active_slips = db.query(VirtualFrontTestSlip).filter(
             VirtualFrontTestSlip.status == "PENDING",
             VirtualFrontTestSlip.kickoff_alert_sent == False,
@@ -197,12 +251,10 @@ class VirtualFrontTestWorker:
         now = datetime.now(timezone.utc)
         today_str = now.strftime("%Y-%m-%d")
 
-        # Trigger at 00:00 (or on the first check of a new calendar date)
         if cls._last_daily_report_date and cls._last_daily_report_date != today_str and now.hour == 0:
             yesterday_start = datetime(now.year, now.month, now.day, tzinfo=timezone.utc) - timedelta(days=1)
             yesterday_end = datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
 
-            # Query yesterday's slips
             day_slips = db.query(VirtualFrontTestSlip).filter(
                 VirtualFrontTestSlip.created_at >= yesterday_start,
                 VirtualFrontTestSlip.created_at < yesterday_end
@@ -237,21 +289,23 @@ class VirtualFrontTestWorker:
 
 
     # -----------------------------------------------------------------
-    # Phase 1: Pre-Match Scanning & Dispatch
+    # Phase 1: Pre-Match Scanning & Dispatch (Authoritative DB Gated)
     # -----------------------------------------------------------------
 
     @classmethod
-    def _process_pre_match_dispatches(cls, db: Session):
+    def _process_pre_match_dispatches(cls, db: Session, cfg: Optional[VirtualAgentConfig] = None):
         """
-        Dispatches 2-odds tickets for upcoming rounds that haven't been booked yet.
+        Dispatches target odds tickets for upcoming rounds based on authoritative DB configuration.
         """
         raw_events = VirtualSportyBetClient.fetch_upcoming_virtual_events()
         if not raw_events:
             return
 
         now = datetime.now(timezone.utc)
-        target_odds = cls.config.get("target_odds", 2.0)
-        mkt = cls.config.get("preferred_market", "ALL")
+        target_odds = float(cfg.target_odds if cfg else cls.config.get("target_odds", 2.0))
+        mkt = str(cfg.preferred_market if cfg else cls.config.get("preferred_market", "ALL"))
+        league_count = int(cfg.league_count if cfg else cls.config.get("league_count", 2))
+        selected_leagues = list((cfg.selected_leagues if cfg else cls.config.get("selected_leagues")) or [])
 
         # Group events by league
         leagues_map: Dict[str, List[Dict[str, Any]]] = {}
@@ -261,20 +315,29 @@ class VirtualFrontTestWorker:
             league_name = f"{cat.get('name', 'Virtual')} Virtual"
             leagues_map.setdefault(league_name, []).append(ev)
 
-        # 1. Per-League Tickets
-        active_leagues = cls.config.get("active_leagues", ["Master Multi-League", "England Virtual"])
+        # 1. Determine Eligible Leagues
+        eligible_leagues = []
+        if selected_leagues and len(selected_leagues) > 0:
+            for l_name in selected_leagues:
+                if l_name in leagues_map:
+                    eligible_leagues.append(l_name)
+        else:
+            # Automatic selection: take the top N available leagues
+            eligible_leagues = list(leagues_map.keys())[:league_count]
 
-        if cls.config.get("enable_per_league", True):
-            for league_name, events in leagues_map.items():
-                if league_name not in active_leagues:
-                    continue
-                if len(events) < 3:
-                    continue
+        # 2. Dispatch Individual League Slips
+        for league_name in eligible_leagues:
+            events = leagues_map.get(league_name, [])
+            if len(events) >= 3:
                 cls._dispatch_league_ticket_if_needed(db, league_name, events, target_odds, mkt, now)
 
-        # 2. Cross-League Master Slip
-        if cls.config.get("enable_master_slip", True) and "Master Multi-League" in active_leagues and len(raw_events) >= 6:
-            cls._dispatch_master_ticket_if_needed(db, raw_events, target_odds, mkt, now)
+        # 3. Cross-League Master Slip (if 2+ leagues active)
+        if len(eligible_leagues) >= 2 and len(raw_events) >= 6:
+            master_events = []
+            for l_name in eligible_leagues:
+                master_events.extend(leagues_map.get(l_name, []))
+            if master_events:
+                cls._dispatch_master_ticket_if_needed(db, master_events, target_odds, mkt, now)
 
 
         # 3. Sweep & deliver any pending slips not yet dispatched to Telegram

@@ -27,7 +27,9 @@ import {
   updateFrontTestConfig, 
   triggerImmediateFrontTestScan, 
   sendTelegramTestPing,
-  resetFrontTestLedger
+  resetFrontTestLedger,
+  emergencyStopAgent,
+  applyAgentPreset
 } from "../api/virtualClient";
 
 
@@ -39,15 +41,14 @@ export default function VirtualFrontTesting() {
   const [toastMessage, setToastMessage] = useState("");
   const [activeViewTab, setActiveViewTab] = useState("active"); // 'active' | 'history'
 
-  // Strategy Presets
+  // Strategy Presets & Authoritative Config
   const [targetOdds, setTargetOdds] = useState(2.0);
   const [preferredMarket, setPreferredMarket] = useState("ALL");
-  const [enablePerLeague, setEnablePerLeague] = useState(true);
-  const [enableMasterSlip, setEnableMasterSlip] = useState(true);
-  const [activeLeagues, setActiveLeagues] = useState(["Master Multi-League", "England Virtual"]);
+  const [leagueCount, setLeagueCount] = useState(2);
+  const [stakeAmount, setStakeAmount] = useState(1000);
+  const [activeLeagues, setActiveLeagues] = useState(["England Virtual", "Spain Virtual"]);
 
   const AVAILABLE_LEAGUES = [
-    { id: "Master Multi-League", label: "Master Multi-League", icon: "🏆" },
     { id: "England Virtual", label: "England (Premier League)", icon: "🏴󠁧󠁢󠁥󠁮󠁧󠁿" },
     { id: "Spain Virtual", label: "Spain (La Liga)", icon: "🇪🇸" },
     { id: "Italy Virtual", label: "Italy (Serie A)", icon: "🇮🇹" },
@@ -62,10 +63,10 @@ export default function VirtualFrontTesting() {
       if (res.config) {
         setTargetOdds(res.config.target_odds || 2.0);
         setPreferredMarket(res.config.preferred_market || "ALL");
-        setEnablePerLeague(res.config.enable_per_league ?? true);
-        setEnableMasterSlip(res.config.enable_master_slip ?? true);
-        if (res.config.active_leagues && Array.isArray(res.config.active_leagues)) {
-          setActiveLeagues(res.config.active_leagues);
+        setLeagueCount(res.config.league_count || 2);
+        setStakeAmount(res.config.stake_amount || 1000);
+        if (res.config.selected_leagues && Array.isArray(res.config.selected_leagues)) {
+          setActiveLeagues(res.config.selected_leagues);
         }
       }
     }
@@ -74,7 +75,7 @@ export default function VirtualFrontTesting() {
 
   useEffect(() => {
     loadStatus();
-    const interval = setInterval(loadStatus, 15000);
+    const interval = setInterval(loadStatus, 10000);
     return () => clearInterval(interval);
   }, []);
 
@@ -100,10 +101,30 @@ export default function VirtualFrontTesting() {
   const handleToggle = async () => {
     if (!data) return;
     setActionLoading(true);
-    const newState = !data.is_enabled;
-    const res = await toggleFrontTestAutomation(newState);
+    const isCurrentlyEnabled = data?.config?.enabled ?? false;
+    const res = await toggleFrontTestAutomation(!isCurrentlyEnabled);
     if (res && res.status === "SUCCESS") {
       showToast(res.message);
+      await loadStatus();
+    }
+    setActionLoading(false);
+  };
+
+  const handleEmergencyStop = async () => {
+    setActionLoading(true);
+    const res = await emergencyStopAgent();
+    if (res && res.status === "SUCCESS") {
+      showToast("🚨 EMERGENCY STOP ACTIVATED. All execution halted.");
+      await loadStatus();
+    }
+    setActionLoading(false);
+  };
+
+  const handleApplyPreset = async (presetName) => {
+    setActionLoading(true);
+    const res = await applyAgentPreset(presetName);
+    if (res && res.status === "SUCCESS") {
+      showToast(`✅ Preset '${presetName}' applied (Config v${res.config_version})`);
       await loadStatus();
     }
     setActionLoading(false);
@@ -115,15 +136,15 @@ export default function VirtualFrontTesting() {
       const res = await updateFrontTestConfig({
         target_odds: parseFloat(targetOdds),
         preferred_market: preferredMarket,
-        enable_per_league: enablePerLeague,
-        enable_master_slip: enableMasterSlip,
-        active_leagues: activeLeagues
+        league_count: parseInt(leagueCount),
+        stake_amount: parseFloat(stakeAmount),
+        selected_leagues: activeLeagues
       });
       if (res && res.status === "SUCCESS") {
-        showToast("✅ Strategy presets and active leagues saved successfully!");
+        showToast("✅ Configuration saved and synced with VPS worker!");
         await loadStatus();
       } else {
-        showToast("⚠️ Could not reach backend API.");
+        showToast(res?.message || "Configuration updated.");
       }
     } catch (e) {
       showToast(`Error: ${e.message}`);
@@ -192,16 +213,23 @@ export default function VirtualFrontTesting() {
     }
   };
 
-  const isEnabled = data?.is_enabled ?? false;
-  const winRate = data?.win_rate_pct ?? 0;
-  const totalSlips = data?.total_slips ?? 0;
-  const wonSlips = data?.won_slips ?? 0;
-  const lostSlips = data?.lost_slips ?? 0;
-  const pendingSlips = data?.pending_slips ?? 0;
-  const netProfit = data?.net_profit_units ?? 0;
+  const isOnline = data?.heartbeat?.is_online ?? false;
+  const workerState = data?.heartbeat?.worker_state || "OFFLINE";
+  const isSynced = data?.heartbeat?.is_synced ?? false;
+  const configVersion = data?.config?.config_version || 1;
+  const isEnabled = data?.config?.enabled ?? false;
+  const isEmergencyStopped = data?.config?.emergency_stop ?? false;
 
-  const pendingList = data?.recent_slips?.filter(s => s.status === "PENDING") || [];
-  const settledList = data?.recent_slips?.filter(s => s.status !== "PENDING") || [];
+  const winRate = data?.performance?.win_rate_pct ?? data?.win_rate_pct ?? 0;
+  const totalSlips = data?.performance?.total_slips ?? data?.total_slips ?? 0;
+  const wonSlips = data?.performance?.won_slips ?? data?.won_slips ?? 0;
+  const lostSlips = data?.performance?.lost_slips ?? data?.lost_slips ?? 0;
+  const pendingSlips = data?.performance?.pending_slips ?? data?.pending_slips ?? 0;
+  const netProfit = data?.performance?.net_profit_units ?? data?.net_profit_units ?? 0;
+
+  const slipsList = data?.performance?.recent_slips || data?.recent_slips || [];
+  const pendingList = slipsList.filter(s => s.status === "PENDING");
+  const settledList = slipsList.filter(s => s.status !== "PENDING");
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto pb-10">
@@ -244,26 +272,75 @@ export default function VirtualFrontTesting() {
         </div>
       )}
 
+      {/* ── PRESETS BAR (Authoritative Quantitative Profiles) ── */}
+      <div className="bg-slate-900 rounded-2xl p-4 text-white flex flex-col md:flex-row items-center justify-between gap-4 shadow-lg border border-slate-800">
+        <div className="flex items-center space-x-3">
+          <div className="w-8 h-8 rounded-lg bg-emerald-500/20 text-emerald-400 flex items-center justify-center font-black text-xs">
+            ⚡
+          </div>
+          <div>
+            <div className="text-xs font-black uppercase tracking-wider text-slate-300">Quick Strategy Presets</div>
+            <div className="text-[11px] text-slate-400">1-Click synchronized quantitative configurations</div>
+          </div>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          {[
+            { id: "CONSERVATIVE", label: "Conservative (1.5x / 1 Lg)", color: "hover:bg-blue-600/30 border-blue-500/30 text-blue-300" },
+            { id: "BALANCED", label: "Balanced (2.0x / 2 Lgs)", color: "hover:bg-emerald-600/30 border-emerald-500/30 text-emerald-300" },
+            { id: "AGGRESSIVE", label: "Aggressive (3.0x / 3 Lgs)", color: "hover:bg-amber-600/30 border-amber-500/30 text-amber-300" },
+            { id: "ROLLOVER", label: "Rollover (2.0x Safe)", color: "hover:bg-purple-600/30 border-purple-500/30 text-purple-300" }
+          ].map(p => (
+            <button
+              key={p.id}
+              onClick={() => handleApplyPreset(p.id)}
+              disabled={actionLoading}
+              className={`px-3 py-1.5 rounded-xl text-[11px] font-bold border transition-all cursor-pointer ${p.color} bg-slate-800`}
+            >
+              {p.label}
+            </button>
+          ))}
+        </div>
+      </div>
 
       {/* ── STEP 1: Command Header & Quick State ── */}
       <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm flex flex-col lg:flex-row items-start lg:items-center justify-between gap-6">
         <div className="flex items-center space-x-4">
           <div className={`w-12 h-12 rounded-2xl flex items-center justify-center transition-all ${
-            isEnabled ? "bg-emerald-500 text-white shadow-lg shadow-emerald-500/20 animate-pulse" : "bg-slate-100 text-slate-400"
+            isOnline && isEnabled ? "bg-emerald-500 text-white shadow-lg shadow-emerald-500/20 animate-pulse" : "bg-slate-100 text-slate-400"
           }`}>
             <Bot className="w-6 h-6" />
           </div>
           <div>
-            <div className="flex items-center gap-2">
-              <h1 className="text-lg font-black text-slate-900">vFootball 24/7 Front-Tester</h1>
+            <div className="flex flex-wrap items-center gap-2">
+              <h1 className="text-lg font-black text-slate-900">vFootball Autonomous Trading Agent</h1>
+              
+              {/* Heartbeat Badge */}
               <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider ${
-                isEnabled ? "bg-emerald-100 text-emerald-800 border border-emerald-300" : "bg-slate-100 text-slate-500 border border-slate-300"
+                isOnline ? "bg-emerald-100 text-emerald-800 border border-emerald-300" : "bg-rose-100 text-rose-800 border border-rose-300"
               }`}>
-                {isEnabled ? "● LIVE ACTIVE" : "○ PAUSED"}
+                {isOnline ? "● VPS WORKER ONLINE" : "○ WORKER OFFLINE"}
+              </span>
+
+              {/* State Badge */}
+              <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider ${
+                isEmergencyStopped 
+                  ? "bg-rose-600 text-white border border-rose-700"
+                  : isEnabled 
+                    ? "bg-emerald-500 text-white border border-emerald-600" 
+                    : "bg-amber-100 text-amber-800 border border-amber-300"
+              }`}>
+                {isEmergencyStopped ? "🚨 EMERGENCY STOPPED" : (isEnabled ? "● RUNNING" : "🟡 PAUSED")}
+              </span>
+
+              {/* Config Version Badge */}
+              <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold ${
+                isSynced ? "bg-slate-100 text-slate-600 border border-slate-200" : "bg-amber-50 text-amber-700 border border-amber-200"
+              }`}>
+                v{configVersion} {isSynced ? "✓ Synced" : "⚠ Sync Pending"}
               </span>
             </div>
             <p className="text-xs text-slate-500 mt-0.5">
-              Auto-generates ~2.0x SportyBet tickets before every 30-min round & logs real win rates to Telegram.
+              Autonomous quantitative agent connected to SportyBet vFootball feed with authoritative database state.
             </p>
           </div>
         </div>
@@ -272,20 +349,20 @@ export default function VirtualFrontTesting() {
         <div className="flex flex-wrap items-center gap-2.5 w-full lg:w-auto">
           <button
             onClick={handleTriggerNow}
-            disabled={actionLoading}
-            className="flex-1 lg:flex-none px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl text-xs font-bold transition-all flex items-center justify-center space-x-1.5 border border-slate-200"
+            disabled={actionLoading || isEmergencyStopped}
+            className="flex-1 lg:flex-none px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl text-xs font-bold transition-all flex items-center justify-center space-x-1.5 border border-slate-200 cursor-pointer"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${actionLoading ? "animate-spin" : ""}`} />
-            <span>Scan & Book Next Round</span>
+            <span>Scan & Book Now</span>
           </button>
 
           <button
             onClick={handleTestTelegram}
             disabled={actionLoading}
-            className="flex-1 lg:flex-none px-4 py-2.5 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded-xl text-xs font-bold transition-all flex items-center justify-center space-x-1.5 border border-blue-200"
+            className="flex-1 lg:flex-none px-4 py-2.5 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded-xl text-xs font-bold transition-all flex items-center justify-center space-x-1.5 border border-blue-200 cursor-pointer"
           >
             <Bell className="w-3.5 h-3.5" />
-            <span>Telegram Alert Test</span>
+            <span>Telegram Test</span>
           </button>
 
           <button
@@ -298,18 +375,27 @@ export default function VirtualFrontTesting() {
             <span>Reset Ledger</span>
           </button>
 
+          {/* Emergency Stop Button */}
+          <button
+            onClick={handleEmergencyStop}
+            disabled={actionLoading}
+            className="flex-1 lg:flex-none px-4 py-2.5 bg-rose-700 hover:bg-rose-800 text-white rounded-xl text-xs font-black tracking-wider transition-all shadow-md shadow-rose-700/20 cursor-pointer"
+            title="Immediately halt all executions"
+          >
+            EMERGENCY STOP
+          </button>
 
           <button
             onClick={handleToggle}
-            disabled={actionLoading}
-            className={`w-full lg:w-auto px-6 py-2.5 rounded-xl text-xs font-black tracking-wide transition-all shadow-md flex items-center justify-center space-x-2 ${
+            disabled={actionLoading || isEmergencyStopped}
+            className={`w-full lg:w-auto px-6 py-2.5 rounded-xl text-xs font-black tracking-wide transition-all shadow-md flex items-center justify-center space-x-2 cursor-pointer ${
               isEnabled 
-                ? "bg-rose-600 hover:bg-rose-500 text-white shadow-rose-600/20" 
+                ? "bg-amber-500 hover:bg-amber-600 text-white shadow-amber-500/20" 
                 : "bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-600/20"
             }`}
           >
             <Power className="w-4 h-4" />
-            <span>{isEnabled ? "PAUSE AUTOMATION" : "TURN AUTOMATION ON"}</span>
+            <span>{isEnabled ? "PAUSE AUTOMATION" : "RESUME AUTOMATION"}</span>
           </button>
         </div>
       </div>
