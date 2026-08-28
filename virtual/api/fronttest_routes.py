@@ -24,6 +24,7 @@ class FrontTestConfigUpdate(BaseModel):
     stake_amount: Optional[float] = 1000.0
     selected_leagues: Optional[List[str]] = None
     enabled: Optional[bool] = None
+    emergency_stop: Optional[bool] = None
 
 
 @router.get("/status")
@@ -51,6 +52,22 @@ def toggle_fronttest_automation(enabled: bool = Query(...), db: Session = Depend
         "message": f"Front-testing automation is now {'ENABLED (Active 24/7)' if enabled else 'PAUSED'} (Config v{res.get('config_version')})."
     }
 
+@router.post("/pause")
+def pause_fronttest(db: Session = Depends(get_db)):
+    """Pause front-testing automation."""
+    return pause_agent_endpoint(db)
+
+@router.post("/resume")
+def resume_fronttest(db: Session = Depends(get_db)):
+    """Resume front-testing automation."""
+    return resume_agent_endpoint(db)
+
+@router.post("/emergency-stop")
+def emergency_stop_fronttest(db: Session = Depends(get_db)):
+    """Emergency stop front-testing."""
+    from virtual.api.agent_control_routes import emergency_stop_endpoint
+    return emergency_stop_endpoint(db)
+
 @router.post("/config")
 def update_fronttest_config(payload: FrontTestConfigUpdate, db: Session = Depends(get_db)):
     """
@@ -62,7 +79,8 @@ def update_fronttest_config(payload: FrontTestConfigUpdate, db: Session = Depend
         league_count=payload.league_count,
         stake_amount=payload.stake_amount,
         selected_leagues=payload.selected_leagues,
-        enabled=payload.enabled
+        enabled=payload.enabled,
+        emergency_stop=payload.emergency_stop,
     )
     return update_persistent_agent_config(update_payload, db)
 

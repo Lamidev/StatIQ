@@ -286,9 +286,21 @@ class VirtualMarketEngine:
             logger.info("[MarketEngine] No qualified market candidates discovered. Returning NO_BET.")
             return []
 
-        # Sort candidates by safety_score descending
-        all_candidates.sort(key=lambda x: x["safety_score"], reverse=True)
-        pool = all_candidates[:12]
+        # Ensure diverse market representation in the candidate pool
+        if preferred_market == "ALL":
+            dc_cands = sorted([c for c in all_candidates if c["market_type"] == "DC"], key=lambda x: x["safety_score"], reverse=True)[:4]
+            ou_cands = sorted([c for c in all_candidates if c["market_type"] == "OU"], key=lambda x: x["safety_score"], reverse=True)[:4]
+            btts_cands = sorted([c for c in all_candidates if c["market_type"] == "BTTS"], key=lambda x: x["safety_score"], reverse=True)[:3]
+            m1x2_cands = sorted([c for c in all_candidates if c["market_type"] == "1X2"], key=lambda x: x["safety_score"], reverse=True)[:3]
+            
+            pool = dc_cands + ou_cands + btts_cands + m1x2_cands
+            # Fallback if specific types are sparse
+            if len(pool) < 6:
+                all_candidates.sort(key=lambda x: x["safety_score"], reverse=True)
+                pool = all_candidates[:16]
+        else:
+            all_candidates.sort(key=lambda x: x["safety_score"], reverse=True)
+            pool = all_candidates[:16]
 
         target = float(target_odds or 2.0)
         min_bracket = target * 0.88  # e.g., 1.76 for 2.0 target
@@ -305,7 +317,12 @@ class VirtualMarketEngine:
             if min_bracket <= tot_odds <= max_bracket:
                 dist = abs(tot_odds - target)
                 avg_safety = (combo[0]["safety_score"] + combo[1]["safety_score"]) / 2.0
-                score = (dist * 1.5) - (avg_safety * 0.5)
+                
+                # Multi-market diversity bonus (reward mixing DC + OU or BTTS + DC)
+                market_types = {c["market_type"] for c in combo}
+                diversity_bonus = 0.25 if len(market_types) > 1 else 0.0
+                
+                score = (dist * 1.5) - (avg_safety * 0.5) - diversity_bonus
                 if score < best_score:
                     best_score = score
                     best_combo = list(combo)
@@ -319,7 +336,11 @@ class VirtualMarketEngine:
             if min_bracket <= tot_odds <= max_bracket:
                 dist = abs(tot_odds - target)
                 avg_safety = (combo[0]["safety_score"] + combo[1]["safety_score"] + combo[2]["safety_score"]) / 3.0
-                score = (dist * 1.5) - (avg_safety * 0.5)
+                
+                market_types = {c["market_type"] for c in combo}
+                diversity_bonus = 0.35 if len(market_types) >= 2 else 0.0
+                
+                score = (dist * 1.5) - (avg_safety * 0.5) - diversity_bonus
                 if score < best_score:
                     best_score = score
                     best_combo = list(combo)

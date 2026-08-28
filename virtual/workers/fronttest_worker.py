@@ -577,11 +577,12 @@ class VirtualFrontTestWorker:
                 h_score, a_score = cls._extract_final_scores(ev_data, time_since_kickoff=time_since_kickoff)
 
                 if h_score is None or a_score is None:
-                    # If game was played more than 20 mins ago and result closed without score
-                    if time_since_kickoff > 1200:
-                        all_resolved = False
-                        slip.status = "EXPIRED"
+                    # If game was played more than 6 mins ago (virtual games finish in ~2 mins)
+                    if time_since_kickoff > 360:
+                        all_resolved = True
+                        slip.status = "SETTLED"
                         slip.profit_loss = 0.0
+                        slip.settled_at = now
                         db.commit()
                         break
                     else:
@@ -591,7 +592,6 @@ class VirtualFrontTestWorker:
                 leg_won = cls._evaluate_leg(s, h_score, a_score)
                 s["final_score"] = f"{h_score} - {a_score}"
                 s["leg_won"] = leg_won
-                # Flag db modified for JSON column
                 from sqlalchemy.orm.attributes import flag_modified
                 flag_modified(slip, "selections")
                 db.commit()
@@ -642,11 +642,14 @@ class VirtualFrontTestWorker:
 
     @classmethod
     def _evaluate_leg(cls, selection: Dict[str, Any], h_score: int, a_score: int) -> bool:
-        pick_code = str(selection.get("pick_code", "")).lower()
-        pick = str(selection.get("pick", "")).lower()
+        pick_code = str(selection.get("pick_code", "")).lower().strip()
+        pick = str(selection.get("pick", "")).lower().strip()
         tot_goals = h_score + a_score
 
-        if "over_1.5" in pick_code or "over 1.5" in pick:
+        # 1. Over / Under Goals
+        if "over_0.5" in pick_code or "over 0.5" in pick:
+            return tot_goals >= 1
+        elif "over_1.5" in pick_code or "over 1.5" in pick:
             return tot_goals >= 2
         elif "over_2.5" in pick_code or "over 2.5" in pick:
             return tot_goals >= 3
@@ -654,13 +657,30 @@ class VirtualFrontTestWorker:
             return tot_goals < 3
         elif "under_3.5" in pick_code or "under 3.5" in pick:
             return tot_goals < 4
-        elif pick_code in ["1x", "dc_1x"] or "1x" in pick or "home or draw" in pick:
+        elif "under_4.5" in pick_code or "under 4.5" in pick:
+            return tot_goals < 5
+
+        # 2. Double Chance (1/X, X/2, 1/2)
+        elif pick_code in ["1x", "dc_1x", "1/x"] or "1x" in pick or "home or draw" in pick or "1/x" in pick:
             return h_score >= a_score
-        elif pick_code in ["x2", "dc_x2"] or "x2" in pick or "draw or away" in pick:
+        elif pick_code in ["x2", "dc_x2", "x/2"] or "x2" in pick or "draw or away" in pick or "x/2" in pick:
             return a_score >= h_score
-        elif pick_code == "1" or "win" in pick and "1" in pick_code:
+        elif pick_code in ["12", "dc_12", "1/2"] or "12" in pick or "home or away" in pick or "1/2" in pick:
+            return h_score != a_score
+
+        # 3. Both Teams to Score (GG / NG)
+        elif "btts_yes" in pick_code or "gg" in pick_code or "goal goal" in pick or "both teams to score (yes)" in pick:
+            return h_score > 0 and a_score > 0
+        elif "btts_no" in pick_code or "ng" in pick_code or "no goal" in pick or "both teams to score (no)" in pick:
+            return h_score == 0 or a_score == 0
+
+        # 4. Final Result (1X2)
+        elif pick_code in ["1", "home"] or ("home to win" in pick or pick.endswith(" 1")):
             return h_score > a_score
-        elif pick_code == "2" or "win" in pick and "2" in pick_code:
+        elif pick_code in ["2", "away"] or ("away to win" in pick or pick.endswith(" 2")):
             return a_score > h_score
+        elif pick_code in ["x", "draw"] or "draw" in pick:
+            return h_score == a_score
+
         return False
 

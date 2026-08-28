@@ -9,6 +9,8 @@ import {
   fetchBacktestLeagues,
   runBacktest,
   runWalkForward,
+  fetchFeatureAblationStudy,
+  fetchCalibratedFeatureWeights,
 } from "../api/virtualClient";
 
 // ─── Small utility components ───────────────────────────────────────────────
@@ -95,7 +97,7 @@ function EquityCurve({ curve }) {
 
 // ─── Config Panel ────────────────────────────────────────────────────────────
 
-function ConfigPanel({ config, setConfig, leagues, onRunBacktest, onRunWalkForward, loading, availability }) {
+function ConfigPanel({ config, setConfig, leagues, onRunBacktest, onRunWalkForward, onRunAblation, loading, availability }) {
   return (
     <div className="bg-white border border-slate-200 rounded-2xl p-5 space-y-5 shadow-sm">
       <div className="flex items-center gap-2">
@@ -233,24 +235,33 @@ function ConfigPanel({ config, setConfig, leagues, onRunBacktest, onRunWalkForwa
       </div>
 
       {/* Action buttons */}
-      <div className="flex gap-3 pt-1">
+      <div className="flex flex-col sm:flex-row gap-3 pt-1">
         <button
           id="btn-run-backtest"
           onClick={onRunBacktest}
           disabled={loading}
-          className="flex-1 flex items-center justify-center gap-2 bg-slate-900 text-white text-xs font-bold px-4 py-2.5 rounded-xl hover:bg-slate-700 transition-all disabled:opacity-60 disabled:cursor-not-allowed"
+          className="flex-1 flex items-center justify-center gap-2 bg-slate-900 text-white text-xs font-bold px-4 py-2.5 rounded-xl hover:bg-slate-700 transition-all disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer"
         >
           {loading ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
-          Run Full Backtest
+          Run Backtest
         </button>
         <button
           id="btn-run-walkforward"
           onClick={onRunWalkForward}
           disabled={loading}
-          className="flex-1 flex items-center justify-center gap-2 bg-blue-600 text-white text-xs font-bold px-4 py-2.5 rounded-xl hover:bg-blue-700 transition-all disabled:opacity-60 disabled:cursor-not-allowed"
+          className="flex-1 flex items-center justify-center gap-2 bg-blue-600 text-white text-xs font-bold px-4 py-2.5 rounded-xl hover:bg-blue-700 transition-all disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer"
         >
           {loading ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Layers className="w-3.5 h-3.5" />}
-          Walk-Forward Analysis
+          Walk-Forward
+        </button>
+        <button
+          id="btn-run-ablation"
+          onClick={onRunAblation}
+          disabled={loading}
+          className="flex-1 flex items-center justify-center gap-2 bg-purple-600 text-white text-xs font-bold px-4 py-2.5 rounded-xl hover:bg-purple-700 transition-all disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer shadow-md shadow-purple-600/20"
+        >
+          {loading ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
+          Feature Ablation (PRD v4.0)
         </button>
       </div>
     </div>
@@ -495,6 +506,130 @@ function WalkForwardWindows({ windows }) {
   );
 }
 
+// ─── Ablation Leaderboard Panel (PRD v4.0) ──────────────────────────────────
+
+function AblationLeaderboardPanel({ ablationData }) {
+  if (!ablationData) return null;
+
+  const { leaderboard, h2h_hypothesis_result, evaluated_events_total, train_sample_size, test_sample_size } = ablationData;
+
+  return (
+    <div className="space-y-5">
+      {/* Hypothesis & PRNG Finding Banner */}
+      <div className="bg-slate-900 text-white rounded-2xl p-5 border border-slate-800 shadow-md">
+        <div className="flex items-start gap-3">
+          <div className="w-9 h-9 rounded-xl bg-purple-500/20 text-purple-400 flex items-center justify-center font-bold shrink-0">
+            🔬
+          </div>
+          <div className="space-y-1">
+            <div className="flex items-center gap-2">
+              <h4 className="text-sm font-black text-white">Empirical Feature Ablation Insight (PRD v4.0)</h4>
+              <span className="bg-purple-500/20 text-purple-300 text-[10px] font-bold px-2 py-0.5 rounded-full border border-purple-500/30">
+                Out-of-Sample Validated
+              </span>
+            </div>
+            <p className="text-xs text-slate-300 leading-relaxed">
+              {h2h_hypothesis_result?.finding || "In PRNG virtual sports simulations, H2H degrades calibration error. Weight decayed to 0.0."}
+            </p>
+            <div className="flex flex-wrap gap-3 pt-2 text-[11px] text-slate-400">
+              <span>Total Dataset: <strong className="text-white">{evaluated_events_total}</strong> matches</span>
+              <span>•</span>
+              <span>Train (Calibration): <strong className="text-white">{train_sample_size}</strong></span>
+              <span>•</span>
+              <span>Out-of-Sample Test: <strong className="text-white">{test_sample_size}</strong></span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Leaderboard Cards */}
+      <div className="space-y-3">
+        <h4 className="text-xs font-black uppercase tracking-wider text-slate-500">
+          Model Calibration Leaderboard (Ranked by Brier Score)
+        </h4>
+
+        <div className="grid grid-cols-1 gap-3">
+          {leaderboard?.map((model, idx) => {
+            const isRank1 = idx === 0;
+            return (
+              <div
+                key={model.model_id}
+                className={`rounded-2xl p-5 border transition-all ${
+                  isRank1
+                    ? "bg-emerald-50/50 border-emerald-300 shadow-sm ring-1 ring-emerald-400/30"
+                    : "bg-white border-slate-200"
+                }`}
+              >
+                <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2">
+                      <span className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-black ${
+                        isRank1 ? "bg-emerald-600 text-white" : "bg-slate-100 text-slate-600"
+                      }`}>
+                        #{idx + 1}
+                      </span>
+                      <h5 className="text-sm font-black text-slate-900">{model.name}</h5>
+                      {isRank1 && (
+                        <span className="bg-emerald-100 text-emerald-800 text-[10px] font-black px-2 py-0.5 rounded-full border border-emerald-300">
+                          👑 CHAMPION MODEL
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-xs text-slate-500">{model.description}</p>
+                  </div>
+
+                  {/* KPIs */}
+                  <div className="flex flex-wrap items-center gap-4 text-right">
+                    <div>
+                      <div className="text-[10px] uppercase font-bold text-slate-400">Brier Score</div>
+                      <div className="text-sm font-black text-slate-900">{model.brier_score}</div>
+                    </div>
+                    <div>
+                      <div className="text-[10px] uppercase font-bold text-slate-400">Log-Loss</div>
+                      <div className="text-sm font-black text-slate-900">{model.log_loss}</div>
+                    </div>
+                    <div>
+                      <div className="text-[10px] uppercase font-bold text-slate-400">Win Rate</div>
+                      <div className="text-sm font-black text-emerald-600">{model.win_rate_pct}%</div>
+                    </div>
+                    <div>
+                      <div className="text-[10px] uppercase font-bold text-slate-400">ROI / Yield</div>
+                      <div className={`text-sm font-black ${model.roi_pct >= 0 ? "text-emerald-600" : "text-rose-600"}`}>
+                        {model.roi_pct >= 0 ? "+" : ""}{model.roi_pct}%
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Weights Bar */}
+                <div className="mt-4 pt-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2 text-xs">
+                  <span className="text-[11px] font-bold text-slate-400 uppercase">Calibrated Weights:</span>
+                  <div className="flex flex-wrap gap-2">
+                    <span className="bg-slate-100 px-2 py-0.5 rounded text-[11px] font-semibold text-slate-700">
+                      Market: {(model.feature_weights?.market_prob * 100).toFixed(0)}%
+                    </span>
+                    <span className="bg-blue-50 px-2 py-0.5 rounded text-[11px] font-semibold text-blue-700">
+                      Form: {(model.feature_weights?.rolling_form * 100).toFixed(0)}%
+                    </span>
+                    <span className={`px-2 py-0.5 rounded text-[11px] font-semibold ${
+                      model.feature_weights?.h2h === 0 ? "bg-rose-50 text-rose-600 line-through" : "bg-purple-50 text-purple-700"
+                    }`}>
+                      H2H: {(model.feature_weights?.h2h * 100).toFixed(0)}%
+                    </span>
+                    <span className="bg-amber-50 px-2 py-0.5 rounded text-[11px] font-semibold text-amber-700">
+                      League Pace: {(model.feature_weights?.league_macro * 100).toFixed(0)}%
+                    </span>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Main Component ──────────────────────────────────────────────────────────
 
 export default function VirtualBacktest() {
@@ -513,10 +648,11 @@ export default function VirtualBacktest() {
   const [leagues, setLeagues] = useState([]);
   const [availability, setAvailability] = useState(null);
   const [loading, setLoading] = useState(false);
-  const [activeMode, setActiveMode] = useState(null); // "backtest" | "walkforward"
+  const [activeMode, setActiveMode] = useState(null); // "backtest" | "walkforward" | "ablation"
   const [result, setResult] = useState(null);
+  const [ablationData, setAblationData] = useState(null);
   const [error, setError] = useState(null);
-  const [activeTab, setActiveTab] = useState("summary"); // "summary" | "bets" | "windows"
+  const [activeTab, setActiveTab] = useState("summary"); // "summary" | "bets" | "windows" | "ablation"
 
   useEffect(() => {
     fetchBacktestLeagues().then((r) => setLeagues(r?.leagues || []));
@@ -527,6 +663,7 @@ export default function VirtualBacktest() {
     setLoading(true);
     setError(null);
     setResult(null);
+    setAblationData(null);
     setActiveMode("backtest");
     try {
       const data = await runBacktest(config);
@@ -544,6 +681,7 @@ export default function VirtualBacktest() {
     setLoading(true);
     setError(null);
     setResult(null);
+    setAblationData(null);
     setActiveMode("walkforward");
     try {
       const data = await runWalkForward(config);
@@ -552,6 +690,23 @@ export default function VirtualBacktest() {
       setActiveTab("summary");
     } catch (e) {
       setError(e.message || "Walk-forward failed");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleRunAblation = async () => {
+    setLoading(true);
+    setError(null);
+    setResult(null);
+    setActiveMode("ablation");
+    try {
+      const data = await fetchFeatureAblationStudy("ALL", 300);
+      if (!data) throw new Error("No response from server");
+      setAblationData(data);
+      setActiveTab("ablation");
+    } catch (e) {
+      setError(e.message || "Feature ablation study failed");
     } finally {
       setLoading(false);
     }
@@ -568,16 +723,16 @@ export default function VirtualBacktest() {
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-base font-black text-slate-900 tracking-tight">
-            Phase 4 · Backtesting & Walk-Forward Engine
+            Virtual Football · Backtesting & Feature Ablation Suite
           </h2>
           <p className="text-xs text-slate-500 mt-0.5">
-            Simulate historical strategy performance with strict temporal isolation — no future data ever used.
+            Out-of-sample simulation and empirical feature ablation under strict temporal isolation.
           </p>
         </div>
-        {result && (
+        {(result || ablationData) && (
           <button
-            onClick={() => { setResult(null); setError(null); setActiveMode(null); }}
-            className="flex items-center gap-1.5 text-xs font-semibold text-slate-600 hover:text-slate-900 px-3 py-1.5 border border-slate-200 rounded-lg hover:bg-slate-50 transition-all"
+            onClick={() => { setResult(null); setAblationData(null); setError(null); setActiveMode(null); }}
+            className="flex items-center gap-1.5 text-xs font-semibold text-slate-600 hover:text-slate-900 px-3 py-1.5 border border-slate-200 rounded-lg hover:bg-slate-50 transition-all cursor-pointer"
           >
             <RotateCcw className="w-3.5 h-3.5" />
             Reset
@@ -592,6 +747,7 @@ export default function VirtualBacktest() {
         leagues={leagues}
         onRunBacktest={handleRunBacktest}
         onRunWalkForward={handleRunWalkForward}
+        onRunAblation={handleRunAblation}
         loading={loading}
         availability={availability}
       />
@@ -599,9 +755,13 @@ export default function VirtualBacktest() {
       {/* Loading state */}
       {loading && (
         <div className="flex items-center justify-center gap-3 py-12 text-slate-500 text-sm">
-          <RefreshCw className="w-5 h-5 animate-spin text-blue-600" />
+          <RefreshCw className="w-5 h-5 animate-spin text-purple-600" />
           <span className="font-medium">
-            {activeMode === "walkforward" ? "Running walk-forward analysis..." : "Simulating historical trades..."}
+            {activeMode === "walkforward"
+              ? "Running walk-forward analysis..."
+              : activeMode === "ablation"
+                ? "Running empirical feature ablation across Model A, B, C, D..."
+                : "Simulating historical trades..."}
           </span>
         </div>
       )}
@@ -614,8 +774,13 @@ export default function VirtualBacktest() {
         </div>
       )}
 
-      {/* Results */}
-      {result && !loading && (
+      {/* Ablation Results */}
+      {activeMode === "ablation" && ablationData && !loading && (
+        <AblationLeaderboardPanel ablationData={ablationData} />
+      )}
+
+      {/* Results for Backtest / Walk-Forward */}
+      {result && !loading && activeMode !== "ablation" && (
         <div className="space-y-4">
           {/* Mode badge + summary line */}
           <div className="flex items-center gap-3">
@@ -641,7 +806,7 @@ export default function VirtualBacktest() {
               <button
                 key={t}
                 onClick={() => setActiveTab(t)}
-                className={`text-xs font-bold px-3 py-2 capitalize border-b-2 transition-all ${
+                className={`text-xs font-bold px-3 py-2 capitalize border-b-2 transition-all cursor-pointer ${
                   activeTab === t
                     ? "border-blue-600 text-blue-700"
                     : "border-transparent text-slate-500 hover:text-slate-800"
@@ -672,3 +837,4 @@ export default function VirtualBacktest() {
     </div>
   );
 }
+

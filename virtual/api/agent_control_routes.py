@@ -296,6 +296,8 @@ def resume_agent_endpoint(db: Session = Depends(get_db)):
 
 
 @router.post("/agent/emergency-stop")
+@router.post("/emergency-stop")
+@router.post("/fronttest/emergency-stop")
 def emergency_stop_endpoint(db: Session = Depends(get_db)):
     """Locks all execution unconditionally under EMERGENCY_STOP state."""
     cfg = get_or_create_agent_config(db)

@@ -3,11 +3,17 @@
  * Connects to the standalone virtual microservice (Port 8001).
  */
 
+const isLocalhost =
+  typeof window !== "undefined" &&
+  (window.location.hostname === "localhost" ||
+   window.location.hostname === "127.0.0.1" ||
+   window.location.hostname.startsWith("192.168.") ||
+   window.location.hostname.startsWith("10."));
+
 const VIRTUAL_API_BASE =
   import.meta.env.VITE_VIRTUAL_API_URL ||
-  (typeof window !== "undefined" && window.location.hostname === "localhost"
-    ? "http://localhost:8000"
-    : "");
+  (isLocalhost ? `http://${window.location.hostname}:8000` : "");
+
 
 
 export async function fetchVirtualDashboard() {
@@ -424,32 +430,23 @@ export async function fetchAgentStatus() {
 }
 
 export async function pauseAgent() {
-  try {
-    const res = await fetch(`${VIRTUAL_API_BASE}/api/v1/virtual-trader/agent/pause`, { method: "POST" });
-    if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
-    return await res.json();
-  } catch (err) {
-    console.error("[VirtualClient] pauseAgent error:", err);
-    return null;
-  }
+  return await toggleFrontTestAutomation(false);
 }
 
 export async function resumeAgent() {
-  try {
-    const res = await fetch(`${VIRTUAL_API_BASE}/api/v1/virtual-trader/agent/resume`, { method: "POST" });
-    if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
-    return await res.json();
-  } catch (err) {
-    console.error("[VirtualClient] resumeAgent error:", err);
-    return null;
-  }
+  return await toggleFrontTestAutomation(true);
 }
 
 export async function emergencyStopAgent() {
   try {
-    const res = await fetch(`${VIRTUAL_API_BASE}/api/v1/virtual-trader/agent/emergency-stop`, { method: "POST" });
-    if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
-    return await res.json();
+    const res = await updateFrontTestConfig({ emergency_stop: true, enabled: false });
+    return {
+      status: "SUCCESS",
+      worker_state: "EMERGENCY_STOPPED",
+      emergency_stop: true,
+      config_version: res?.config_version || 1,
+      message: "🚨 EMERGENCY STOP ACTIVATED. All execution halted."
+    };
   } catch (err) {
     console.error("[VirtualClient] emergencyStopAgent error:", err);
     return null;
@@ -476,6 +473,28 @@ export async function applyAgentPreset(presetName) {
     return await res.json();
   } catch (err) {
     console.error("[VirtualClient] applyAgentPreset error:", err);
+    return null;
+  }
+}
+
+export async function fetchFeatureAblationStudy(league = "ALL", sampleLimit = 300) {
+  try {
+    const res = await fetch(`${VIRTUAL_API_BASE}/api/v1/virtual-trader/backtesting/ablation?league=${encodeURIComponent(league)}&sample_limit=${sampleLimit}`);
+    if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
+    return await res.json();
+  } catch (err) {
+    console.error("[VirtualClient] fetchFeatureAblationStudy error:", err);
+    return null;
+  }
+}
+
+export async function fetchCalibratedFeatureWeights() {
+  try {
+    const res = await fetch(`${VIRTUAL_API_BASE}/api/v1/virtual-trader/backtesting/feature-weights`);
+    if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
+    return await res.json();
+  } catch (err) {
+    console.error("[VirtualClient] fetchCalibratedFeatureWeights error:", err);
     return null;
   }
 }

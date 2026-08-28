@@ -29,7 +29,9 @@ import {
   sendTelegramTestPing,
   resetFrontTestLedger,
   emergencyStopAgent,
-  applyAgentPreset
+  applyAgentPreset,
+  resumeAgent,
+  pauseAgent
 } from "../api/virtualClient";
 
 
@@ -49,6 +51,7 @@ export default function VirtualFrontTesting() {
   const [activeLeagues, setActiveLeagues] = useState(["England Virtual", "Spain Virtual"]);
 
   const AVAILABLE_LEAGUES = [
+    { id: "Master Multi-League", label: "Master Multi-League (Cross-League)", icon: "🏆" },
     { id: "England Virtual", label: "England (Premier League)", icon: "🏴󠁧󠁢󠁥󠁮󠁧󠁿" },
     { id: "Spain Virtual", label: "Spain (La Liga)", icon: "🇪🇸" },
     { id: "Italy Virtual", label: "Italy (Serie A)", icon: "🇮🇹" },
@@ -99,15 +102,30 @@ export default function VirtualFrontTesting() {
   };
 
   const handleToggle = async () => {
-    if (!data) return;
     setActionLoading(true);
-    const isCurrentlyEnabled = data?.config?.enabled ?? false;
-    const res = await toggleFrontTestAutomation(!isCurrentlyEnabled);
-    if (res && res.status === "SUCCESS") {
-      showToast(res.message);
-      await loadStatus();
+    try {
+      const isCurrentlyEnabled = data?.config?.enabled ?? false;
+      const isCurrentlyEmergencyStopped = data?.config?.emergency_stop ?? false;
+      
+      let res;
+      if (isCurrentlyEmergencyStopped || !isCurrentlyEnabled) {
+        res = await resumeAgent();
+      } else {
+        res = await pauseAgent();
+      }
+      
+      if (res && res.status === "SUCCESS") {
+        showToast(res.message || `Automation is now ${res.worker_state || "UPDATED"}`);
+        await loadStatus();
+      } else {
+        showToast("⚠️ State updated.");
+        await loadStatus();
+      }
+    } catch (err) {
+      showToast(`Error: ${err.message}`);
+    } finally {
+      setActionLoading(false);
     }
-    setActionLoading(false);
   };
 
   const handleEmergencyStop = async () => {
@@ -386,16 +404,25 @@ export default function VirtualFrontTesting() {
           </button>
 
           <button
+            type="button"
             onClick={handleToggle}
-            disabled={actionLoading || isEmergencyStopped}
+            disabled={actionLoading}
             className={`w-full lg:w-auto px-6 py-2.5 rounded-xl text-xs font-black tracking-wide transition-all shadow-md flex items-center justify-center space-x-2 cursor-pointer ${
-              isEnabled 
-                ? "bg-amber-500 hover:bg-amber-600 text-white shadow-amber-500/20" 
-                : "bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-600/20"
+              isEmergencyStopped
+                ? "bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-600/20"
+                : isEnabled 
+                  ? "bg-amber-500 hover:bg-amber-600 text-white shadow-amber-500/20" 
+                  : "bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-600/20"
             }`}
           >
             <Power className="w-4 h-4" />
-            <span>{isEnabled ? "PAUSE AUTOMATION" : "RESUME AUTOMATION"}</span>
+            <span>
+              {isEmergencyStopped 
+                ? "RESUME FROM EMERGENCY STOP" 
+                : isEnabled 
+                  ? "PAUSE AUTOMATION" 
+                  : "RESUME AUTOMATION"}
+            </span>
           </button>
         </div>
       </div>
@@ -497,29 +524,24 @@ export default function VirtualFrontTesting() {
             </select>
           </div>
 
-          {/* Scope Checkboxes */}
+          {/* Active League Count & Stake */}
           <div className="space-y-2">
-            <label className="text-xs font-bold text-slate-700">Dispatch Options</label>
-            <div className="space-y-2">
-              <label className="flex items-center space-x-2 text-xs font-semibold text-slate-700 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={enablePerLeague}
-                  onChange={(e) => setEnablePerLeague(e.target.checked)}
-                  className="rounded-sm text-emerald-600 focus:ring-emerald-500 w-4 h-4"
-                />
-                <span>Individual League 2.0x Slips (England, Spain, Italy, etc.)</span>
-              </label>
-
-              <label className="flex items-center space-x-2 text-xs font-semibold text-slate-700 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={enableMasterSlip}
-                  onChange={(e) => setEnableMasterSlip(e.target.checked)}
-                  className="rounded-sm text-emerald-600 focus:ring-emerald-500 w-4 h-4"
-                />
-                <span>Master Cross-League 2.0x Slip (#1 Pick per League)</span>
-              </label>
+            <label className="text-xs font-bold text-slate-700">Simultaneous League Count</label>
+            <div className="flex gap-2">
+              {[1, 2, 3, 4].map((cnt) => (
+                <button
+                  key={cnt}
+                  type="button"
+                  onClick={() => setLeagueCount(cnt)}
+                  className={`flex-1 py-2 rounded-xl text-xs font-black border transition-all cursor-pointer ${
+                    parseInt(leagueCount) === cnt
+                      ? "bg-emerald-600 border-emerald-600 text-white shadow-sm"
+                      : "bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100"
+                  }`}
+                >
+                  {cnt} {cnt === 1 ? "League" : "Leagues"}
+                </button>
+              ))}
             </div>
           </div>
         </div>
