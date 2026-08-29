@@ -527,7 +527,7 @@ async def re_edit_ticket(
         primary_bucket = ticket_buckets[t_idx]
         t_final = []
 
-        # First add all non-overlapping selections from this ticket's primary partition
+        # 1. First add all non-overlapping selections from this ticket's primary partition
         for cand in primary_bucket:
             f_key = str(cand.get("event_id") or cand.get("fixture_id") or f"{cand.get('home_team')}_{cand.get('away_team')}").strip().lower()
             if fixture_usage_count.get(f_key, 0) == 0:
@@ -537,8 +537,7 @@ async def re_edit_ticket(
                 if target_mode == "GAMES" and target_games > 0 and len(t_final) >= target_games:
                     break
 
-        # Fallback: If primary partition had fewer games than target_games, supplement dynamically
-        # with alternative diversified winnable markets
+        # 2. Supplementary pass if primary partition had fewer games than target_games
         if target_mode == "GAMES" and target_games > 0 and len(t_final) < target_games:
             needed = target_games - len(t_final)
             for other_idx, other_bucket in enumerate(ticket_buckets):
@@ -552,27 +551,68 @@ async def re_edit_ticket(
                         str(x.get("event_id") or x.get("fixture_id") or f"{x.get('home_team')}_{x.get('away_team')}").strip().lower() == f_key
                         for x in t_final
                     )
-                    if not is_already_in_ticket and current_count < max_allowed_appearances:
-                        # Diversify the market option so this ticket gets an alternative winnable prediction
-                        diversified_cand = _derive_alternative_market(cand)
-                        t_final.append(diversified_cand)
-                        fixture_usage_count[f_key] = current_count + 1
-                        assigned_markets_per_fixture.setdefault(f_key, set()).add(str(diversified_cand.get("selection_name")).strip().lower())
-                        needed -= 1
+                    if not is_already_in_ticket:
+                        if mode == "AUDITOR" and current_count < max_allowed_appearances:
+                            # Auditor Mode allows deriving an alternative diversified winnable market
+                            diversified_cand = _derive_alternative_market(cand)
+                            t_final.append(diversified_cand)
+                            fixture_usage_count[f_key] = current_count + 1
+                            assigned_markets_per_fixture.setdefault(f_key, set()).add(str(diversified_cand.get("selection_name")).strip().lower())
+                            needed -= 1
+                        elif mode == "REMOVE" and current_count == 0:
+                            # REMOVE Mode strictly preserves the original bettor's pick without swapping
+                            t_final.append(cand)
+                            fixture_usage_count[f_key] = 1
+                            assigned_markets_per_fixture.setdefault(f_key, set()).add(str(cand.get("selection_name")).strip().lower())
+                            needed -= 1
+
                         if needed <= 0:
                             break
                 if needed <= 0:
                     break
 
-        # Odds mode trimming if requested
+        # 3. Target Odds mode handling
         if target_mode == "ODDS" and target_odds > 1.05:
-            trimmed = []
+            # Check if primary bucket needs supplementary games to reach target_odds
             curr_acc = 1.0
+            for c in t_final:
+                curr_acc *= float(c.get("estimated_odds") or c.get("odds") or 1.25)
+
+            if curr_acc < (target_odds * 0.95):
+                for other_idx, other_bucket in enumerate(ticket_buckets):
+                    if other_idx == t_idx:
+                        continue
+                    for cand in sorted(other_bucket, key=lambda x: float(x.get("estimated_prob", 0.0)), reverse=True):
+                        f_key = str(cand.get("event_id") or cand.get("fixture_id") or f"{cand.get('home_team')}_{cand.get('away_team')}").strip().lower()
+                        current_count = fixture_usage_count.get(f_key, 0)
+                        is_already_in_ticket = any(
+                            str(x.get("event_id") or x.get("fixture_id") or f"{x.get('home_team')}_{x.get('away_team')}").strip().lower() == f_key
+                            for x in t_final
+                        )
+                        if not is_already_in_ticket:
+                            if mode == "AUDITOR" and current_count < max_allowed_appearances:
+                                diversified_cand = _derive_alternative_market(cand)
+                                t_final.append(diversified_cand)
+                                fixture_usage_count[f_key] = current_count + 1
+                                curr_acc *= float(diversified_cand.get("estimated_odds") or diversified_cand.get("odds") or 1.25)
+                            elif mode == "REMOVE" and current_count == 0:
+                                t_final.append(cand)
+                                fixture_usage_count[f_key] = 1
+                                curr_acc *= float(cand.get("estimated_odds") or cand.get("odds") or 1.25)
+
+                            if curr_acc >= (target_odds * 0.95) and len(t_final) >= 2:
+                                break
+                    if curr_acc >= (target_odds * 0.95) and len(t_final) >= 2:
+                        break
+
+            # Trim to optimal target odds without undershooting
+            trimmed = []
+            acc_check = 1.0
             for cand in t_final:
                 leg_odd = float(cand.get("estimated_odds") or cand.get("odds") or 1.25)
                 trimmed.append(cand)
-                curr_acc *= leg_odd
-                if curr_acc >= target_odds and len(trimmed) >= 2:
+                acc_check *= leg_odd
+                if acc_check >= (target_odds * 0.95) and len(trimmed) >= 2:
                     break
             t_final = trimmed
 
@@ -592,8 +632,13 @@ async def re_edit_ticket(
             "avg_win_prob": round(slip_prob / max(1, len(t_final)), 3)
         })
 
-
-    primary_slip = portfolio_slips[0]
+    primary_slip = portfolio_slips[0] if portfolio_slips else {
+        "ticket_index": 1,
+        "final_count": 0,
+        "final_selections": [],
+        "new_total_odds": 1.0,
+        "avg_win_prob": 0.0
+    }
 
     return {
         "mode": mode,

@@ -153,6 +153,11 @@ def detect_match_archetype(odds_home: float, odds_draw: float, odds_away: float,
         }
 
 
+HIGH_SCORING_LEAGUES = {
+    "DED", "EREDIVISIE", "BL1", "BUNDESLIGA", "SUI", "SUPER LEAGUE", "AUT", "BEL", "PRO LEAGUE",
+    "NETHERLANDS", "GERMANY", "SWITZERLAND", "AUSTRIA", "BELGIUM", "NORWAY", "ELITESERIEN", "SCO", "PREMIERSHIP"
+}
+
 @dataclass
 class PickDecision:
     fixture_id: str
@@ -180,6 +185,7 @@ class PickDecision:
     league_tier_score: int = 50
     tactical_archetype: str = "COMPETITIVE_VALUE"
     tactical_score: float = 0.0
+    tactical_reason: str = ""
 
 
 @dataclass
@@ -1016,10 +1022,13 @@ class MatchIQPickEngine:
             if "12" not in dc_work and r_home > 1.0 and r_away > 1.0:
                 dc_work["12"] = round(1.0 / max(0.01, (ph + pa) * 1.04), 2)
 
+            is_high_scoring_league = any(k in comp.upper() or k in country.upper() for k in HIGH_SCORING_LEAGUES)
+            is_cup_or_knockout = any(k in comp.upper() for k in ["CUP", "POKAL", "COPA", "KNOCKOUT", "PLAYOFF", "TROPHY", "CHAMPIONS LEAGUE", "EUROPA LEAGUE", "CONFERENCE LEAGUE"])
+
             for dc_key, dc_val in dc_work.items():
-                # TACTICAL RULE: Ban "12" on low-scoring defensive encounters or high-draw matches (~30% draw base rate)
-                is_defensive_trap = (archetype_type == "LOW_GOAL_DEFENSIVE" or is_even_match or pd >= 0.27)
-                if dc_key == "12" and is_defensive_trap:
+                # TACTICAL RULE: Strictly Gate "12" — only permitted in zero-draw cup elimination games or derbies with low draw rate
+                is_defensive_trap = (archetype_type == "LOW_GOAL_DEFENSIVE" or is_even_match or pd >= 0.22)
+                if dc_key == "12" and (not is_cup_or_knockout or is_defensive_trap):
                     continue
 
                 # TACTICAL RULE: Away Powerhouse Protection - Never give 1X to a home underdog vs an away powerhouse
@@ -1035,14 +1044,17 @@ class MatchIQPickEngine:
                         prob = min(0.96, ph + pd)
                         sel_lbl = f"{home} or Draw (1X)"
                         out_id = "9"
+                        t_reason = f"🛡️ Draw-Protected 1X Fortress ({int(prob*100)}% Win Chance)"
                     elif dc_key == "X2":
                         prob = min(0.96, pa + pd)
                         sel_lbl = f"{away} or Draw (X2)"
                         out_id = "11"
+                        t_reason = f"🛡️ Draw-Protected X2 Away Cushion ({int(prob*100)}% Win Chance)"
                     else:
                         prob = min(0.96, ph + pa)
                         sel_lbl = f"{home} or {away} (12)"
                         out_id = "10"
+                        t_reason = f"⚡ Zero-Draw Knockout Momentum ({int(prob*100)}% Win Chance)"
 
                     if prob >= prob_floor and sel_lbl not in seen_selections:
                         seen_selections.add(sel_lbl)
@@ -1057,7 +1069,8 @@ class MatchIQPickEngine:
                             decision_audit_log=[], kelly_quarter_stake_pct=3.0,
                             raw_match_data=fixture, market_id="10", outcome_id=out_id, specifier=None,
                             league_tier=tier_label, league_tier_score=tier_score,
-                            tactical_archetype=archetype_type, tactical_score=t_boost
+                            tactical_archetype=archetype_type, tactical_score=t_boost,
+                            tactical_reason=t_reason
                         ))
 
         def _mkt_available(mid: str) -> bool:
@@ -1082,7 +1095,8 @@ class MatchIQPickEngine:
                         approved=True, confidence_tier="ELITE", gate_results={"gate1": "PASS", "gate2": "PASS"},
                         rejection_reason=None, decision_audit_log=[], kelly_quarter_stake_pct=3.0,
                         raw_match_data=fixture, market_id="16", outcome_id="1714", specifier="hcp=1.5",
-                        league_tier=tier_label, league_tier_score=tier_score, tactical_archetype="BALANCED_HANDICAP", tactical_score=28.0
+                        league_tier=tier_label, league_tier_score=tier_score, tactical_archetype="BALANCED_HANDICAP", tactical_score=28.0,
+                        tactical_reason=f"🎯 Equal-Strength +1.5 Cushion (Wins on Win/Draw/1-Goal Loss)"
                     ))
 
                 # Away +1.5 Asian Handicap (wins on Away win, draw, or 1-goal loss)
@@ -1099,11 +1113,13 @@ class MatchIQPickEngine:
                         approved=True, confidence_tier="ELITE", gate_results={"gate1": "PASS", "gate2": "PASS"},
                         rejection_reason=None, decision_audit_log=[], kelly_quarter_stake_pct=3.0,
                         raw_match_data=fixture, market_id="16", outcome_id="1715", specifier="hcp=1.5",
-                        league_tier=tier_label, league_tier_score=tier_score, tactical_archetype="BALANCED_HANDICAP", tactical_score=28.0
+                        league_tier=tier_label, league_tier_score=tier_score, tactical_archetype="BALANCED_HANDICAP", tactical_score=28.0,
+                        tactical_reason=f"🎯 Equal-Strength +1.5 Cushion (Wins on Win/Draw/1-Goal Loss)"
                     ))
 
         # 3. Over/Under Lines (Universal SportyBet Half-Point Lines: 1.5, 2.5, 3.5, 4.5)
         if _cat_allowed("OVER_UNDER") and len(ou_lines) > 0 and _mkt_available("18"):
+            is_high_scoring_league = any(k in comp.upper() or k in country.upper() for k in HIGH_SCORING_LEAGUES)
             for ou in ou_lines:
                 try:
                     raw_line_num = float(ou.get("line") or 0.0)
@@ -1123,6 +1139,11 @@ class MatchIQPickEngine:
                     if prob >= prob_floor and sel not in seen_selections:
                         seen_selections.add(sel)
                         t_boost = 25.0 if archetype_type == "HIGH_GOAL_EXPECTANCY" else (15.0 if raw_line_num <= 1.5 else 0.0)
+                        if is_high_scoring_league and raw_line_num <= 1.5:
+                            t_boost += 20.0
+                            t_reason = f"⚡ High Goal Expectancy (88%+ Over {line_str} Rate)"
+                        else:
+                            t_reason = f"⚽ 2+ Match Goals Safety Cushion"
                         candidates.append(PickDecision(
                             fixture_id=fix_id, home_team=home, away_team=away, competition=comp,
                             kickoff_datetime=kickoff, market_name="Over/Under Goals", selection_name=sel,
@@ -1133,14 +1154,19 @@ class MatchIQPickEngine:
                             decision_audit_log=[], kelly_quarter_stake_pct=2.5,
                             raw_match_data=fixture, market_id="18", outcome_id="12", specifier=f"total={line_str}",
                             league_tier=tier_label, league_tier_score=tier_score,
-                            tactical_archetype=archetype_type, tactical_score=t_boost
+                            tactical_archetype=archetype_type, tactical_score=t_boost,
+                            tactical_reason=t_reason
                         ))
                 if u_odd and min_odds_floor <= float(u_odd) <= max_odds_cap and raw_line_num >= 2.5:
+                    # Hard ban Under 3.5 in goal-heavy leagues or on heavy favorites to prevent blowout bust
+                    if raw_line_num <= 3.5 and (is_high_scoring_league or archetype_type == "HEAVY_FAVORITE"):
+                        continue
                     sel = f"Under {line_str} Goals"
                     prob = round(min(0.96, 1.0 / (float(u_odd) * 1.04)), 3)
                     if prob >= prob_floor and sel not in seen_selections:
                         seen_selections.add(sel)
                         t_boost = 25.0 if (archetype_type == "LOW_GOAL_DEFENSIVE" or is_even_match) else (15.0 if raw_line_num >= 3.5 else 0.0)
+                        t_reason = f"🛡️ Defensive Ceiling (Under {line_str} Goals Cushion)"
                         candidates.append(PickDecision(
                             fixture_id=fix_id, home_team=home, away_team=away, competition=comp,
                             kickoff_datetime=kickoff, market_name="Over/Under Goals", selection_name=sel,
@@ -1151,7 +1177,8 @@ class MatchIQPickEngine:
                             decision_audit_log=[], kelly_quarter_stake_pct=2.5,
                             raw_match_data=fixture, market_id="18", outcome_id="13", specifier=f"total={line_str}",
                             league_tier=tier_label, league_tier_score=tier_score,
-                            tactical_archetype=archetype_type, tactical_score=t_boost
+                            tactical_archetype=archetype_type, tactical_score=t_boost,
+                            tactical_reason=t_reason
                         ))
 
         # 4. Team Goals (Team Over 0.5 / 1.5 Goals)
@@ -1170,7 +1197,8 @@ class MatchIQPickEngine:
                         approved=True, confidence_tier="ELITE", gate_results={"gate1": "PASS", "gate2": "PASS"},
                         rejection_reason=None, decision_audit_log=[], kelly_quarter_stake_pct=3.0,
                         raw_match_data=fixture, market_id="19", outcome_id="12", specifier="total=0.5",
-                        league_tier=tier_label, league_tier_score=tier_score, tactical_archetype=archetype_type, tactical_score=20.0
+                        league_tier=tier_label, league_tier_score=tier_score, tactical_archetype=archetype_type, tactical_score=20.0,
+                        tactical_reason=f"🔥 {home} Single Goal Threshold (85%+ Win Chance)"
                     ))
 
                 # Team Over 1.5 Goals for Dominant Favorites
@@ -1188,7 +1216,8 @@ class MatchIQPickEngine:
                             approved=True, confidence_tier="HIGH", gate_results={"gate1": "PASS", "gate2": "PASS"},
                             rejection_reason=None, decision_audit_log=[], kelly_quarter_stake_pct=2.5,
                             raw_match_data=fixture, market_id="19", outcome_id="12", specifier="total=1.5",
-                            league_tier=tier_label, league_tier_score=tier_score, tactical_archetype=archetype_type, tactical_score=25.0
+                            league_tier=tier_label, league_tier_score=tier_score, tactical_archetype=archetype_type, tactical_score=25.0,
+                            tactical_reason=f"🔥 {home} 2+ Team Goals Attack Strength"
                         ))
 
             if pa >= 0.52 and r_away <= 2.10 and _mkt_available("20"):
@@ -1205,7 +1234,8 @@ class MatchIQPickEngine:
                         approved=True, confidence_tier="ELITE", gate_results={"gate1": "PASS", "gate2": "PASS"},
                         rejection_reason=None, decision_audit_log=[], kelly_quarter_stake_pct=3.0,
                         raw_match_data=fixture, market_id="20", outcome_id="12", specifier="total=0.5",
-                        league_tier=tier_label, league_tier_score=tier_score, tactical_archetype=archetype_type, tactical_score=20.0
+                        league_tier=tier_label, league_tier_score=tier_score, tactical_archetype=archetype_type, tactical_score=20.0,
+                        tactical_reason=f"🔥 {away} Single Goal Threshold (85%+ Win Chance)"
                     ))
 
                 # Team Over 1.5 Goals for Dominant Favorites
@@ -1223,7 +1253,8 @@ class MatchIQPickEngine:
                             approved=True, confidence_tier="HIGH", gate_results={"gate1": "PASS", "gate2": "PASS"},
                             rejection_reason=None, decision_audit_log=[], kelly_quarter_stake_pct=2.5,
                             raw_match_data=fixture, market_id="20", outcome_id="12", specifier="total=1.5",
-                            league_tier=tier_label, league_tier_score=tier_score, tactical_archetype=archetype_type, tactical_score=25.0
+                            league_tier=tier_label, league_tier_score=tier_score, tactical_archetype=archetype_type, tactical_score=25.0,
+                            tactical_reason=f"🔥 {away} 2+ Team Goals Attack Strength"
                         ))
 
         # 5. Advanced Tactical Options: Win Either Half & Home/Away or Over 2.5
@@ -1243,7 +1274,8 @@ class MatchIQPickEngine:
                         approved=True, confidence_tier="ELITE", gate_results={"gate1": "PASS", "gate2": "PASS"},
                         rejection_reason=None, decision_audit_log=[], kelly_quarter_stake_pct=2.5,
                         raw_match_data=fixture, market_id="73", outcome_id="75", specifier=None,
-                        league_tier=tier_label, league_tier_score=tier_score, tactical_archetype="WIN_EITHER_HALF", tactical_score=26.0
+                        league_tier=tier_label, league_tier_score=tier_score, tactical_archetype="WIN_EITHER_HALF", tactical_score=26.0,
+                        tactical_reason=f"⏱️ {home} to Win Either 45-Min Half (Draw Immune)"
                     ))
 
             # Home or Over 2.5 Goals
@@ -1261,7 +1293,8 @@ class MatchIQPickEngine:
                         approved=True, confidence_tier="ELITE", gate_results={"gate1": "PASS", "gate2": "PASS"},
                         rejection_reason=None, decision_audit_log=[], kelly_quarter_stake_pct=2.5,
                         raw_match_data=fixture, market_id="62", outcome_id="1", specifier=None,
-                        league_tier=tier_label, league_tier_score=tier_score, tactical_archetype="COMBO_SAFETY", tactical_score=24.0
+                        league_tier=tier_label, league_tier_score=tier_score, tactical_archetype="COMBO_SAFETY", tactical_score=24.0,
+                        tactical_reason=f"🛡️ {home} Win OR Over 2.5 Goals Dual Safety"
                     ))
 
             # Away to Win Either Half
@@ -1279,7 +1312,8 @@ class MatchIQPickEngine:
                         approved=True, confidence_tier="ELITE", gate_results={"gate1": "PASS", "gate2": "PASS"},
                         rejection_reason=None, decision_audit_log=[], kelly_quarter_stake_pct=2.5,
                         raw_match_data=fixture, market_id="74", outcome_id="75", specifier=None,
-                        league_tier=tier_label, league_tier_score=tier_score, tactical_archetype="WIN_EITHER_HALF", tactical_score=26.0
+                        league_tier=tier_label, league_tier_score=tier_score, tactical_archetype="WIN_EITHER_HALF", tactical_score=26.0,
+                        tactical_reason=f"⏱️ {away} to Win Either 45-Min Half (Draw Immune)"
                     ))
 
             # Away or Over 2.5 Goals
@@ -1297,7 +1331,8 @@ class MatchIQPickEngine:
                         approved=True, confidence_tier="ELITE", gate_results={"gate1": "PASS", "gate2": "PASS"},
                         rejection_reason=None, decision_audit_log=[], kelly_quarter_stake_pct=2.5,
                         raw_match_data=fixture, market_id="62", outcome_id="2", specifier=None,
-                        league_tier=tier_label, league_tier_score=tier_score, tactical_archetype="COMBO_SAFETY", tactical_score=24.0
+                        league_tier=tier_label, league_tier_score=tier_score, tactical_archetype="COMBO_SAFETY", tactical_score=24.0,
+                        tactical_reason=f"🛡️ {away} Win OR Over 2.5 Goals Dual Safety"
                     ))
 
         # 6. 1X2 Match Result Lines
@@ -1313,10 +1348,10 @@ class MatchIQPickEngine:
                         elo_gap=elo_gap, tier_context=tier_context,
                         approved=True, confidence_tier="ELITE" if ph >= 0.75 else "HIGH",
                         gate_results={"gate1": "PASS", "gate2": "PASS"}, rejection_reason=None,
-                        decision_audit_log=[], kelly_quarter_stake_pct=2.0,
+                        decision_audit_log=[], kelly_quarter_stake_pct=3.0,
                         raw_match_data=fixture, market_id="1", outcome_id="1", specifier=None,
-                        league_tier=tier_label, league_tier_score=tier_score,
-                        tactical_archetype=archetype_type, tactical_score=30.0
+                        league_tier=tier_label, league_tier_score=tier_score, tactical_archetype="DIRECT_VALUE", tactical_score=15.0,
+                        tactical_reason=f"👑 {home} Dominant Home Win (5-Gate Confirmed)"
                     ))
             if r_away and min_odds_floor <= r_away <= max_odds_cap and pa >= prob_floor:
                 sel_a = f"{away} to Win (2)"
@@ -1329,10 +1364,10 @@ class MatchIQPickEngine:
                         elo_gap=elo_gap, tier_context=tier_context,
                         approved=True, confidence_tier="ELITE" if pa >= 0.75 else "HIGH",
                         gate_results={"gate1": "PASS", "gate2": "PASS"}, rejection_reason=None,
-                        decision_audit_log=[], kelly_quarter_stake_pct=2.0,
-                        raw_match_data=fixture, market_id="1", outcome_id="3", specifier=None,
-                        league_tier=tier_label, league_tier_score=tier_score,
-                        tactical_archetype=archetype_type, tactical_score=30.0
+                        decision_audit_log=[], kelly_quarter_stake_pct=3.0,
+                        raw_match_data=fixture, market_id="1", outcome_id="2", specifier=None,
+                        league_tier=tier_label, league_tier_score=tier_score, tactical_archetype="DIRECT_VALUE", tactical_score=15.0,
+                        tactical_reason=f"👑 {away} Dominant Away Win (5-Gate Confirmed)"
                     ))
 
         # Fallback base decision if no candidates generated
@@ -1466,26 +1501,42 @@ class MatchIQPickEngine:
         if mode == "ROLLOVER":
             import itertools
 
-            # Filter candidates for Rollover:
-            # Require minimum leg odds of 1.10 to prevent 1.04/1.05 junk picks
+            # Filter candidates for Rollover with expanded multi-variant suite:
+            # Requires minimum leg odds of 1.08 to 1.65
             def _is_safe_rollover_market(d) -> bool:
                 m_lower = (d.market_name or "").lower()
                 s_lower = (d.selection_name or "").lower()
                 o_val = float(d.estimated_odds or 1.0)
-                if o_val < 1.10 or o_val > 1.65:
+                if o_val < 1.08 or o_val > 1.65:
                     return False
-                is_dc = "double chance" in m_lower
-                is_safe_goals = (
-                    ("over" in s_lower and any(x in s_lower for x in ["1.5", "2", "0.5"])) or
-                    ("under" in s_lower and any(x in s_lower for x in ["3.5", "4.5", "5.5"]))
-                )
-                is_team_goals = "team" in m_lower or "team" in s_lower
-                is_fav_win = ("match result" in m_lower or "to win" in s_lower) and d.model_probability >= 0.70 and o_val <= 1.45
-                return is_dc or is_safe_goals or is_team_goals or is_fav_win
+
+                # 1. Double Chance 1X / X2 (Draw Protected)
+                is_dc = "double chance" in m_lower and ("1x" in s_lower or "x2" in s_lower or "home or draw" in s_lower or "draw or away" in s_lower)
+
+                # 2. Asian Handicap (+1.5, +2.0, +2.5)
+                is_handicap = ("handicap" in m_lower or "asian handicap" in m_lower) and any(x in s_lower for x in ["+1.5", "+2.0", "(+1.5)", "(+2.0)"])
+
+                # 3. Win Either Half (Home / Away)
+                is_weh = "win either half" in m_lower or "win either half" in s_lower
+
+                # 4. Team Goals (Home/Away Over 0.5, Over 1.5)
+                is_team_goals = ("team" in m_lower or "team" in s_lower) and ("0.5" in s_lower or "1.5" in s_lower)
+
+                # 5. Safe Total Goals (Over 0.5, Over 1.5)
+                is_safe_over_goals = ("over" in s_lower or "over" in m_lower) and any(x in s_lower for x in ["0.5", "1.5"])
+
+                # 6. Under Goals: STRICTLY BANNED on heavy favorites (prevents blowout losses)
+                is_heavy_fav = getattr(d, "tactical_archetype", "") == "HEAVY_FAVORITE" or (float(d.elo_gap or 0.0) >= 150.0)
+                is_safe_under_goals = ("under" in s_lower or "under" in m_lower) and any(x in s_lower for x in ["3.5", "4.5", "5.5"]) and not is_heavy_fav
+
+                # 7. Outright favorite win (only if heavy favorite with high confidence)
+                is_fav_win = ("match result" in m_lower or "to win" in s_lower) and d.model_probability >= 0.74 and o_val <= 1.40
+
+                return is_dc or is_handicap or is_weh or is_team_goals or is_safe_over_goals or is_safe_under_goals or is_fav_win
 
             # Probability floor for rollover based on risk profile
             rp_upper = (risk_profile or "BALANCED").upper()
-            rollover_prob_floor = 0.80 if rp_upper == "ULTRA_CONSERVATIVE" else (0.68 if rp_upper == "AGGRESSIVE" else 0.73)
+            rollover_prob_floor = 0.82 if rp_upper == "ULTRA_CONSERVATIVE" else (0.70 if rp_upper == "AGGRESSIVE" else 0.76)
 
             valid_cands = [
                 d for d in approved_decisions
@@ -1517,10 +1568,10 @@ class MatchIQPickEngine:
             best_combo: List[PickDecision] = []
             best_diff = float("inf")
 
-            # Search 1-leg, 2-leg, 3-leg, 4-leg combinations to find optimal target match
-            # Limit candidate depth per fixture and subset size to ensure sub-10ms response
-            for leg_k in range(1, min(5, len(avail_fix_keys) + 1)):
-                fix_subsets = list(itertools.combinations(avail_fix_keys[:15], leg_k))
+            # Search 1-leg to up to 9-leg combinations to find optimal target match
+            max_leg_k = 9 if target >= 4.5 else (8 if target >= 3.5 else (6 if target >= 2.5 else 5))
+            for leg_k in range(1, min(max_leg_k, len(avail_fix_keys) + 1)):
+                fix_subsets = list(itertools.combinations(avail_fix_keys[:20], leg_k))
                 rng.shuffle(fix_subsets)
                 for subset in fix_subsets[:30]:
                     subset_cands = [fixtures_dict[fk][:3] for fk in subset]
@@ -1749,7 +1800,8 @@ class MatchIQPickEngine:
                 "raw_match_data": d.raw_match_data,
                 "market_id": d.market_id,
                 "outcome_id": d.outcome_id,
-                "specifier": d.specifier
+                "specifier": d.specifier,
+                "tactical_reason": getattr(d, "tactical_reason", "")
             })
 
 
@@ -2022,6 +2074,7 @@ class MatchIQPickEngine:
                             "outcome_id": getattr(chosen_cand, "outcome_id", "1"),
                             "specifier": getattr(chosen_cand, "specifier", None),
                             "tier_context": chosen_cand.tier_context,
+                            "tactical_reason": getattr(chosen_cand, "tactical_reason", ""),
                             "decision_audit_log": [
                                 f"Archetype: {chosen_cand.tier_context}",
                                 f"Assigned {chosen_cand.selection_name} @{chosen_cand.estimated_odds:.2f} (Model Prob: {int(chosen_cand.model_probability*100)}%)"
@@ -2038,7 +2091,7 @@ class MatchIQPickEngine:
 
                         if target_mode == "GAMES" and target_games and len(approved_legs_for_ticket) >= target_games:
                             break
-                        if target_mode == "ODDS" and acc_odds >= (target_total_odds * 0.95) and len(approved_legs_for_ticket) >= 3:
+                        if target_mode == "ODDS" and acc_odds >= (target_total_odds * 0.95) and len(approved_legs_for_ticket) >= 2:
                             break
 
                 tot_prob = 1.0

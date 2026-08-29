@@ -3,6 +3,7 @@ import { decodeBookingCode, runTicketReEdit, generateNewBookingCode, generateVer
 import { Search, Copy, CheckCircle, CheckCircle2, ShieldCheck, ShieldAlert, AlertTriangle, ArrowRight, RefreshCw, Trash2, Sliders, ExternalLink, X, Receipt, Sparkles, Scissors, Layers, Ticket } from "lucide-react";
 
 import { calculateFlexShield } from "../utils/flexCalculator";
+import { formatCompetitionWithCountry } from "./TicketBuilderTab";
 
 export default function BetSlipAuditorTab({ onNavigateHistory, onTicketLocked }) {
   const [inputCode, setInputCode] = useState("");
@@ -218,7 +219,53 @@ export default function BetSlipAuditorTab({ onNavigateHistory, onTicketLocked })
   };
 
   const handleRemoveDraftedSelection = (indexToRemove) => {
-    if (!reEditResult || !reEditResult.final_selections) return;
+    if (!reEditResult) return;
+
+    if (reEditResult.portfolio_tickets && reEditResult.portfolio_tickets.length > 0) {
+      const activeSlip = reEditResult.portfolio_tickets[activePortfolioIndex] || reEditResult.portfolio_tickets[0];
+      if (!activeSlip || !activeSlip.final_selections) return;
+      const updatedSlipSelections = activeSlip.final_selections.filter((_, idx) => idx !== indexToRemove);
+
+      const newSlipTotalOdds = updatedSlipSelections.reduce((acc, s) => {
+        const o = parseFloat(s.estimated_odds || s.odds || 1.25);
+        return acc * (isNaN(o) || o <= 0 ? 1.0 : o);
+      }, 1.0);
+      const roundedSlipOdds = (Math.round(newSlipTotalOdds * 100) / 100).toFixed(2);
+
+      const updatedPortfolio = [...reEditResult.portfolio_tickets];
+      updatedPortfolio[activePortfolioIndex] = {
+        ...activeSlip,
+        final_count: updatedSlipSelections.length,
+        new_total_odds: roundedSlipOdds,
+        final_selections: updatedSlipSelections,
+        booking_code: null, // Clear stale booking code so user can regenerate fresh verified code
+      };
+
+      setReEditResult({
+        ...reEditResult,
+        portfolio_tickets: updatedPortfolio,
+        ...(activePortfolioIndex === 0 ? {
+          final_count: updatedSlipSelections.length,
+          new_total_odds: roundedSlipOdds,
+          final_selections: updatedSlipSelections,
+        } : {})
+      });
+
+      if (activePortfolioIndex === 0) {
+        setGeneratedCode(null);
+      }
+
+      if (codeModalData) {
+        setCodeModalData({
+          ...codeModalData,
+          totalOdds: roundedSlipOdds,
+          selections: updatedSlipSelections
+        });
+      }
+      return;
+    }
+
+    if (!reEditResult.final_selections) return;
     const updatedSelections = reEditResult.final_selections.filter((_, idx) => idx !== indexToRemove);
 
     if (updatedSelections.length === 0) {
@@ -240,10 +287,12 @@ export default function BetSlipAuditorTab({ onNavigateHistory, onTicketLocked })
       new_total_odds: roundedOdds,
       final_selections: updatedSelections,
     });
+    setGeneratedCode(null);
 
     if (codeModalData) {
       setCodeModalData({
         ...codeModalData,
+        totalOdds: roundedOdds,
         selections: updatedSelections
       });
     }
@@ -1456,7 +1505,7 @@ export default function BetSlipAuditorTab({ onNavigateHistory, onTicketLocked })
                                 </span>
                               )}
                               <span className="text-slate-400 font-medium text-[11px]">
-                                [{item.competition || item.league || "Domestic"}]
+                                [{formatCompetitionWithCountry(item.competition || item.league, item.country)}]
                               </span>
                             </div>
 

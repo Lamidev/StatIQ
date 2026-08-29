@@ -45,6 +45,105 @@ const AVAILABLE_LEAGUES = [
   { code: "UECL", name: "Conference League", country: "Europe" },
 ];
 
+const LEAGUE_COUNTRY_MAP = {
+  "PL": "England",
+  "PREMIER LEAGUE": "England",
+  "PD": "Spain",
+  "LALIGA": "Spain",
+  "LA LIGA": "Spain",
+  "SA": "Italy",
+  "SERIE A": "Italy",
+  "BL1": "Germany",
+  "BUNDESLIGA": "Germany",
+  "FL1": "France",
+  "LIGUE 1": "France",
+  "DED": "Netherlands",
+  "EREDIVISIE": "Netherlands",
+  "PPL": "Portugal",
+  "LIGA PORTUGAL": "Portugal",
+  "PRIMEIRA LIGA": "Portugal",
+  "TUR": "Turkey",
+  "SÜPER LIG": "Turkey",
+  "SUPER LIG": "Turkey",
+  "BEL": "Belgium",
+  "PRO LEAGUE": "Belgium",
+  "AUT": "Austria",
+  "SAU": "Saudi Arabia",
+  "SCO": "Scotland",
+  "PREMIERSHIP": "Scotland",
+  "SUI": "Switzerland",
+  "SUPER LEAGUE": "Switzerland",
+  "CRO": "Croatia",
+  "HNL": "Croatia",
+  "DEN": "Denmark",
+  "SUPERLIGA": "Denmark",
+  "GRE": "Greece",
+  "NOR": "Norway",
+  "ELITESERIEN": "Norway",
+  "SWE": "Sweden",
+  "ALLSVENSKAN": "Sweden",
+  "POL": "Poland",
+  "EKSTRAKLASA": "Poland",
+  "BRA": "Brazil",
+  "MLS": "USA",
+  "ARG": "Argentina",
+  "MEX": "Mexico",
+  "COL": "Colombia",
+  "CHI": "Chile",
+  "CZE": "Czech Republic",
+  "1. LIGA": "Czech Republic",
+  "RUS": "Russia",
+  "UKR": "Ukraine",
+  "ROU": "Romania",
+  "ELC": "England",
+  "CHAMPIONSHIP": "England",
+  "SD": "Spain",
+  "BL2": "Germany",
+  "IT2": "Italy",
+  "SERIE B": "Italy",
+  "FL2": "France",
+  "LIGUE 2": "France",
+};
+
+export const formatCompetitionWithCountry = (comp, country) => {
+  const cName = (comp || "").trim();
+  const cCountry = (country || "").trim();
+
+  if (!cName) return cCountry || "Football";
+
+  const lowerComp = cName.toLowerCase();
+  const lowerCountry = cCountry.toLowerCase();
+
+  // Continental / European club competitions -> Do NOT prefix with country
+  const isContinental =
+    lowerComp.includes("champions league") ||
+    lowerComp.includes("europa league") ||
+    lowerComp.includes("conference league") ||
+    lowerComp.includes("copa libertadores") ||
+    lowerComp.includes("copa sudamericana") ||
+    lowerComp.includes("nations league") ||
+    lowerComp.includes("world cup") ||
+    lowerComp.includes("ucl") ||
+    lowerComp.includes("uel") ||
+    lowerComp.includes("uecl") ||
+    lowerCountry === "europe" ||
+    lowerCountry === "international" ||
+    lowerCountry === "world";
+
+  if (isContinental) {
+    return cName;
+  }
+
+  // Find country either passed or from lookup map
+  const resolvedCountry = cCountry || LEAGUE_COUNTRY_MAP[cName.toUpperCase()] || LEAGUE_COUNTRY_MAP[cName.toUpperCase().replace(/\s+/g, "_")] || "";
+
+  if (!resolvedCountry || lowerComp.includes(resolvedCountry.toLowerCase())) {
+    return cName;
+  }
+
+  return `${resolvedCountry} · ${cName}`;
+};
+
 export default function TicketBuilderTab() {
   const [builderMode, setBuilderMode] = useState("TODAY_GAMES"); // "TODAY_GAMES", "ACCUMULATOR", or "ROLLOVER"
 
@@ -612,10 +711,16 @@ export default function TicketBuilderTab() {
         return {
           ...s,
           selections: newPicks,
-          accumulated_odds: newOdds
+          accumulated_odds: newOdds,
+          booking_code: null
         };
       });
       return { ...prev, scenarios: updated };
+    });
+    setGeneratedCodes((prev) => {
+      const copy = { ...prev };
+      delete copy[scenarioId];
+      return copy;
     });
   };
 
@@ -628,7 +733,8 @@ export default function TicketBuilderTab() {
         ...prev,
         picks: newPicks,
         totalMultiplier: newMultiplier,
-        finalEstimatedPayout: roundOddsVal(startingStake * newMultiplier)
+        finalEstimatedPayout: roundOddsVal(startingStake * newMultiplier),
+        bookingCode: null
       };
     });
   };
@@ -2024,6 +2130,8 @@ export default function TicketBuilderTab() {
                 <option value={2.00}>~2.00 Rollover Odds (Standard 2x Rollover)</option>
                 <option value={2.50}>~2.50 Rollover Odds (Dynamic Value)</option>
                 <option value={3.00}>~3.00 Rollover Odds (High Growth)</option>
+                <option value={4.00}>~4.00 Rollover Odds (4x Power Rollover)</option>
+                <option value={5.00}>~5.00 Rollover Odds (5x Max Multiplier)</option>
               </select>
             </div>
 
@@ -2389,8 +2497,8 @@ export default function TicketBuilderTab() {
                         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
                           <div>
                             <div className="flex items-center gap-2 mb-1">
-                              <span className="text-[10px] font-extrabold text-slate-500 bg-slate-200 px-2 py-0.5 rounded">
-                                {sel.competition || "League"}
+                              <span className="text-[10px] font-extrabold text-slate-700 bg-slate-200 px-2 py-0.5 rounded">
+                                {formatCompetitionWithCountry(sel.competition || sel.competition_code, sel.country)}
                               </span>
                               <span className={`text-[9px] font-extrabold px-2 py-0.2 rounded uppercase ${
                                 tier === "ELITE" ? "bg-purple-100 text-purple-800" :
@@ -2404,6 +2512,11 @@ export default function TicketBuilderTab() {
                             <span className="text-sm font-extrabold text-slate-900 block">
                               {sel.home_team} vs {sel.away_team}
                             </span>
+                            {sel.tactical_reason && (
+                              <span className="inline-block mt-1 text-[10px] font-extrabold text-indigo-700 bg-indigo-50 border border-indigo-200/80 px-2 py-0.5 rounded-md">
+                                {sel.tactical_reason}
+                              </span>
+                            )}
                             
                             {/* Assigned Pick Banner (Full Text & Clear Legibility) */}
                             <div className="mt-2 bg-white rounded-xl p-2.5 border border-slate-200 shadow-2xs space-y-2">
@@ -2655,7 +2768,7 @@ export default function TicketBuilderTab() {
                     <div className="flex-1 pr-2">
                       <div className="flex items-center gap-2 mb-1">
                         <span className="text-[10px] font-extrabold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded border border-indigo-200">
-                          {p.competition || "Today's Match"}
+                          {formatCompetitionWithCountry(p.competition || p.competition_code, p.country)}
                         </span>
                         <span className={`text-[9px] font-extrabold px-2 py-0.2 rounded uppercase ${
                           tier === "ELITE" ? "bg-purple-100 text-purple-800" :
@@ -2673,6 +2786,11 @@ export default function TicketBuilderTab() {
                       <span className="text-sm font-extrabold text-slate-900 block">
                         {p.home_team} vs {p.away_team}
                       </span>
+                      {p.tactical_reason && (
+                        <span className="inline-block mt-1 text-[10px] font-extrabold text-amber-800 bg-amber-50 border border-amber-200/80 px-2 py-0.5 rounded-md">
+                          {p.tactical_reason}
+                        </span>
+                      )}
                       
                       {/* Assigned Pick Banner (Full Text & Clear Legibility) */}
                       <div className="mt-2 bg-white rounded-xl p-2.5 border border-slate-200 shadow-2xs space-y-2">
