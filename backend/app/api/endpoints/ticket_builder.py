@@ -125,7 +125,7 @@ def _extract_live_market_data(ev: Dict[str, Any]) -> tuple:
                 except Exception:
                     pass
                     
-        # Over/Under Goals
+    # Over/Under Goals: Extract existing lines from raw feed
         if m_id == "18" or ("over/under" in m_desc and not any(k in m_desc for k in ["&", "1x2", "dc"])):
             line_m = re.search(r"total=(\d+\.?\d*)", spec) or re.search(r"(\d+\.?\d*)", m_desc)
             line_str = line_m.group(1) if line_m else "1.5"
@@ -151,6 +151,49 @@ def _extract_live_market_data(ev: Dict[str, Any]) -> tuple:
         dc_map["X2"] = round(1.0 / max(0.01, (1.0 / o_a + 1.0 / o_d) * 1.08), 2)
     if "12" not in dc_map and o_h > 1.0 and o_a > 1.0:
         dc_map["12"] = round(1.0 / max(0.01, (1.0 / o_h + 1.0 / o_a) * 1.08), 2)
+
+    # Universal SportyBet Half-Point Lines (1.5, 2.5, 3.5, 4.5):
+    # If the raw match feed only included a single/high line (e.g. 5.5), synthesize
+    # standard half-point lines using Poisson expectation so the engine has rich market depth
+    existing_lines = {str(item.get("line")) for item in ou_list}
+    exp_goals = 3.3 if (o_h <= 1.30 or o_a <= 1.30) else (2.9 if (o_h <= 1.60 or o_a <= 1.60) else 2.55)
+    
+    import math
+    p0 = math.exp(-exp_goals)
+    p1 = p0 * exp_goals
+    p2 = p1 * exp_goals / 2.0
+    p3 = p2 * exp_goals / 3.0
+    p4 = p3 * exp_goals / 4.0
+
+    p_u15 = p0 + p1
+    p_o15 = max(0.01, 1.0 - p_u15)
+    p_u25 = p_u15 + p2
+    p_o25 = max(0.01, 1.0 - p_u25)
+    p_u35 = p_u25 + p3
+    p_o35 = max(0.01, 1.0 - p_u35)
+    p_u45 = p_u35 + p4
+    p_o45 = max(0.01, 1.0 - p_u45)
+
+    margin = 1.07
+    if "1.5" not in existing_lines:
+        ou_list.append({
+            "line": "1.5",
+            "over": round(1.0 / (p_o15 * margin), 2),
+            "under": round(1.0 / (p_u15 * margin), 2)
+        })
+    if "2.5" not in existing_lines:
+        ou_list.append({
+            "line": "2.5",
+            "over": round(1.0 / (p_o25 * margin), 2),
+            "under": round(1.0 / (p_u25 * margin), 2)
+        })
+    if "3.5" not in existing_lines:
+        ou_list.append({
+            "line": "3.5",
+            "over": round(1.0 / (p_o35 * margin), 2),
+            "under": round(1.0 / (p_u35 * margin), 2)
+        })
+    # Note: Line 4.5 is a specialty line on SportyBet and is only included if SportyBet's active board published it
         
     return dc_map, ou_list
 
@@ -754,13 +797,17 @@ async def build_ai_ticket(req: BuildTicketRequest):
     def _verify_odds_pre_booking(legs: List[Dict[str, Any]], pool: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
         Pre-booking odds verification pass aligned with the active Risk Strategy Profile.
-        Conservative allows safe cushions [1.05, 1.40]; Aggressive allows high-yield lines [1.12, 3.00].
+        Strict 1.15 minimum odds floor enforced globally.
         """
         verified = []
         for leg in legs:
             market = str(leg.get("market_name") or "").lower()
             selection = str(leg.get("selection_name") or "").lower()
             odds = float(leg.get("odds") or leg.get("estimated_odds") or 1.25)
+
+            # Strict Global 1.15 Odds Floor: Reject all unviable micro-odds
+            if odds < 1.15:
+                continue
 
             is_dc = "double chance" in market
 
@@ -769,16 +816,19 @@ async def build_ai_ticket(req: BuildTicketRequest):
                 logger.warning(f"[OddsVerify] REJECTED DC trap: {leg.get('home_team')} vs {leg.get('away_team')} | {selection} @{odds:.2f} > 1.40")
                 continue
 
-            # Strict Odds Boundaries based on Risk Profile (Minimum Floor: 1.12)
+            # Strict Odds Boundaries based on Risk Profile
             if is_aggressive:
                 if odds < 1.20 or odds > 3.00:
                     continue
             else:
-                if odds < 1.12 or odds > 1.45:
+                if odds < 1.15 or odds > 1.45:
                     continue
 
             verified.append(leg)
         return verified
+
+    # Enforce maximum 15 games per ticket
+    target_games = min(15, target_games)
 
     for idx, b_ticket in enumerate(portfolio_built):
         # Pre-booking odds verification: purge any DC/O1.5 trap odds before generating code
@@ -793,7 +843,7 @@ async def build_ai_ticket(req: BuildTicketRequest):
                 seen_f = {str(x.get("fixture_id") or f"{x.get('home_team')}_{x.get('away_team')}") for x in verified_legs}
                 for orig_l in b_ticket.approved_legs:
                     f_k = str(orig_l.get("fixture_id") or f"{orig_l.get('home_team')}_{orig_l.get('away_team')}")
-                    if f_k not in seen_f:
+                    if f_k not in seen_f and float(orig_l.get("odds") or orig_l.get("estimated_odds") or 1.0) >= 1.15:
                         verified_legs.append(orig_l)
                         seen_f.add(f_k)
                         if len(verified_legs) >= target_games:
@@ -805,9 +855,17 @@ async def build_ai_ticket(req: BuildTicketRequest):
                 acc *= float(leg.get("odds") or leg.get("estimated_odds") or 1.25)
             b_ticket.accumulated_odds = round(acc, 2)
 
-        # Trim to exact target_games if in GAMES mode
+        # Trim to exact target_games (max 15) if in GAMES mode
         if req.target_mode == "GAMES" and len(b_ticket.approved_legs) > target_games:
             b_ticket.approved_legs = b_ticket.approved_legs[:target_games]
+            acc = 1.0
+            for leg in b_ticket.approved_legs:
+                acc *= float(leg.get("odds", 1.5))
+            b_ticket.accumulated_odds = round(acc, 2)
+
+        # Strict Global Cap: Maximum 15 legs per ticket on all modes
+        if len(b_ticket.approved_legs) > 15:
+            b_ticket.approved_legs = b_ticket.approved_legs[:15]
             acc = 1.0
             for leg in b_ticket.approved_legs:
                 acc *= float(leg.get("odds", 1.5))
@@ -866,5 +924,125 @@ async def build_ai_ticket(req: BuildTicketRequest):
             "message": f"Successfully generated {len(portfolio_results)} diversified portfolio tickets."
         }
     }
+
+
+class MergeMasterRequest(BaseModel):
+    slips: List[Dict[str, Any]]
+    target_games: Optional[int] = 10
+    country_code: Optional[str] = "ng"
+
+
+@router.post("/merge-master")
+async def merge_portfolio_to_master(req: MergeMasterRequest):
+    """
+    Merges 2 (or more) variant portfolio tickets into 1 unified Master Ticket.
+    - Resolves shared fixtures by selecting the single highest-win-probability market.
+    - Slices to the user's prioritized game count (5, 8, 10, 12, 15 max).
+    - Calculates accumulated odds and joint probability.
+    - Generates live verified SportyBet booking code.
+    """
+    if not req.slips:
+        raise HTTPException(status_code=400, detail="No slips provided to merge.")
+
+    # 1. Gather all candidate legs across all slips
+    fixture_candidates: Dict[str, List[Dict[str, Any]]] = {}
+
+    for s_idx, slip in enumerate(req.slips):
+        legs = slip.get("approved_legs") or slip.get("final_selections") or slip.get("selections") or []
+        for leg in legs:
+            f_id = str(leg.get("fixture_id") or leg.get("event_id") or leg.get("provider_event_id") or "")
+            h_name = str(leg.get("home_team") or "").strip().lower()
+            a_name = str(leg.get("away_team") or "").strip().lower()
+            f_key = f"{h_name}_vs_{a_name}" if (h_name and a_name) else f_id
+            if not f_key:
+                continue
+
+            if f_key not in fixture_candidates:
+                fixture_candidates[f_key] = []
+            fixture_candidates[f_key].append(leg)
+
+    if not fixture_candidates:
+        raise HTTPException(status_code=400, detail="No valid match legs found in provided slips.")
+
+    # 2. For each unique fixture, select the best candidate pick
+    best_picks_per_fixture = []
+    for f_key, leg_list in fixture_candidates.items():
+        def _score_leg(l):
+            prob = float(l.get("model_probability") or l.get("win_prob") or 0.70)
+            odds = float(l.get("odds") or l.get("estimated_odds") or 1.25)
+            return (prob, -abs(odds - 1.25))
+
+        leg_list.sort(key=_score_leg, reverse=True)
+        best_picks_per_fixture.append(leg_list[0])
+
+    # 3. Sort all unique fixtures by conviction (model_probability descending, safety)
+    def _rank_fixture(l):
+        prob = float(l.get("model_probability") or l.get("win_prob") or 0.70)
+        odds = float(l.get("odds") or l.get("estimated_odds") or 1.25)
+        return (prob, odds)
+
+    best_picks_per_fixture.sort(key=_rank_fixture, reverse=True)
+
+    # 4. Slice to prioritized target_games (clamped between 2 and 15)
+    t_games = max(2, min(15, int(req.target_games or 10)))
+    master_legs = best_picks_per_fixture[:t_games]
+
+    # Recalculate accumulated odds and combined probability
+    acc_odds = 1.0
+    comb_prob = 1.0
+    for leg in master_legs:
+        o = float(leg.get("odds") or leg.get("estimated_odds") or 1.25)
+        p = float(leg.get("model_probability") or leg.get("win_prob") or 0.75)
+        acc_odds *= o
+        comb_prob *= min(0.95, p)
+
+    acc_odds = round(acc_odds, 2)
+    comb_prob = round(comb_prob, 4)
+
+    # 5. Generate SportyBet booking code
+    booking_code = None
+    share_url = None
+    try:
+        from app.adapters.bookmaker_adapter import SportyBetAdapter
+        adapter = SportyBetAdapter()
+        code_res = adapter.generate_booking_code(master_legs, country_code=req.country_code or "ng")
+        if code_res.get("status") == "SUCCESS" and code_res.get("booking_code"):
+            booking_code = code_res.get("booking_code")
+            share_url = code_res.get("load_url")
+    except Exception as e:
+        logger.warning(f"Error generating SportyBet code for master ticket: {e}")
+
+    master_ticket = {
+        "scenario_id": f"STATIQ-MASTER-SLIP-{len(master_legs)}G",
+        "ticket_index": "MASTER",
+        "is_master": True,
+        "title": f"⚡ Master Ticket ({len(master_legs)} Legs)",
+        "scope_label": f"Master Ticket · Top {len(master_legs)} Prioritized Games",
+        "gameweek_label": "MERGED_MASTER",
+        "target_mode": "GAMES",
+        "target_games": len(master_legs),
+        "target_odds": acc_odds,
+        "accumulated_odds": acc_odds,
+        "new_total_odds": str(acc_odds),
+        "final_count": len(master_legs),
+        "combined_probability": comb_prob,
+        "avg_win_prob": round(sum(float(l.get("model_probability") or l.get("win_prob") or 0.75) for l in master_legs) / max(1, len(master_legs)), 2),
+        "correlation_adjusted_probability": round(comb_prob * 1.08, 4),
+        "confidence_tier": "ELITE" if comb_prob > 0.25 else "HIGH",
+        "recommended_stake_pct": 2.5,
+        "approved_legs": master_legs,
+        "final_selections": master_legs,
+        "selections": master_legs,
+        "booking_code": booking_code,
+        "share_url": share_url or (f"https://www.sportybet.com/ng/?shareCode={booking_code}" if booking_code else None),
+        "verification_status": "BOOKING_VERIFIED" if booking_code else "PENDING",
+        "notice": f"Merged from {len(req.slips)} slips into {len(master_legs)} prioritized high-conviction games."
+    }
+
+    return {
+        "status": "SUCCESS",
+        "master_ticket": master_ticket
+    }
+
 
 

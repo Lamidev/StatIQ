@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
-import { fetchFixturesByGameweek, generateSportyBetCode, generateVerifiedBookingCode, buildAiTicket, lockTrackedTicket, fetchTodaysSportybetGames } from "../api/client";
-import { Copy, Info, Calendar, Send, ShieldCheck, RefreshCw, CheckCircle2, ExternalLink, X, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, AlertCircle, Award, Trash2, Lock, ShieldAlert, Sliders, Sparkles, Search, Filter, BarChart2, Target, RotateCcw, Ticket, Layers } from "lucide-react";
+import { fetchFixturesByGameweek, generateSportyBetCode, generateVerifiedBookingCode, buildAiTicket, lockTrackedTicket, fetchTodaysSportybetGames, mergeMasterTicket } from "../api/client";
+import { Copy, Info, Calendar, Send, ShieldCheck, RefreshCw, CheckCircle2, ExternalLink, X, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, AlertCircle, Award, Trash2, Lock, ShieldAlert, Sliders, Sparkles, Search, Filter, BarChart2, Target, RotateCcw, Ticket, Layers, Zap } from "lucide-react";
 
 import { generateSafePick, buildSafeTicket, scoreFixtures } from "../utils/pickEngine";
 import { calculateFlexShield } from "../utils/flexCalculator";
@@ -165,6 +165,9 @@ export default function TicketBuilderTab() {
   const [numTickets, setNumTickets] = useState(1); // 1, 2, 3 (Multi-Ticket Portfolio)
   const [activePortfolioIndex, setActivePortfolioIndex] = useState(0);
   const [portfolioTickets, setPortfolioTickets] = useState(null);
+  const [mergingMaster, setMergingMaster] = useState(false);
+  const [masterPrioritizedGames, setMasterPrioritizedGames] = useState(10);
+  const [customMasterGamesInput, setCustomMasterGamesInput] = useState("10");
   const [selectedLeagues, setSelectedLeagues] = useState(TOP_MAJOR_EUROPEAN_CODES);
   const [dateWindow, setDateWindow] = useState("TODAY");
   const [selectedFlexCut, setSelectedFlexCut] = useState("OFF");
@@ -589,6 +592,8 @@ export default function TicketBuilderTab() {
         ticket_index: tIdx + 1,
         scope_label: `${scopeLabel} · Slip #${tIdx + 1} (${t.approved_legs.length} Legs)`,
         gameweek_label: dateWindow,
+        target_mode: targetMode,
+        target_games: targetGames,
         target_odds: finalOddsGoal,
         accumulated_odds: t.accumulated_odds,
         independence_assumption_probability: t.combined_probability,
@@ -619,6 +624,8 @@ export default function TicketBuilderTab() {
             ticket_index: 1,
             scope_label: `${scopeLabel} · ${dateWindow}`,
             gameweek_label: dateWindow,
+            target_mode: targetMode,
+            target_games: targetGames,
             target_odds: finalOddsGoal,
             accumulated_odds: res.ticket.accumulated_odds,
             independence_assumption_probability: res.ticket.combined_probability,
@@ -634,6 +641,34 @@ export default function TicketBuilderTab() {
           }
         ]
       });
+    }
+  };
+
+  // Merge Portfolio Variant Slips into 1 Unified Master Ticket
+  const handleMergeToMaster = async (gamesCount = masterPrioritizedGames) => {
+    if (!result?.scenarios || result.scenarios.length < 2) return;
+    setMergingMaster(true);
+    try {
+      const payload = {
+        slips: result.scenarios,
+        target_games: gamesCount,
+        country_code: "ng"
+      };
+      const res = await mergeMasterTicket(payload, "/ai-ticket/merge-master");
+      if (res?.status === "SUCCESS" && res?.master_ticket) {
+        const masterScn = res.master_ticket;
+        const filtered = result.scenarios.filter(s => s.ticket_index !== "MASTER" && !s.is_master);
+        const newScenarios = [...filtered, masterScn];
+        setResult({
+          ...result,
+          scenarios: newScenarios
+        });
+        setActivePortfolioIndex(newScenarios.length - 1);
+      }
+    } catch (e) {
+      console.error("Master ticket merge error:", e);
+    } finally {
+      setMergingMaster(false);
     }
   };
 
@@ -1839,7 +1874,10 @@ export default function TicketBuilderTab() {
                 <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl w-fit">
                   <button
                     type="button"
-                    onClick={() => setTargetMode("ODDS")}
+                    onClick={() => {
+                      setTargetMode("ODDS");
+                      if (numTickets === 2) setTargetOdds(22.0);
+                    }}
                     className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${
                       targetMode === "ODDS" ? "bg-white shadow-sm text-slate-900" : "text-slate-500 hover:text-slate-800"
                     }`}
@@ -1848,7 +1886,13 @@ export default function TicketBuilderTab() {
                   </button>
                   <button
                     type="button"
-                    onClick={() => setTargetMode("GAMES")}
+                    onClick={() => {
+                      setTargetMode("GAMES");
+                      if (numTickets === 2) {
+                        setTargetGames(15);
+                        setCustomGamesInput("15");
+                      }
+                    }}
                     className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${
                       targetMode === "GAMES" ? "bg-white shadow-sm text-slate-900" : "text-slate-500 hover:text-slate-800"
                     }`}
@@ -1859,9 +1903,13 @@ export default function TicketBuilderTab() {
 
                 {targetMode === "ODDS" ? (
                   <div className="space-y-3">
-                    <p className="text-xs text-slate-500">Select target odds or enter custom multiplier:</p>
+                    <p className="text-xs text-slate-500">
+                      {numTickets === 2
+                        ? "Select target odds (20–25x recommended for 2-variant slips):"
+                        : "Select target odds or enter custom multiplier:"}
+                    </p>
                     <div className="flex flex-wrap gap-2">
-                      {[2.0, 5.0, 10.0, 20.0, 50.0, 100.0, 200.0, 500.0].map((val) => (
+                      {[2.0, 5.0, 10.0, 20.0, 22.0, 25.0, 50.0, 100.0, 200.0].map((val) => (
                         <button
                           key={val}
                           type="button"
@@ -1879,7 +1927,7 @@ export default function TicketBuilderTab() {
                     <div className="flex items-center gap-2 pt-1">
                       <input
                         type="text"
-                        placeholder="Custom odds (e.g. 7.5)"
+                        placeholder="Custom odds (e.g. 22.0)"
                         value={customOdds}
                         onChange={(e) => {
                           const valStr = e.target.value;
@@ -1898,9 +1946,13 @@ export default function TicketBuilderTab() {
                   </div>
                 ) : (
                   <div className="space-y-3">
-                    <p className="text-xs text-slate-500">How many games do you want in your ticket (up to 50)?</p>
+                    <p className="text-xs text-slate-500">
+                      {numTickets === 2
+                        ? "How many games per slip? (Strictly max 15 games for 2-variant portfolio):"
+                        : "How many games do you want in your ticket (up to 50)?"}
+                    </p>
                     <div className="flex flex-wrap gap-2">
-                      {[5, 10, 15, 20, 25, 30, 40, 50].map((num) => (
+                      {(numTickets === 2 ? [5, 10, 15] : [5, 10, 15, 20, 25, 30, 40, 50]).map((num) => (
                         <button
                           key={num}
                           type="button"
@@ -1918,19 +1970,21 @@ export default function TicketBuilderTab() {
                     <div className="flex items-center gap-2 pt-1">
                       <input
                         type="text"
-                        placeholder="Custom (1–50)"
+                        placeholder={numTickets === 2 ? "Custom (1–15)" : "Custom (1–50)"}
                         value={customGamesInput}
                         onChange={(e) => {
                           const raw = e.target.value;
                           setCustomGamesInput(raw);
-                          const num = parseInt(raw);
-                          if (!isNaN(num) && num >= 1 && num <= 50) {
+                          let num = parseInt(raw);
+                          const maxLimit = numTickets === 2 ? 15 : 50;
+                          if (!isNaN(num) && num >= 1) {
+                            num = Math.min(maxLimit, num);
                             setTargetGames(num);
                           }
                         }}
                         className="w-40 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-900"
                       />
-                      <span className="text-xs text-slate-400">games in ticket</span>
+                      <span className="text-xs text-slate-400">games in ticket (max {numTickets === 2 ? 15 : 50})</span>
                     </div>
                     <div className="bg-slate-50 rounded-xl px-4 py-2.5 text-xs text-slate-600 font-medium">
                       Target: <strong className="text-slate-900">{targetGames} games</strong>
@@ -1976,11 +2030,23 @@ export default function TicketBuilderTab() {
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                     {[
                       { id: 1, label: "1 Ticket", desc: "Single optimal ticket" },
-                      { id: 2, label: "2 Variant Tickets Portfolio", desc: "2 distinct non-overlapping / hedged slips" },
+                      { id: 2, label: "2 Variant Tickets Portfolio", desc: "2 distinct non-overlapping / hedged slips (Max 15 games or 20–25x odds)" },
                     ].map(nt => (
                       <div
                         key={nt.id}
-                        onClick={() => setNumTickets(nt.id)}
+                        onClick={() => {
+                          setNumTickets(nt.id);
+                          if (nt.id === 2) {
+                            if (targetMode === "GAMES") {
+                              setTargetGames(15);
+                              setCustomGamesInput("15");
+                            } else {
+                              setTargetOdds(22.0);
+                              setCustomOdds("");
+                              setUseCustom(false);
+                            }
+                          }
+                        }}
                         className={`p-3 rounded-xl border cursor-pointer transition-all ${
                           numTickets === nt.id
                             ? "bg-slate-900 border-slate-900 text-white shadow-sm"
@@ -2367,24 +2433,36 @@ export default function TicketBuilderTab() {
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-1">
                 {result.scenarios.map((sc, scIdx) => {
                   const isCurrent = activePortfolioIndex === scIdx;
+                  const isMaster = sc.is_master || sc.ticket_index === "MASTER";
+
                   return (
                     <button
                       key={scIdx}
                       type="button"
                       onClick={() => setActivePortfolioIndex(scIdx)}
                       className={`w-full p-3 rounded-xl border text-left transition-all flex flex-col justify-between gap-2 cursor-pointer ${
-                        isCurrent
-                          ? "bg-slate-800 border-emerald-400 ring-2 ring-emerald-400/50 text-white shadow-lg scale-[1.01]"
-                          : "bg-slate-950/70 border-slate-800 text-slate-400 hover:bg-slate-800 hover:text-slate-200"
+                        isMaster
+                          ? (isCurrent
+                            ? "bg-amber-950/70 border-amber-400 ring-2 ring-amber-400/50 text-white shadow-lg scale-[1.01]"
+                            : "bg-slate-950/80 border-amber-500/40 text-amber-300 hover:bg-amber-950/40")
+                          : (isCurrent
+                            ? "bg-slate-800 border-emerald-400 ring-2 ring-emerald-400/50 text-white shadow-lg scale-[1.01]"
+                            : "bg-slate-950/70 border-slate-800 text-slate-400 hover:bg-slate-800 hover:text-slate-200")
                       }`}
                     >
                       <div className="flex items-center justify-between">
                         <span className="text-xs font-black text-white flex items-center gap-1.5">
-                          <Ticket className="w-3.5 h-3.5 text-emerald-400" />
-                          <span>Slip #{scIdx + 1}</span>
+                          {isMaster ? (
+                            <Zap className="w-3.5 h-3.5 text-amber-400 fill-amber-400" />
+                          ) : (
+                            <Ticket className="w-3.5 h-3.5 text-emerald-400" />
+                          )}
+                          <span>{isMaster ? "Master Ticket" : `Slip #${scIdx + 1}`}</span>
                         </span>
                         <span className={`text-[10px] px-2 py-0.5 rounded font-black ${
-                          isCurrent ? "bg-emerald-500 text-slate-950" : "bg-slate-800 text-slate-300"
+                          isMaster
+                            ? "bg-amber-400 text-slate-950"
+                            : (isCurrent ? "bg-emerald-500 text-slate-950" : "bg-slate-800 text-slate-300")
                         }`}>
                           ~{sc.accumulated_odds}x
                         </span>
@@ -2392,16 +2470,98 @@ export default function TicketBuilderTab() {
                       <div className="flex items-center justify-between text-[11px] pt-1 border-t border-slate-800/80">
                         <span className="text-slate-400 font-bold">{sc.selections?.length || 0} Legs</span>
                         {sc.booking_code ? (
-                          <span className="font-mono font-black text-emerald-400 bg-emerald-950/70 px-2 py-0.5 rounded border border-emerald-800/60 text-[10px]">
+                          <span className={`font-mono font-black px-2 py-0.5 rounded border text-[10px] ${
+                            isMaster
+                              ? "text-amber-300 bg-amber-950/80 border-amber-500/50"
+                              : "text-emerald-400 bg-emerald-950/70 border-emerald-800/60"
+                          }`}>
                             {sc.booking_code}
                           </span>
                         ) : (
-                          <span className="text-emerald-400 font-bold text-[10px]">Active Slip</span>
+                          <span className={isMaster ? "text-amber-400 font-bold text-[10px]" : "text-emerald-400 font-bold text-[10px]"}>
+                            {isMaster ? "Master Unified" : "Active Slip"}
+                          </span>
                         )}
                       </div>
                     </button>
                   );
                 })}
+              </div>
+
+              {/* Merge into Master Ticket Action Panel */}
+              <div className="bg-gradient-to-r from-amber-950/40 via-slate-900 to-amber-950/30 border border-amber-500/30 rounded-xl p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-inner">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-lg bg-amber-500/20 border border-amber-400/40 flex items-center justify-center flex-shrink-0">
+                    <Zap className="w-4 h-4 text-amber-400" />
+                  </div>
+                  <div>
+                    <h4 className="text-xs font-black text-amber-300 flex items-center gap-1.5">
+                      <span>Merge into Master Ticket</span>
+                      <span className="text-[9px] px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-200 border border-amber-400/30 font-bold uppercase">
+                        Zero Duplicates
+                      </span>
+                    </h4>
+                    <p className="text-[11px] text-slate-400">
+                      Resolves overlapping matches by picking highest-probability market, prioritizing top winnable games.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 flex-wrap">
+                  <div className="flex items-center gap-1.5 bg-slate-950/80 p-1 rounded-lg border border-slate-800">
+                    <span className="text-[10px] text-slate-400 font-extrabold px-1.5">Games:</span>
+                    {[5, 8, 10, 12, 15].map((cnt) => (
+                      <button
+                        key={cnt}
+                        type="button"
+                        onClick={() => {
+                          setMasterPrioritizedGames(cnt);
+                          setCustomMasterGamesInput(String(cnt));
+                        }}
+                        className={`px-2.5 py-1 rounded text-xs font-black transition-all ${
+                          masterPrioritizedGames === cnt
+                            ? "bg-amber-400 text-slate-950 shadow-sm"
+                            : "text-slate-400 hover:text-white"
+                        }`}
+                      >
+                        {cnt}
+                      </button>
+                    ))}
+                    <div className="flex items-center gap-1 pl-1.5 border-l border-slate-800">
+                      <input
+                        type="number"
+                        min="2"
+                        max="15"
+                        placeholder="1-15"
+                        value={customMasterGamesInput}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setCustomMasterGamesInput(val);
+                          const parsed = parseInt(val, 10);
+                          if (!isNaN(parsed) && parsed >= 2) {
+                            setMasterPrioritizedGames(Math.min(15, parsed));
+                          }
+                        }}
+                        className="w-12 bg-slate-900 border border-slate-700 text-amber-300 placeholder-slate-500 rounded px-1.5 py-0.5 text-xs font-black text-center focus:outline-none focus:border-amber-400"
+                        title="Type any number of games (e.g. 13 or 14, max 15)"
+                      />
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => handleMergeToMaster(masterPrioritizedGames)}
+                    disabled={mergingMaster}
+                    className="px-4 py-2 rounded-xl bg-gradient-to-r from-amber-400 to-amber-500 hover:from-amber-300 hover:to-amber-400 text-slate-950 text-xs font-black flex items-center gap-1.5 shadow-md hover:shadow-amber-500/20 transition-all cursor-pointer disabled:opacity-50"
+                  >
+                    {mergingMaster ? (
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <Zap className="w-3.5 h-3.5 fill-slate-950" />
+                    )}
+                    <span>{mergingMaster ? "Merging Slips..." : `Generate ${masterPrioritizedGames}-Game Master Slip`}</span>
+                  </button>
+                </div>
               </div>
 
               {/* Mobile Quick Prev / Next Navigator */}
@@ -2418,7 +2578,7 @@ export default function TicketBuilderTab() {
                   <span>Prev Slip</span>
                 </button>
                 <span className="font-extrabold text-emerald-400 text-[11px]">
-                  Viewing Slip #{activePortfolioIndex + 1} of {result.scenarios.length}
+                  Viewing {result.scenarios[activePortfolioIndex]?.is_master ? "Master Ticket" : `Slip #${activePortfolioIndex + 1}`} of {result.scenarios.length}
                 </span>
                 <button
                   type="button"
@@ -2450,15 +2610,24 @@ export default function TicketBuilderTab() {
               );
             }
 
+            const isMasterSlip = scn.is_master || scn.ticket_index === "MASTER";
+
             return (
-              <div key={scn.scenario_id} className="bg-white p-6 rounded-2xl border border-slate-200 space-y-4 shadow-sm relative">
+              <div key={scn.scenario_id} className={`bg-white p-6 rounded-2xl border space-y-4 shadow-sm relative ${
+                isMasterSlip ? "border-amber-400 ring-2 ring-amber-400/20" : "border-slate-200"
+              }`}>
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-slate-100 pb-3 gap-2">
                   <div>
                     <div className="flex items-center gap-2">
-                      <span className="font-extrabold text-slate-900 text-sm">
-                        5-Gate Approved Accumulator ({scn.selections.length} Legs)
+                      <span className="font-extrabold text-slate-900 text-sm flex items-center gap-1.5">
+                        {isMasterSlip && <Zap className="w-4 h-4 text-amber-500 fill-amber-500" />}
+                        <span>{isMasterSlip ? `⚡ Master Unified Accumulator (${scn.selections.length} Legs)` : `5-Gate Approved Accumulator (${scn.selections.length} Legs)`}</span>
                       </span>
-                      {scn.confidence_tier && (
+                      {isMasterSlip ? (
+                        <span className="text-[10px] font-extrabold px-2.5 py-0.5 rounded-full uppercase tracking-wider bg-amber-100 text-amber-900 border border-amber-300">
+                          ⚡ MASTER TICKET
+                        </span>
+                      ) : scn.confidence_tier && (
                         <span className={`text-[10px] font-extrabold px-2.5 py-0.5 rounded-full uppercase tracking-wider ${
                           scn.confidence_tier === "ELITE" ? "bg-purple-100 text-purple-900 border border-purple-200" :
                           scn.confidence_tier === "HIGH" ? "bg-emerald-100 text-emerald-900 border border-emerald-200" :
@@ -2470,7 +2639,7 @@ export default function TicketBuilderTab() {
                       )}
                     </div>
                     <span className="text-xs text-slate-500 font-medium mt-0.5 block">
-                      Scope: <strong>{scn.scope_label}</strong> • Combined Odds: <strong>~{scn.accumulated_odds}x</strong> (Target: ~{scn.target_odds}x)
+                      Scope: <strong>{scn.scope_label}</strong> • Combined Odds: <strong>~{scn.accumulated_odds}x</strong> {scn.target_mode === "GAMES" ? `(Target: ${scn.target_games || scn.selections?.length} Games)` : `(Target: ~${scn.target_odds}x)`}
                     </span>
                   </div>
 

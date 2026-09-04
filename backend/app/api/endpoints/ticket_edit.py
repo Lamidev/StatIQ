@@ -186,3 +186,114 @@ async def get_match_stats(req: MatchStatsBatchRequest):
         "api_calls_made": len(stats),
         "stats": {str(k): v for k, v in stats.items()}
     }
+
+
+class MergeMasterRequest(BaseModel):
+    slips: List[Dict[str, Any]]
+    target_games: Optional[int] = 10
+    country_code: Optional[str] = "ng"
+
+
+@router.post("/merge-master")
+async def merge_portfolio_to_master(req: MergeMasterRequest, db: Session = Depends(get_db)):
+    """
+    Merges 2 (or more) variant tickets into 1 unified Master Ticket for BetSlip Auditor.
+    - Resolves shared fixtures by picking highest conviction/win probability.
+    - Slices to user-selected prioritized games count (5, 8, 10, 12, 15 max).
+    - Generates live verified SportyBet booking code.
+    """
+    if not req.slips:
+        raise HTTPException(status_code=400, detail="No slips provided to merge.")
+
+    fixture_candidates: Dict[str, List[Dict[str, Any]]] = {}
+
+    for s_idx, slip in enumerate(req.slips):
+        legs = slip.get("approved_legs") or slip.get("final_selections") or slip.get("selections") or []
+        for leg in legs:
+            f_id = str(leg.get("fixture_id") or leg.get("event_id") or leg.get("provider_event_id") or "")
+            h_name = str(leg.get("home_team") or "").strip().lower()
+            a_name = str(leg.get("away_team") or "").strip().lower()
+            f_key = f"{h_name}_vs_{a_name}" if (h_name and a_name) else f_id
+            if not f_key:
+                continue
+
+            if f_key not in fixture_candidates:
+                fixture_candidates[f_key] = []
+            fixture_candidates[f_key].append(leg)
+
+    if not fixture_candidates:
+        raise HTTPException(status_code=400, detail="No valid match legs found in provided slips.")
+
+    best_picks_per_fixture = []
+    for f_key, leg_list in fixture_candidates.items():
+        def _score_leg(l):
+            prob = float(l.get("model_probability") or l.get("win_prob") or 0.70)
+            odds = float(l.get("odds") or l.get("estimated_odds") or 1.25)
+            return (prob, -abs(odds - 1.25))
+
+        leg_list.sort(key=_score_leg, reverse=True)
+        best_picks_per_fixture.append(leg_list[0])
+
+    def _rank_fixture(l):
+        prob = float(l.get("model_probability") or l.get("win_prob") or 0.70)
+        odds = float(l.get("odds") or l.get("estimated_odds") or 1.25)
+        return (prob, odds)
+
+    best_picks_per_fixture.sort(key=_rank_fixture, reverse=True)
+
+    t_games = max(2, min(15, int(req.target_games or 10)))
+    master_legs = best_picks_per_fixture[:t_games]
+
+    acc_odds = 1.0
+    comb_prob = 1.0
+    for leg in master_legs:
+        o = float(leg.get("odds") or leg.get("estimated_odds") or 1.25)
+        p = float(leg.get("model_probability") or leg.get("win_prob") or 0.75)
+        acc_odds *= o
+        comb_prob *= min(0.95, p)
+
+    acc_odds = round(acc_odds, 2)
+    comb_prob = round(comb_prob, 4)
+
+    booking_code = None
+    share_url = None
+    try:
+        adapter = SportyBetAdapter(db)
+        code_res = await asyncio.to_thread(adapter.generate_booking_code, master_legs, req.country_code or "ng")
+        if code_res.get("status") == "SUCCESS" and code_res.get("booking_code"):
+            booking_code = code_res.get("booking_code")
+            share_url = code_res.get("load_url")
+    except Exception as e:
+        logger.warning(f"Error generating SportyBet code for master ticket: {e}")
+
+    master_ticket = {
+        "scenario_id": f"STATIQ-MASTER-SLIP-{len(master_legs)}G",
+        "ticket_index": "MASTER",
+        "is_master": True,
+        "title": f"⚡ Master Ticket ({len(master_legs)} Legs)",
+        "scope_label": f"Master Ticket · Top {len(master_legs)} Prioritized Games",
+        "gameweek_label": "MERGED_MASTER",
+        "target_mode": "GAMES",
+        "target_games": len(master_legs),
+        "target_odds": acc_odds,
+        "accumulated_odds": acc_odds,
+        "new_total_odds": str(acc_odds),
+        "final_count": len(master_legs),
+        "combined_probability": comb_prob,
+        "avg_win_prob": round(sum(float(l.get("model_probability") or l.get("win_prob") or 0.75) for l in master_legs) / max(1, len(master_legs)), 2),
+        "confidence_tier": "ELITE" if comb_prob > 0.25 else "HIGH",
+        "recommended_stake_pct": 2.5,
+        "approved_legs": master_legs,
+        "final_selections": master_legs,
+        "selections": master_legs,
+        "booking_code": booking_code,
+        "share_url": share_url or (f"https://www.sportybet.com/ng/?shareCode={booking_code}" if booking_code else None),
+        "verification_status": "BOOKING_VERIFIED" if booking_code else "PENDING",
+        "notice": f"Merged from {len(req.slips)} slips into {len(master_legs)} prioritized high-conviction games."
+    }
+
+    return {
+        "status": "SUCCESS",
+        "master_ticket": master_ticket
+    }
+

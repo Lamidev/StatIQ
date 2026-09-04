@@ -1,6 +1,6 @@
 import React, { useState } from "react";
-import { decodeBookingCode, runTicketReEdit, generateNewBookingCode, generateVerifiedBookingCode, lockTrackedTicket, fetchTrackedTickets as fetchTrackedTicketsApi, deleteTrackedTicket as deleteTrackedTicketApi } from "../api/client";
-import { Search, Copy, CheckCircle, CheckCircle2, ShieldCheck, ShieldAlert, AlertTriangle, ArrowRight, RefreshCw, Trash2, Sliders, ExternalLink, X, Receipt, Sparkles, Scissors, Layers, Ticket } from "lucide-react";
+import { decodeBookingCode, runTicketReEdit, generateNewBookingCode, generateVerifiedBookingCode, lockTrackedTicket, fetchTrackedTickets as fetchTrackedTicketsApi, deleteTrackedTicket as deleteTrackedTicketApi, mergeMasterTicket } from "../api/client";
+import { Search, Copy, CheckCircle, CheckCircle2, ShieldCheck, ShieldAlert, AlertTriangle, ArrowRight, RefreshCw, Trash2, Sliders, ExternalLink, X, Receipt, Sparkles, Scissors, Layers, Ticket, Zap } from "lucide-react";
 
 import { calculateFlexShield } from "../utils/flexCalculator";
 import { formatCompetitionWithCountry } from "./TicketBuilderTab";
@@ -33,6 +33,9 @@ export default function BetSlipAuditorTab({ onNavigateHistory, onTicketLocked })
   const [reEditError, setReEditError] = useState(null);
   const [generatedCode, setGeneratedCode] = useState(null);
   const [generatingCode, setGeneratingCode] = useState(false);
+  const [mergingMaster, setMergingMaster] = useState(false);
+  const [masterPrioritizedGames, setMasterPrioritizedGames] = useState(10);
+  const [customMasterGamesInput, setCustomMasterGamesInput] = useState("10");
 
   // Modal UI state for clean code generation popup
   const [codeModalData, setCodeModalData] = useState(null);
@@ -298,6 +301,36 @@ export default function BetSlipAuditorTab({ onNavigateHistory, onTicketLocked })
     }
   };
 
+  const handleMergeToMaster = async (gamesCount = masterPrioritizedGames) => {
+    const portfolioSlips = (reEditResult?.portfolio_tickets && reEditResult.portfolio_tickets.length > 0)
+      ? reEditResult.portfolio_tickets
+      : [reEditResult];
+    if (!portfolioSlips || portfolioSlips.length < 2) return;
+    setMergingMaster(true);
+    try {
+      const payload = {
+        slips: portfolioSlips,
+        target_games: gamesCount,
+        country_code: "ng"
+      };
+      const res = await mergeMasterTicket(payload, "/ticket-edit/merge-master");
+      if (res?.status === "SUCCESS" && res?.master_ticket) {
+        const masterSlip = res.master_ticket;
+        const filtered = portfolioSlips.filter(s => s.ticket_index !== "MASTER" && !s.is_master);
+        const newSlips = [...filtered, masterSlip];
+        setReEditResult({
+          ...reEditResult,
+          portfolio_tickets: newSlips,
+        });
+        setActivePortfolioIndex(newSlips.length - 1);
+      }
+    } catch (e) {
+      console.error("Master ticket merge error in Auditor:", e);
+    } finally {
+      setMergingMaster(false);
+    }
+  };
+
   const handleRemoveRiskyMatches = () => {
     if (!ticketData || !ticketData.selections) return;
     const initialCount = ticketData.selections.length;
@@ -307,11 +340,26 @@ export default function BetSlipAuditorTab({ onNavigateHistory, onTicketLocked })
       const mkt = (s.market_name || "").toLowerCase();
       const sel = (s.selection_name || "").toLowerCase();
       const st = (s.match_status || "").toUpperCase();
+      const comp = (s.competition || "").toLowerCase();
 
-      // Nulled, Concluded, or Live games are trimmed
-      if (st === "NULLED_EXPIRED" || st === "CONCLUDED" || st === "FINISHED" || st === "FT" || st === "LIVE" || st === "IN_PROGRESS") {
+      // Nulled, Concluded, Started, or Live games are trimmed
+      const liveStatuses = ["NULLED_EXPIRED", "CONCLUDED", "FINISHED", "FT", "LIVE", "IN_PROGRESS", "ONGOING", "STARTED", "1H", "2H", "HT", "ENDED", "CANCELLED", "POSTPONED", "ABANDONED", "CLOSED"];
+      if (liveStatuses.includes(st)) {
         return false;
       }
+
+      if (s.start_time_ms && (Date.now() - s.start_time_ms) > -180000) {
+        return false;
+      }
+
+      // Strict minimum odds floor: 1.15
+      if (oddsNum < 1.15) {
+        return false;
+      }
+
+      // Purge Tier 3 Youth / Reserve / Amateur volatile competitions
+      const isTier3 = ["u19", "u20", "u21", "u23", "u18", "u17", "youth", "reserve", "reserves", "amateur", "regional", "promotion league", "tercera"].some(k => comp.includes(k));
+      if (isTier3) return false;
 
       // Volatile trap markets trimmed
       const isTrapMarket = 
@@ -321,18 +369,29 @@ export default function BetSlipAuditorTab({ onNavigateHistory, onTicketLocked })
         sel.includes("over 9.5") || 
         sel.includes("over 8.5") || 
         mkt.includes("both teams to score") || 
-        sel.includes("gg");
+        sel.includes("gg") ||
+        sel.includes("or over") ||
+        mkt.includes("or over") ||
+        sel.includes("or under") ||
+        mkt.includes("or under");
 
       if (isTrapMarket) return false;
 
-      // Safe market floor: Double Chance, Over 1.5, Over 0.5, 1X, X2, or low odds floor
+      // Volatile 12 Double Chance (Home or Away) draw-trap trimmed
+      if (sel.includes("12") || sel.includes("home or away") || mkt.includes("12")) {
+        return false;
+      }
+
+      // Safe market floor: Double Chance 1X/X2, Over 1.5, Under 3.5, Asian Handicap +1.5, Team Over 0.5 (with odds >= 1.15)
       const isSafeType = 
-        mkt.includes("double chance") || 
         sel.includes("1x") || 
         sel.includes("x2") || 
         sel.includes("over 1.5") || 
+        sel.includes("under 3.5") ||
+        sel.includes("under 4.5") ||
         sel.includes("over 0.5") || 
-        (oddsNum >= 1.15 && oddsNum <= 1.45);
+        sel.includes("+1.5") ||
+        (oddsNum >= 1.15 && oddsNum <= 1.45 && !sel.includes("12") && !sel.includes("home or away"));
 
       return isSafeType;
     });
@@ -348,15 +407,31 @@ export default function BetSlipAuditorTab({ onNavigateHistory, onTicketLocked })
     setReEditError(null);
 
     if (removedCount > 0) {
-      setLockSuccessMessage(`✂️ Smart Trimmed ${removedCount} risky market selection(s)! ${safeOnly.length} safe games remaining.`);
+      setLockSuccessMessage(`✂️ Smart Trimmed ${removedCount} risky / < 1.15 odds selection(s)! ${safeOnly.length} verified safe games remaining.`);
       setTimeout(() => setLockSuccessMessage(false), 5000);
     } else {
-      setReEditError("ℹ️ All current loaded games already meet MatchIQ 5-Gate safety criteria (No risky WEH or Over 9.5 picks found).");
+      setReEditError("ℹ️ All current loaded games already meet MatchIQ 5-Gate safety criteria (1.15+ odds, draw-protected lines, no youth/reserve traps).");
     }
   };
 
   const handleRunReEdit = async () => {
     if (!ticketData || !ticketData.selections) return;
+
+    // Filter out live, started, ongoing, or concluded matches
+    const liveStatuses = ["NULLED_EXPIRED", "CONCLUDED", "FINISHED", "FT", "LIVE", "IN_PROGRESS", "ONGOING", "STARTED", "1H", "2H", "HT", "ENDED", "CANCELLED", "POSTPONED", "ABANDONED", "CLOSED"];
+    const nowMs = Date.now();
+    const validSelections = ticketData.selections.filter((s) => {
+      const st = String(s.match_status || s.status || "").toUpperCase();
+      if (liveStatuses.includes(st)) return false;
+      if (s.start_time_ms && (nowMs - s.start_time_ms) > -180000) return false;
+      return true;
+    });
+
+    if (validSelections.length === 0) {
+      setReEditError("All selections in this ticket have already started, concluded, or expired. Please load a ticket with upcoming matches.");
+      return;
+    }
+
     setReEditing(true);
     setReEditResult(null);
     setReEditError(null);
@@ -365,7 +440,7 @@ export default function BetSlipAuditorTab({ onNavigateHistory, onTicketLocked })
 
     const finalOdds = useCustomOdds && customOddsInput ? parseFloat(customOddsInput) : targetOdds;
     const result = await runTicketReEdit(
-      ticketData.selections,
+      validSelections,
       finalOdds,
       mode,
       targetMode,
@@ -1093,7 +1168,17 @@ export default function BetSlipAuditorTab({ onNavigateHistory, onTicketLocked })
                         <button
                           key={item.count}
                           type="button"
-                          onClick={() => { setNumTickets(item.count); setReEditResult(null); }}
+                          onClick={() => {
+                            setNumTickets(item.count);
+                            setReEditResult(null);
+                            if (item.count === 2) {
+                              if (targetMode === "GAMES") {
+                                setTargetGames(prev => Math.min(15, prev || 15));
+                              } else {
+                                setTargetOdds(22.0);
+                              }
+                            }
+                          }}
                           className={`p-3 rounded-xl border text-left transition-all ${
                             numTickets === item.count
                               ? "bg-slate-900 border-slate-900 text-white shadow-sm ring-1 ring-slate-900"
@@ -1262,61 +1347,168 @@ export default function BetSlipAuditorTab({ onNavigateHistory, onTicketLocked })
                         <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                           {portfolioSlips.map((slip, sIdx) => {
                             const isCurrent = activePortfolioIndex === sIdx;
+                            const isMaster = slip.is_master || slip.ticket_index === "MASTER";
                             const slipCode = slip.booking_code;
+
                             return (
                               <button
                                 key={sIdx}
                                 type="button"
                                 onClick={() => setActivePortfolioIndex(sIdx)}
                                 className={`p-3 rounded-xl border text-left transition-all flex flex-col justify-between gap-2 ${
-                                  isCurrent
-                                    ? "bg-slate-800 border-emerald-500 ring-2 ring-emerald-500/40 text-white shadow-lg"
-                                    : "bg-slate-950/60 border-slate-800 text-slate-400 hover:bg-slate-800/80 hover:text-slate-200"
+                                  isMaster
+                                    ? (isCurrent
+                                      ? "bg-amber-950/70 border-amber-400 ring-2 ring-amber-400/50 text-white shadow-lg"
+                                      : "bg-slate-950/80 border-amber-500/40 text-amber-300 hover:bg-amber-950/40")
+                                    : (isCurrent
+                                      ? "bg-slate-800 border-emerald-500 ring-2 ring-emerald-500/40 text-white shadow-lg"
+                                      : "bg-slate-950/60 border-slate-800 text-slate-400 hover:bg-slate-800/80 hover:text-slate-200")
                                 }`}
                               >
                                 <div className="flex items-center justify-between">
                                   <span className="text-xs font-black text-white flex items-center gap-1.5">
-                                    <Ticket className="w-3.5 h-3.5 text-emerald-400" />
-                                    <span>Slip #{sIdx + 1}</span>
+                                    {isMaster ? (
+                                      <Zap className="w-3.5 h-3.5 text-amber-400 fill-amber-400" />
+                                    ) : (
+                                      <Ticket className="w-3.5 h-3.5 text-emerald-400" />
+                                    )}
+                                    <span>{isMaster ? "Master Ticket" : `Slip #${sIdx + 1}`}</span>
                                   </span>
-                                  <span className={`text-[10px] px-2 py-0.5 rounded font-black ${isCurrent ? "bg-emerald-500 text-slate-950" : "bg-slate-800 text-slate-300"}`}>
+                                  <span className={`text-[10px] px-2 py-0.5 rounded font-black ${
+                                    isMaster
+                                      ? "bg-amber-400 text-slate-950"
+                                      : (isCurrent ? "bg-emerald-500 text-slate-950" : "bg-slate-800 text-slate-300")
+                                  }`}>
                                     ~{slip.new_total_odds}x
                                   </span>
                                 </div>
                                 <div className="flex items-center justify-between text-[11px] pt-1 border-t border-slate-800/80">
                                   <span className="text-slate-400 font-bold">{slip.final_count} Legs</span>
                                   {slipCode ? (
-                                    <span className="font-mono font-black text-emerald-400 bg-emerald-950/60 px-1.5 py-0.5 rounded border border-emerald-800/50">
+                                    <span className={`font-mono font-black px-1.5 py-0.5 rounded border ${
+                                      isMaster
+                                        ? "text-amber-300 bg-amber-950/80 border-amber-500/50"
+                                        : "text-emerald-400 bg-emerald-950/60 border-emerald-800/50"
+                                    }`}>
                                       {slipCode}
                                     </span>
                                   ) : (
-                                    <span className="text-slate-500">Ready</span>
+                                    <span className={isMaster ? "text-amber-400 font-bold text-[10px]" : "text-slate-500"}>
+                                      {isMaster ? "Master Unified" : "Ready"}
+                                    </span>
                                   )}
                                 </div>
                               </button>
                             );
                           })}
                         </div>
+
+                        {/* Merge into Master Ticket Action Panel */}
+                        <div className="bg-gradient-to-r from-amber-950/40 via-slate-900 to-amber-950/30 border border-amber-500/30 rounded-xl p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-inner">
+                          <div className="flex items-center gap-2.5">
+                            <div className="w-8 h-8 rounded-lg bg-amber-500/20 border border-amber-400/40 flex items-center justify-center flex-shrink-0">
+                              <Zap className="w-4 h-4 text-amber-400" />
+                            </div>
+                            <div>
+                              <h4 className="text-xs font-black text-amber-300 flex items-center gap-1.5">
+                                <span>Merge into Master Ticket</span>
+                                <span className="text-[9px] px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-200 border border-amber-400/30 font-bold uppercase">
+                                  Auto-Deduplicated
+                                </span>
+                              </h4>
+                              <p className="text-[11px] text-slate-400">
+                                Combines all slips, selects highest win probability for shared fixtures, and builds 1 prioritized slip.
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <div className="flex items-center gap-1.5 bg-slate-950/80 p-1 rounded-lg border border-slate-800">
+                              <span className="text-[10px] text-slate-400 font-extrabold px-1.5">Games:</span>
+                              {[5, 8, 10, 12, 15].map((cnt) => (
+                                <button
+                                  key={cnt}
+                                  type="button"
+                                  onClick={() => {
+                                    setMasterPrioritizedGames(cnt);
+                                    setCustomMasterGamesInput(String(cnt));
+                                  }}
+                                  className={`px-2.5 py-1 rounded text-xs font-black transition-all ${
+                                    masterPrioritizedGames === cnt
+                                      ? "bg-amber-400 text-slate-950 shadow-sm"
+                                      : "text-slate-400 hover:text-white"
+                                  }`}
+                                >
+                                  {cnt}
+                                </button>
+                              ))}
+                              <div className="flex items-center gap-1 pl-1.5 border-l border-slate-800">
+                                <input
+                                  type="number"
+                                  min="2"
+                                  max="15"
+                                  placeholder="1-15"
+                                  value={customMasterGamesInput}
+                                  onChange={(e) => {
+                                    const val = e.target.value;
+                                    setCustomMasterGamesInput(val);
+                                    const parsed = parseInt(val, 10);
+                                    if (!isNaN(parsed) && parsed >= 2) {
+                                      setMasterPrioritizedGames(Math.min(15, parsed));
+                                    }
+                                  }}
+                                  className="w-12 bg-slate-900 border border-slate-700 text-amber-300 placeholder-slate-500 rounded px-1.5 py-0.5 text-xs font-black text-center focus:outline-none focus:border-amber-400"
+                                  title="Type any number of games (e.g. 13 or 14, max 15)"
+                                />
+                              </div>
+                            </div>
+
+                            <button
+                              type="button"
+                              onClick={() => handleMergeToMaster(masterPrioritizedGames)}
+                              disabled={mergingMaster}
+                              className="px-4 py-2 rounded-xl bg-gradient-to-r from-amber-400 to-amber-500 hover:from-amber-300 hover:to-amber-400 text-slate-950 text-xs font-black flex items-center gap-1.5 shadow-md hover:shadow-amber-500/20 transition-all cursor-pointer disabled:opacity-50"
+                            >
+                              {mergingMaster ? (
+                                <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                              ) : (
+                                <Zap className="w-3.5 h-3.5 fill-slate-950" />
+                              )}
+                              <span>{mergingMaster ? "Merging Slips..." : `Generate ${masterPrioritizedGames}-Game Master Slip`}</span>
+                            </button>
+                          </div>
+                        </div>
                       </div>
                     )}
 
                     {/* Active Slip Banner */}
-                    <div className="bg-emerald-50 border border-emerald-200 p-5 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                    <div className={`border p-5 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-4 ${
+                      activeSlip.is_master || activeSlip.ticket_index === "MASTER"
+                        ? "bg-amber-50 border-amber-300 ring-1 ring-amber-300/50"
+                        : "bg-emerald-50 border-emerald-200"
+                    }`}>
                       <div>
                         <div className="flex items-center gap-2">
-                          <span className="text-[10px] text-emerald-700 font-bold uppercase tracking-wider block">
-                            {portfolioSlips.length > 1 ? `Portfolio Slip #${activePortfolioIndex + 1} of ${portfolioSlips.length} • Mode: ${reEditResult.mode}` : `Re-Edit Complete — Mode: ${reEditResult.mode}`}
+                          <span className={`text-[10px] font-bold uppercase tracking-wider block ${
+                            activeSlip.is_master || activeSlip.ticket_index === "MASTER" ? "text-amber-800 font-black" : "text-emerald-700"
+                          }`}>
+                            {activeSlip.is_master || activeSlip.ticket_index === "MASTER"
+                              ? "⚡ MASTER UNIFIED TICKET"
+                              : (portfolioSlips.length > 1 ? `Portfolio Slip #${activePortfolioIndex + 1} of ${portfolioSlips.length} • Mode: ${reEditResult.mode}` : `Re-Edit Complete — Mode: ${reEditResult.mode}`)}
                           </span>
                           <button
                             onClick={() => { setReEditResult(null); setGeneratedCode(null); }}
-                            className="px-2 py-0.5 rounded bg-emerald-100 hover:bg-emerald-200 text-emerald-800 text-[10px] font-extrabold transition-all border border-emerald-300"
+                            className="px-2 py-0.5 rounded bg-white hover:bg-slate-100 text-slate-700 text-[10px] font-extrabold transition-all border border-slate-200 shadow-sm"
                             title="Clear current result and change target odds or mode"
                           >
                             Reset & Change Settings
                           </button>
                         </div>
-                        <h3 className="text-lg font-extrabold text-slate-900 mt-0.5">
-                          {activeCount} Final Matches • Slip Odds: ~{activeOdds}x
+                        <h3 className="text-lg font-extrabold text-slate-900 mt-0.5 flex items-center gap-2">
+                          {(activeSlip.is_master || activeSlip.ticket_index === "MASTER") && (
+                            <Zap className="w-4 h-4 text-amber-500 fill-amber-500" />
+                          )}
+                          <span>{activeCount} Final Matches • Slip Odds: ~{activeOdds}x</span>
                         </h3>
                         <p className="text-xs text-slate-600 mt-1">
                           {reEditResult.mode === "AUDITOR"

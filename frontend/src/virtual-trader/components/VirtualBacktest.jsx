@@ -13,7 +13,7 @@ import {
   fetchCalibratedFeatureWeights,
 } from "../api/virtualClient";
 
-// ─── Small utility components ───────────────────────────────────────────────
+// ─── Small utility components ───────────────────────────────────────
 
 function StatCard({ label, value, sub, color = "slate", icon: Icon, trend }) {
   const colorMap = {

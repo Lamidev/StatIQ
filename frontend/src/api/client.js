@@ -604,3 +604,23 @@ export async function fetchTodaysSportybetGames(day = "today") {
   return { total_matches: 0, total_leagues: 0, leagues: [] };
 }
 
+
+/**
+ * Merges 2 or more portfolio variant slips into a unified Master Ticket with prioritized games.
+ */
+export async function mergeMasterTicket(payload, endpoint = "/ai-ticket/merge-master") {
+  try {
+    const res = await fetch(`${API_BASE_URL}${endpoint}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    if (res.ok) return await res.json();
+    return { status: "HTTP_ERROR", http_status: res.status };
+  } catch (err) {
+    console.error("Merge master ticket error:", err);
+    return { status: "ERROR" };
+  }
+}
+
+

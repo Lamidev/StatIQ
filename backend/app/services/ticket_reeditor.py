@@ -42,31 +42,73 @@ def _classify(prob: float) -> str:
     return "RISKY"
 
 
-def _estimate_prob_from_odds(market: str, selection: str, odds: float, status: str) -> float:
+def _is_tier3_comp(comp_name: str) -> bool:
+    c_lower = (comp_name or "").lower()
+    return any(x in c_lower for x in [
+        "u19", "u20", "u21", "u23", "u18", "u17", "youth", "reserve", "reserves", "amateur",
+        "regional", "tercera", "division 2", "division 3", "division 4", "primera c", "primera d",
+        "kolmonen", "isthmian", "northern premier", "southern league", "promotion league"
+    ])
+
+def _is_expired_or_live(sel: Dict[str, Any]) -> Tuple[bool, str]:
     """
-    Calibrated statistical probability estimation enforcing draw-protection & archetype rules
-    without prematurely purging legitimately winnable low-odds lines.
+    Detects if a match has already kicked off, is live in-progress, concluded, ended,
+    or begins in less than 3 minutes (SportyBet locks markets pre-match).
     """
-    if status in ["NULLED_EXPIRED", "CONCLUDED"] or odds <= 1.0:
+    status = str(sel.get("match_status") or sel.get("status") or "").upper().strip()
+    if status in [
+        "LIVE", "STARTED", "1H", "2H", "HT", "FINISHED", "FT", "ENDED",
+        "CANCELLED", "POSTPONED", "ABANDONED", "CLOSED", "CONCLUDED",
+        "NULLED_EXPIRED", "IN_PROGRESS", "ONGOING"
+    ]:
+        return True, f"Match status is '{status}' (live or concluded)"
+
+    start_ms = sel.get("start_time_ms") or sel.get("startTime") or 0
+    if isinstance(start_ms, (int, float)) and start_ms > 0:
+        now_ms = time.time() * 1000.0
+        # If match kickoff was in the past or is within the next 3 minutes (180,000 ms)
+        if (now_ms - start_ms) > -180000:
+            return True, "Match kickoff has already passed or begins in < 3 minutes"
+
+    return False, ""
+
+
+def _estimate_prob_from_odds(market: str, selection: str, odds: float, status: str, comp: str = "") -> float:
+    """
+    Calibrated statistical probability estimation enforcing draw-protection, 1.15 odds floor,
+    and tier filtering without prematurely purging legitimately winnable safe lines.
+    """
+    status_upper = (status or "").upper().strip()
+    if status_upper in [
+        "NULLED_EXPIRED", "CONCLUDED", "LIVE", "STARTED", "1H", "2H", "HT",
+        "FINISHED", "FT", "ENDED", "CANCELLED", "POSTPONED", "ABANDONED",
+        "CLOSED", "IN_PROGRESS", "ONGOING"
+    ] or odds <= 1.0:
         return 0.0
-    if status == "IN_PROGRESS":
-        return 0.35
+
+    # Strict Odds Floor Check: Odds below 1.15 offer negative risk-adjusted value
+    if odds < 1.15:
+        return 0.0
+
+    # Tier 3 youth / reserve penalty
+    if _is_tier3_comp(comp):
+        return 0.50
 
     base_implied = 1.0 / max(odds, 1.01)
     m_lower = (market or "").lower()
     s_lower = (selection or "").lower()
 
     # Double Chance "12" (Home or Away)
-    # Calibrated for youth, women's, cup, and decisive matches where odds ~1.20-1.28 reflect real ~75-82% win rate
+    # Strictly gated: vulnerable to standard draws (~27% base rate)
     if "12" in s_lower or "home or away" in s_lower or "12" in m_lower:
-        if odds <= 1.30:
-            return min(0.85, max(0.72, base_implied * 0.96))
+        if 1.15 <= odds <= 1.30:
+            return min(0.78, max(0.68, base_implied * 0.92))
         else:
-            return min(0.68, base_implied * 0.88)
+            return min(0.60, base_implied * 0.85)
 
     # Maximum safety: 1X and X2 Double Chance (Draw Protected)
     if "1x" in s_lower or "x2" in s_lower or "home or draw" in s_lower or "draw or away" in s_lower or ("double chance" in m_lower and not ("12" in s_lower or "home or away" in s_lower)):
-        if odds <= 1.35:
+        if 1.15 <= odds <= 1.35:
             return min(0.96, base_implied * 1.10 + 0.05)
         else:
             return min(0.75, base_implied * 0.95)
@@ -85,14 +127,15 @@ def _estimate_prob_from_odds(market: str, selection: str, odds: float, status: s
     if "team goals" in m_lower or "over 0.5" in s_lower:
         return min(0.95, base_implied * 1.14)
 
-    # Combo cushions: "Home Team or Over 2.5", "Away or Over 2.5", "Both Halves Under 1.5 - No"
+    # Combo cushions: "Home Team or Over 2.5", "Away or Over 2.5"
     if any(k in m_lower or k in s_lower for k in ["or over", "or under", "both halves under"]):
-        if odds <= 1.38:
-            return min(0.92, base_implied * 1.08 + 0.03)
+        if 1.15 <= odds <= 1.35:
+            return min(0.75, base_implied * 0.95)
+        return min(0.65, base_implied * 0.88)
 
     # Over 1.5 Goals: Safe across modern leagues up to 1.38
     if "over 1.5" in s_lower or "over 1.5" in m_lower:
-        if odds <= 1.35:
+        if 1.15 <= odds <= 1.35:
             return min(0.94, base_implied * 1.06 + 0.03)
         else:
             return min(0.72, base_implied * 0.92)
@@ -110,21 +153,39 @@ def _estimate_prob_from_odds(market: str, selection: str, odds: float, status: s
 async def score_selection(sel: Dict[str, Any]) -> Dict[str, Any]:
     """
     Evaluates an individual selection's risk rating and win probability.
+    Purges any expired, started, ongoing, or live match.
     """
+    is_expired, exp_msg = _is_expired_or_live(sel)
+    if is_expired:
+        return {
+            **sel,
+            "estimated_prob": 0.0,
+            "composite_safety_score": 0.0,
+            "classification": "EXPIRED",
+            "keep": False,
+            "is_expired": True,
+            "expired_reason": exp_msg,
+        }
+
     mkt = sel.get("market_name", "Match Result")
     pick = sel.get("selection_name", "1")
     odds = float(sel.get("odds", 1.80))
     status = sel.get("match_status", "UPCOMING")
+    comp = sel.get("competition", "")
 
-    prob = _estimate_prob_from_odds(mkt, pick, odds, status)
+    prob = _estimate_prob_from_odds(mkt, pick, odds, status, comp)
     classification = _classify(prob)
+
+    is_below_odds_floor = odds < 1.15
+    is_tier3 = _is_tier3_comp(comp)
 
     return {
         **sel,
         "estimated_prob": round(prob, 3),
         "composite_safety_score": round(prob, 3),
-        "classification": classification,
-        "keep": (classification in ["SAFE", "MODERATE"] and prob >= SAFE_THRESHOLD),
+        "classification": classification if not is_below_odds_floor and not is_tier3 else "RISKY",
+        "keep": (classification in ["SAFE", "MODERATE"] and prob >= SAFE_THRESHOLD and not is_below_odds_floor and not is_tier3),
+        "is_expired": False,
     }
 
 
@@ -132,17 +193,27 @@ def _remove_reason(sel: Dict[str, Any]) -> str:
     """
     Generates rich, structural audit reasoning for why a pick is purged in REMOVE mode.
     """
+    if sel.get("is_expired"):
+        return f"Match is expired, live, or ongoing ({sel.get('expired_reason') or 'ongoing'})."
+
     prob = sel.get("estimated_prob", 0.50)
     odds = float(sel.get("odds", 1.80))
     pick = (sel.get("selection_name", "")).lower()
     mkt = (sel.get("market_name", "")).lower()
     home = sel.get("home_team", "Home")
     away = sel.get("away_team", "Away")
+    comp = sel.get("competition", "")
 
+    if odds < 1.15:
+        return f"Odds @{odds:.2f}x are below the 1.15 minimum profitability threshold."
+    if _is_tier3_comp(comp):
+        return f"High squad rotation and volatility in youth/reserve/amateur fixture ({comp})."
     if odds >= 2.50:
         return f"High-variance underdog line (@{odds:.2f}x) carries an estimated {(1.0 - prob)*100:.0f}% failure probability."
     if "12" in pick or "home or away" in pick:
         return f"Volatile '12' Double Chance on {home} vs {away} is vulnerable to standard draws (~27% base draw rate)."
+    if "or over" in pick or "or over" in mkt:
+        return f"Combo market '{sel.get('selection_name')}' carries high risk if match ends in a low-scoring home win (1-0 or 2-0)."
     if "over 1.5" in pick and odds > 1.25:
         return f"Over 1.5 priced at @{odds:.2f}x signals a defensive match with high risk of finishing 0-0 or 1-0."
     if "over 2.5" in pick or "over 3.5" in pick:
@@ -150,7 +221,7 @@ def _remove_reason(sel: Dict[str, Any]) -> str:
     if "(-1.0)" in pick or "(-0.5)" in pick:
         return f"Negative handicap forces a 2+ goal margin, inflating match failure risk."
     
-    return f"Model win probability of {prob*100:.1f}% fell below the 5-Gate 80% straight accumulator safety threshold."
+    return f"Model win probability of {prob*100:.1f}% fell below the 5-Gate 70% safety threshold."
 
 
 async def re_edit_ticket(
@@ -227,16 +298,12 @@ async def re_edit_ticket(
             logger.warning(f"Auditor live odds prefetch error: {e}")
 
         for idx, sel in enumerate(scored):
-            status = sel.get("match_status", "UPCOMING")
-            start_ms = sel.get("start_time_ms", 0)
-            now_ms = time.time() * 1000.0
-
-            # Exclude matches that are already in progress, concluded, or expired
-            if status in ["CONCLUDED", "LIVE", "NULLED_EXPIRED", "CANCELLED", "POSTPONED"] or (start_ms > 0 and (now_ms - start_ms) > 60000):
+            is_expired, exp_reason = _is_expired_or_live(sel)
+            if is_expired or sel.get("is_expired"):
                 removed_selections.append({
                     **sel,
                     "action": "EXPIRED_PURGED",
-                    "reason": f"Match is {status.lower() if status else 'in progress'} (SportyBet rejects live/concluded selections from new slips)."
+                    "reason": f"Match is live or expired ({exp_reason or sel.get('expired_reason')}). SportyBet rejects ongoing/concluded selections from new slips."
                 })
                 remove_count += 1
                 continue
@@ -312,7 +379,7 @@ async def re_edit_ticket(
                 if (idx % 3) == 0:
                     new_mkt = "Asian Handicap"
                     new_pick = f"{away if is_away_intent else home} (+1.5 Handicap)"
-                    new_odds = round(max(1.14, min(1.30, orig_odds * 0.90)), 2)
+                    new_odds = round(max(1.15, min(1.30, orig_odds * 0.90)), 2)
                     new_prob = 0.95
                     mkt_id = "16"
                     oc_id = "1715" if is_away_intent else "1714"
@@ -342,7 +409,7 @@ async def re_edit_ticket(
                 if orig_odds <= 1.40:
                     new_mkt = "Over/Under Goals"
                     new_pick = "Over 1.5 Goals"
-                    new_odds = round(max(1.12, min(1.25, orig_odds * 0.85)), 2)
+                    new_odds = round(max(1.15, min(1.25, orig_odds * 0.85)), 2)
                     new_prob = 0.93
                     mkt_id = "18"
                     oc_id = "12"
@@ -418,6 +485,21 @@ async def re_edit_ticket(
     # ══════════════════════════════════════════════════════════════════════════
     else:
         for idx, sel in enumerate(scored):
+            is_expired, exp_reason = _is_expired_or_live(sel)
+            if is_expired or sel.get("is_expired"):
+                removed_selections.append({
+                    "home_team": sel.get("home_team", "Home"),
+                    "away_team": sel.get("away_team", "Away"),
+                    "market_name": sel.get("market_name", "Match Result"),
+                    "selection_name": sel.get("selection_name", "1"),
+                    "original_odds": float(sel.get("odds", 1.80)),
+                    "estimated_prob": 0.0,
+                    "classification": "EXPIRED",
+                    "reason": f"Purged live or expired match ({exp_reason or sel.get('expired_reason')}).",
+                })
+                remove_count += 1
+                continue
+
             prob = sel.get("estimated_prob", 0.0)
             is_safe = prob >= SAFE_THRESHOLD
 
@@ -442,6 +524,9 @@ async def re_edit_ticket(
                 removed_selections.append(removed_item)
                 remove_count += 1
 
+    # Cap target_games at 15 max for variant / accumulator safety
+    effective_target_games = min(15, target_games) if (target_mode == "GAMES" and target_games > 0) else (14 if target_mode == "GAMES" else 0)
+
     # ══════════════════════════════════════════════════════════════════════════
     # STEP 3: DYNAMIC BALANCED MULTI-TICKET PARTITIONING
     # ══════════════════════════════════════════════════════════════════════════
@@ -449,7 +534,7 @@ async def re_edit_ticket(
         p = float(s.get("estimated_prob") or 0.80)
         o = float(s.get("estimated_odds") or s.get("odds") or 1.25)
         # Optimal odds buffer: 1.15 to 1.35 gets a slight boost
-        o_score = 0.12 if 1.14 <= o <= 1.35 else 0.04
+        o_score = 0.12 if 1.15 <= o <= 1.35 else 0.04
         jitter = (rng.random() * 0.08) if reshuffle_seed else 0.0
         return p + o_score + jitter
 
@@ -457,8 +542,6 @@ async def re_edit_ticket(
     sorted_candidates = sorted(final_selections, key=_rank_score, reverse=True)
 
     # 2. Interleaved Round-Robin Partitioning across num_t tickets
-    # (Rank 1 -> T1, Rank 2 -> T2, Rank 3 -> T3, Rank 4 -> T1...)
-    # Guarantees both/all tickets get an equal mix of elite, mid, and varied league games dynamically
     ticket_buckets: List[List[Dict[str, Any]]] = [[] for _ in range(num_t)]
     for idx, cand in enumerate(sorted_candidates):
         ticket_buckets[idx % num_t].append(cand)
@@ -467,6 +550,7 @@ async def re_edit_ticket(
         """
         Derives a mathematically sound alternative winnable market for variant slips
         so that no two tickets share the identical prediction on the same match.
+        Intelligently checks favorite side (Home vs Away) and guarantees minimum odds floor of 1.15.
         """
         alt = dict(cand)
         m_lower = str(cand.get("market_name") or "").lower()
@@ -475,15 +559,22 @@ async def re_edit_ticket(
         away = cand.get("away_team", "Away")
         orig_odds = float(cand.get("odds") or cand.get("estimated_odds") or 1.25)
 
+        is_away_intent = "away" in s_lower or "2" in s_lower or away.lower() in s_lower or "x2" in s_lower
+
         if "over 1.5" in s_lower or "over 1.5" in m_lower:
             alt["market_name"] = "Double Chance"
-            alt["selection_name"] = f"{home} or Draw (1X)"
+            if is_away_intent:
+                alt["selection_name"] = f"Draw or {away} (X2)"
+                alt["provider_market_id"] = "10"
+                alt["provider_outcome_id"] = "11"
+            else:
+                alt["selection_name"] = f"{home} or Draw (1X)"
+                alt["provider_market_id"] = "10"
+                alt["provider_outcome_id"] = "9"
             alt["odds"] = round(max(1.15, min(1.35, orig_odds * 0.96)), 2)
             alt["estimated_odds"] = alt["odds"]
             alt["estimated_prob"] = 0.88
-            alt["reason"] = f"Diversified variant: Draw-protected Double Chance (1X) instead of Over 1.5"
-            alt["provider_market_id"] = "10"
-            alt["provider_outcome_id"] = "9"
+            alt["reason"] = f"Diversified variant: Draw-protected Double Chance ({alt['selection_name']}) instead of Over 1.5"
             alt["provider_specifier"] = None
         elif "double chance" in m_lower or "1x" in s_lower or "x2" in s_lower or "12" in s_lower:
             alt["market_name"] = "Over/Under Goals"
@@ -507,13 +598,18 @@ async def re_edit_ticket(
             alt["provider_specifier"] = "total=3.5"
         else:
             alt["market_name"] = "Double Chance"
-            alt["selection_name"] = f"{home} or Draw (1X)"
+            if is_away_intent:
+                alt["selection_name"] = f"Draw or {away} (X2)"
+                alt["provider_market_id"] = "10"
+                alt["provider_outcome_id"] = "11"
+            else:
+                alt["selection_name"] = f"{home} or Draw (1X)"
+                alt["provider_market_id"] = "10"
+                alt["provider_outcome_id"] = "9"
             alt["odds"] = round(max(1.16, min(1.35, orig_odds * 0.95)), 2)
             alt["estimated_odds"] = alt["odds"]
             alt["estimated_prob"] = 0.88
-            alt["reason"] = f"Diversified variant: Draw-protected coverage"
-            alt["provider_market_id"] = "10"
-            alt["provider_outcome_id"] = "9"
+            alt["reason"] = f"Diversified variant: Draw-protected coverage ({alt['selection_name']})"
             alt["provider_specifier"] = None
 
         return alt
@@ -534,12 +630,12 @@ async def re_edit_ticket(
                 t_final.append(cand)
                 fixture_usage_count[f_key] = 1
                 assigned_markets_per_fixture.setdefault(f_key, set()).add(str(cand.get("selection_name")).strip().lower())
-                if target_mode == "GAMES" and target_games > 0 and len(t_final) >= target_games:
+                if target_mode == "GAMES" and effective_target_games > 0 and len(t_final) >= effective_target_games:
                     break
 
-        # 2. Supplementary pass if primary partition had fewer games than target_games
-        if target_mode == "GAMES" and target_games > 0 and len(t_final) < target_games:
-            needed = target_games - len(t_final)
+        # 2. Supplementary pass if primary partition had fewer games than effective_target_games
+        if target_mode == "GAMES" and effective_target_games > 0 and len(t_final) < effective_target_games:
+            needed = effective_target_games - len(t_final)
             for other_idx, other_bucket in enumerate(ticket_buckets):
                 if other_idx == t_idx:
                     continue
@@ -552,15 +648,14 @@ async def re_edit_ticket(
                         for x in t_final
                     )
                     if not is_already_in_ticket:
-                        if mode == "AUDITOR" and current_count < max_allowed_appearances:
-                            # Auditor Mode allows deriving an alternative diversified winnable market
+                        if current_count < max_allowed_appearances:
+                            # Apply Smart Alternative Market Hedging across slips for shared matches
                             diversified_cand = _derive_alternative_market(cand)
                             t_final.append(diversified_cand)
                             fixture_usage_count[f_key] = current_count + 1
                             assigned_markets_per_fixture.setdefault(f_key, set()).add(str(diversified_cand.get("selection_name")).strip().lower())
                             needed -= 1
-                        elif mode == "REMOVE" and current_count == 0:
-                            # REMOVE Mode strictly preserves the original bettor's pick without swapping
+                        elif current_count == 0:
                             t_final.append(cand)
                             fixture_usage_count[f_key] = 1
                             assigned_markets_per_fixture.setdefault(f_key, set()).add(str(cand.get("selection_name")).strip().lower())
@@ -570,6 +665,10 @@ async def re_edit_ticket(
                             break
                 if needed <= 0:
                     break
+
+        # Enforce max 15 games per ticket
+        if len(t_final) > 15:
+            t_final = t_final[:15]
 
         # 3. Target Odds mode handling
         if target_mode == "ODDS" and target_odds > 1.05:
