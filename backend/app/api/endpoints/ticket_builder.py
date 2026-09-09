@@ -142,9 +142,9 @@ def _extract_live_market_data(ev: Dict[str, Any]) -> tuple:
                 except Exception:
                     pass
             if o_val or u_val:
-                ou_list.append({"line": line_str, "over": o_val, "under": u_val})
+                ou_list.append({"line": line_str, "over": o_val, "under": u_val, "is_real": True})
                 
-    # Accurate overround margin conversion if specific submarket not expanded in list
+    # Double Chance conversion from 1X2 if not explicitly listed in summary feed
     if "1X" not in dc_map and o_h > 1.0 and o_d > 1.0:
         dc_map["1X"] = round(1.0 / max(0.01, (1.0 / o_h + 1.0 / o_d) * 1.08), 2)
     if "X2" not in dc_map and o_a > 1.0 and o_d > 1.0:
@@ -152,49 +152,8 @@ def _extract_live_market_data(ev: Dict[str, Any]) -> tuple:
     if "12" not in dc_map and o_h > 1.0 and o_a > 1.0:
         dc_map["12"] = round(1.0 / max(0.01, (1.0 / o_h + 1.0 / o_a) * 1.08), 2)
 
-    # Universal SportyBet Half-Point Lines (1.5, 2.5, 3.5, 4.5):
-    # If the raw match feed only included a single/high line (e.g. 5.5), synthesize
-    # standard half-point lines using Poisson expectation so the engine has rich market depth
-    existing_lines = {str(item.get("line")) for item in ou_list}
-    exp_goals = 3.3 if (o_h <= 1.30 or o_a <= 1.30) else (2.9 if (o_h <= 1.60 or o_a <= 1.60) else 2.55)
-    
-    import math
-    p0 = math.exp(-exp_goals)
-    p1 = p0 * exp_goals
-    p2 = p1 * exp_goals / 2.0
-    p3 = p2 * exp_goals / 3.0
-    p4 = p3 * exp_goals / 4.0
-
-    p_u15 = p0 + p1
-    p_o15 = max(0.01, 1.0 - p_u15)
-    p_u25 = p_u15 + p2
-    p_o25 = max(0.01, 1.0 - p_u25)
-    p_u35 = p_u25 + p3
-    p_o35 = max(0.01, 1.0 - p_u35)
-    p_u45 = p_u35 + p4
-    p_o45 = max(0.01, 1.0 - p_u45)
-
-    margin = 1.07
-    if "1.5" not in existing_lines:
-        ou_list.append({
-            "line": "1.5",
-            "over": round(1.0 / (p_o15 * margin), 2),
-            "under": round(1.0 / (p_u15 * margin), 2)
-        })
-    if "2.5" not in existing_lines:
-        ou_list.append({
-            "line": "2.5",
-            "over": round(1.0 / (p_o25 * margin), 2),
-            "under": round(1.0 / (p_u25 * margin), 2)
-        })
-    if "3.5" not in existing_lines:
-        ou_list.append({
-            "line": "3.5",
-            "over": round(1.0 / (p_o35 * margin), 2),
-            "under": round(1.0 / (p_u35 * margin), 2)
-        })
-    # Note: Line 4.5 is a specialty line on SportyBet and is only included if SportyBet's active board published it
-        
+    # STRICT: Never fabricate synthetic Over/Under lines (1.5, 2.5, 3.5, 4.5).
+    # Only lines verified and published by the bookmaker are permitted.
     return dc_map, ou_list
 
 def _is_league_match(comp_name: str, country_name: str, code_key: str) -> bool:

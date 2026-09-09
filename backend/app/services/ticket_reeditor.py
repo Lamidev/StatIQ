@@ -26,12 +26,20 @@ import time
 from typing import List, Dict, Any, Optional, Tuple
 
 from app.predictions.leg_odds_calculator import calculate_dynamic_leg_config
+from app.predictions.live_calculator import calculate_matchiq_probabilities, get_team_rating
 from app.services.pick_engine import pick_engine, PickDecision
 
 logger = logging.getLogger("matchiq.ticket_reeditor")
 
 # Calibrated Risk Threshold for REMOVE mode (Keeps verified >= 70% model confidence picks)
 SAFE_THRESHOLD = 0.70  # >= 70% Model Probability -> KEPT in REMOVE mode
+
+HIGH_TEMPO_CLUBS = {
+    "atalanta", "roma", "bayern", "dortmund", "leverkusen", "leipzig", "man city", "manchester city",
+    "liverpool", "arsenal", "tottenham", "chelsea", "barcelona", "real madrid", "psg", "monaco",
+    "benfica", "sporting", "porto", "psv", "ajax", "feyenoord", "young boys", "celtic", "rangers",
+    "stuttgart", "frankfurt", "hoffenheim", "brighton", "leeds", "brentford"
+}
 
 
 def _classify(prob: float) -> str:
@@ -90,11 +98,10 @@ def _estimate_prob_from_odds(market: str, selection: str, odds: float, status: s
     if odds < 1.15:
         return 0.0
 
-    # Tier 3 youth / reserve penalty
-    if _is_tier3_comp(comp):
-        return 0.50
+    # Soft calibration for regional/youth leagues rather than blanket purge
+    tier_mult = 0.94 if _is_tier3_comp(comp) else 1.0
 
-    base_implied = 1.0 / max(odds, 1.01)
+    base_implied = (1.0 / max(odds, 1.01)) * tier_mult
     m_lower = (market or "").lower()
     s_lower = (selection or "").lower()
 
@@ -152,7 +159,8 @@ def _estimate_prob_from_odds(market: str, selection: str, odds: float, status: s
 
 async def score_selection(sel: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Evaluates an individual selection's risk rating and win probability.
+    Evaluates an individual selection's risk rating, win probability, and conviction tier
+    using deep H2H signals, Poisson/Elo probabilities, and market-specific validation.
     Purges any expired, started, ongoing, or live match.
     """
     is_expired, exp_msg = _is_expired_or_live(sel)
@@ -162,6 +170,7 @@ async def score_selection(sel: Dict[str, Any]) -> Dict[str, Any]:
             "estimated_prob": 0.0,
             "composite_safety_score": 0.0,
             "classification": "EXPIRED",
+            "conviction_tier": "EXPIRED",
             "keep": False,
             "is_expired": True,
             "expired_reason": exp_msg,
@@ -172,19 +181,160 @@ async def score_selection(sel: Dict[str, Any]) -> Dict[str, Any]:
     odds = float(sel.get("odds", 1.80))
     status = sel.get("match_status", "UPCOMING")
     comp = sel.get("competition", "")
+    home = sel.get("home_team", "")
+    away = sel.get("away_team", "")
 
+    # Base implied probability
+    base_implied = 1.0 / max(odds, 1.01) if odds >= 1.05 else 0.0
     prob = _estimate_prob_from_odds(mkt, pick, odds, status, comp)
-    classification = _classify(prob)
 
+    # 1. Odds Floor Check
     is_below_odds_floor = odds < 1.15
-    is_tier3 = _is_tier3_comp(comp)
+    if is_below_odds_floor:
+        prob = 0.0
+
+    p_lower = pick.lower()
+    m_lower = mkt.lower()
+    h2h_notes = []
+    form_notes = []
+    is_anchor_candidate = False
+
+    # 2. Deep Form & H2H Statistical Analysis
+    if home and away:
+        try:
+            m_probs = calculate_matchiq_probabilities(home, away)
+            elo_gap = m_probs.get("elo_gap", 0.0)
+            exp_h = m_probs.get("expected_home_goals", 1.4)
+            exp_a = m_probs.get("expected_away_goals", 1.2)
+            tot_exp = exp_h + exp_a
+            p_draw = m_probs.get("ai_prob_draw", 26.0) / 100.0
+
+            # Fetch historical H2H signals (uses cache & fallback gracefully)
+            from app.services.h2h_fetcher import get_h2h_signals
+            h_elo = int(get_team_rating(home))
+            a_elo = int(get_team_rating(away))
+            h2h = get_h2h_signals(home, away, home_elo=h_elo, away_elo=a_elo)
+
+            draw_rate = float(h2h.get("draw_rate", p_draw))
+            over15_rate = float(h2h.get("over_15_rate", 0.78))
+            avg_goals = float(h2h.get("avg_goals", 2.5))
+
+            # A. Double Chance "12" (Home or Away) - Data-Driven Validation
+            if "12" in p_lower or "home or away" in p_lower or "12" in m_lower:
+                if draw_rate > 0.30 or p_draw > 0.30:
+                    prob = min(prob, 0.62)
+                    form_notes.append(f"High draw rate ({draw_rate*100:.0f}%) makes '12' risky")
+                elif draw_rate <= 0.22 and (tot_exp >= 2.4 or abs(elo_gap) >= 90):
+                    prob = max(prob, 0.86)
+                    is_anchor_candidate = True
+                    form_notes.append(f"Decisive match dynamic ({avg_goals:.1f} avg goals, low draw rate)")
+                else:
+                    prob = max(prob, 0.76)
+
+            # B. Double Chance 1X / X2 (Draw Protected)
+            elif "1x" in p_lower or "home or draw" in p_lower or ("double chance" in m_lower and ("1x" in p_lower or "home" in p_lower)):
+                p1x = (m_probs.get("ai_prob_home", 0.0) + m_probs.get("ai_prob_draw", 0.0)) / 100.0
+                if elo_gap >= 80 or (h_elo >= a_elo):
+                    prob = max(prob, min(0.96, p1x * 1.05))
+                    is_anchor_candidate = True
+                    form_notes.append("Strong home form + draw cushion")
+                else:
+                    prob = max(prob, p1x * 0.94)
+
+            elif "x2" in p_lower or "draw or away" in p_lower or ("double chance" in m_lower and ("x2" in p_lower or "away" in p_lower)):
+                px2 = (m_probs.get("ai_prob_away", 0.0) + m_probs.get("ai_prob_draw", 0.0)) / 100.0
+                if elo_gap <= -80 or (a_elo >= h_elo):
+                    prob = max(prob, min(0.96, px2 * 1.05))
+                    is_anchor_candidate = True
+                    form_notes.append("Strong away form + draw cushion")
+                else:
+                    prob = max(prob, px2 * 0.94)
+
+            # C. Over 1.5 Goals Validation
+            elif "over 1.5" in p_lower or "over 1.5" in m_lower:
+                po15 = m_probs.get("ai_prob_over_1_5", 0.0) / 100.0
+                if tot_exp >= 2.4 or over15_rate >= 0.82:
+                    prob = max(prob, po15, 0.92)
+                    is_anchor_candidate = True
+                    h2h_notes.append(f"H2H Over 1.5 hit rate {over15_rate*100:.0f}%")
+                elif tot_exp < 1.9 and over15_rate < 0.65:
+                    prob = min(prob, 0.64)
+                    form_notes.append("Low expected goals profile (<1.9)")
+                else:
+                    prob = max(prob, po15, 0.82)
+
+            # D. Win Either Half Validation
+            elif "win either half" in m_lower or "win either half" in p_lower:
+                is_home = "home" in p_lower or "1" in p_lower or home.lower() in p_lower
+                if is_home and elo_gap >= 70:
+                    prob = max(prob, 0.90)
+                    is_anchor_candidate = True
+                    form_notes.append(f"{home} dominates either-half scoring rate")
+                elif not is_home and elo_gap <= -70:
+                    prob = max(prob, 0.90)
+                    is_anchor_candidate = True
+                    form_notes.append(f"{away} dominates either-half scoring rate")
+                elif abs(elo_gap) < 40 and tot_exp < 2.0:
+                    prob = min(prob, 0.68)
+                    form_notes.append("Balanced low-scoring tie risks 0-0 stalemate")
+
+            # E. Asian Handicap (+1.5 / +2.0 / +1.0)
+            elif "handicap" in m_lower or "asian handicap" in m_lower:
+                if any(x in p_lower for x in ["(+1.5)", "(+2.0)", "+1.5", "+2.0"]):
+                    prob = max(prob, 0.94)
+                    is_anchor_candidate = True
+                    form_notes.append("Generous +1.5/+2.0 cushion")
+
+            # F. Straight Win (1X2)
+            elif ("1x2" in m_lower or "match result" in m_lower or pick in ("1", "2")) and not ("double chance" in m_lower or "handicap" in m_lower):
+                if p_lower in ("1", "home", home.lower()) or "1" in p_lower:
+                    ph = m_probs.get("ai_prob_home", 0.0) / 100.0
+                    if elo_gap >= 160:
+                        prob = max(prob, ph, 0.88)
+                        is_anchor_candidate = True
+                    elif elo_gap < 100:
+                        prob = min(prob, 0.68)
+                elif p_lower in ("2", "away", away.lower()) or "2" in p_lower:
+                    pa = m_probs.get("ai_prob_away", 0.0) / 100.0
+                    if elo_gap <= -160:
+                        prob = max(prob, pa, 0.88)
+                        is_anchor_candidate = True
+                    elif elo_gap > -100:
+                        prob = min(prob, 0.65)
+
+        except Exception as e:
+            logger.warning(f"Error evaluating matchiq probs in score_selection: {e}")
+
+    # Conviction Tiering:
+    # ANCHOR: Elite win probability (>= 86%) with verified form/cushion -> Eligible for cross-ticket repetition
+    # ORBIT: Solid win probability (70% - 85%) -> Kept in tickets, but strictly isolated to 1 ticket appearance
+    # RISKY: Under 70% or below odds floor -> Purged in REMOVE mode
+    if is_below_odds_floor:
+        classification = "RISKY"
+        conviction_tier = "RISKY"
+        keep = False
+    elif prob >= 0.86 and is_anchor_candidate:
+        classification = "SAFE"
+        conviction_tier = "ANCHOR"
+        keep = True
+    elif prob >= SAFE_THRESHOLD:
+        classification = "SAFE" if prob >= 0.80 else "MODERATE"
+        conviction_tier = "ORBIT"
+        keep = True
+    else:
+        classification = "RISKY"
+        conviction_tier = "RISKY"
+        keep = False
 
     return {
         **sel,
         "estimated_prob": round(prob, 3),
         "composite_safety_score": round(prob, 3),
-        "classification": classification if not is_below_odds_floor and not is_tier3 else "RISKY",
-        "keep": (classification in ["SAFE", "MODERATE"] and prob >= SAFE_THRESHOLD and not is_below_odds_floor and not is_tier3),
+        "classification": classification,
+        "conviction_tier": conviction_tier,
+        "h2h_summary": " · ".join(h2h_notes) if h2h_notes else None,
+        "form_summary": " · ".join(form_notes) if form_notes else None,
+        "keep": keep,
         "is_expired": False,
     }
 
@@ -203,7 +353,11 @@ def _remove_reason(sel: Dict[str, Any]) -> str:
     home = sel.get("home_team", "Home")
     away = sel.get("away_team", "Away")
     comp = sel.get("competition", "")
+    h_clean = home.lower()
+    a_clean = away.lower()
 
+    if ("under 3.5" in pick or "under 3.5" in mkt) and (any(c in h_clean or c in a_clean for c in HIGH_TEMPO_CLUBS)):
+        return f"High-tempo attacking dynamic between {home} and {away} carries excessive risk of exceeding 3.5 goals."
     if odds < 1.15:
         return f"Odds @{odds:.2f}x are below the 1.15 minimum profitability threshold."
     if _is_tier3_comp(comp):
@@ -528,20 +682,27 @@ async def re_edit_ticket(
     effective_target_games = min(15, target_games) if (target_mode == "GAMES" and target_games > 0) else (14 if target_mode == "GAMES" else 0)
 
     # ══════════════════════════════════════════════════════════════════════════
-    # STEP 3: DYNAMIC BALANCED MULTI-TICKET PARTITIONING
+    # STEP 3: ANCHOR & ORBIT MULTI-TICKET PARTITIONING (Risk-Isolated Portfolio)
     # ══════════════════════════════════════════════════════════════════════════
     def _rank_score(s):
         p = float(s.get("estimated_prob") or 0.80)
+        is_anchor = s.get("conviction_tier") == "ANCHOR"
         o = float(s.get("estimated_odds") or s.get("odds") or 1.25)
-        # Optimal odds buffer: 1.15 to 1.35 gets a slight boost
-        o_score = 0.12 if 1.15 <= o <= 1.35 else 0.04
-        jitter = (rng.random() * 0.08) if reshuffle_seed else 0.0
-        return p + o_score + jitter
+        o_score = 0.06 if 1.15 <= o <= 1.35 else 0.02
+        anchor_bonus = 0.12 if is_anchor else 0.0
+        jitter = (rng.random() * 0.04) if reshuffle_seed else 0.0
+        return p + o_score + anchor_bonus + jitter
 
-    # 1. Rank vetted safe selections by composite quality score
-    sorted_candidates = sorted(final_selections, key=_rank_score, reverse=True)
+    # Split candidates into Anchors (high certainty, multi-ticket eligible) and Orbits (single-ticket isolation)
+    anchors = [s for s in final_selections if s.get("conviction_tier") == "ANCHOR" or float(s.get("estimated_prob", 0.0)) >= 0.88]
+    orbits = [s for s in final_selections if s not in anchors]
 
-    # 2. Interleaved Round-Robin Partitioning across num_t tickets
+    anchors.sort(key=_rank_score, reverse=True)
+    orbits.sort(key=_rank_score, reverse=True)
+
+    sorted_candidates = anchors + orbits
+
+    # Interleaved Round-Robin Partitioning across num_t tickets
     ticket_buckets: List[List[Dict[str, Any]]] = [[] for _ in range(num_t)]
     for idx, cand in enumerate(sorted_candidates):
         ticket_buckets[idx % num_t].append(cand)
@@ -617,13 +778,12 @@ async def re_edit_ticket(
     portfolio_slips = []
     fixture_usage_count: Dict[str, int] = {}
     assigned_markets_per_fixture: Dict[str, set] = {}
-    max_allowed_appearances = 2
 
     for t_idx in range(num_t):
         primary_bucket = ticket_buckets[t_idx]
         t_final = []
 
-        # 1. First add all non-overlapping selections from this ticket's primary partition
+        # 1. First add all selections from this ticket's primary partition
         for cand in primary_bucket:
             f_key = str(cand.get("event_id") or cand.get("fixture_id") or f"{cand.get('home_team')}_{cand.get('away_team')}").strip().lower()
             if fixture_usage_count.get(f_key, 0) == 0:
@@ -639,25 +799,33 @@ async def re_edit_ticket(
             for other_idx, other_bucket in enumerate(ticket_buckets):
                 if other_idx == t_idx:
                     continue
-                for cand in sorted(other_bucket, key=lambda x: float(x.get("estimated_prob", 0.0)), reverse=True):
+                # Sort other candidates: Prioritize ANCHORS first, then high win-probability
+                candidates_to_borrow = sorted(
+                    other_bucket,
+                    key=lambda x: (1 if x.get("conviction_tier") == "ANCHOR" else 0, float(x.get("estimated_prob", 0.0))),
+                    reverse=True
+                )
+                for cand in candidates_to_borrow:
                     f_key = str(cand.get("event_id") or cand.get("fixture_id") or f"{cand.get('home_team')}_{cand.get('away_team')}").strip().lower()
                     current_count = fixture_usage_count.get(f_key, 0)
+                    is_anchor = (cand.get("conviction_tier") == "ANCHOR" or float(cand.get("estimated_prob", 0.0)) >= 0.85)
+                    max_allowed_for_cand = num_t if is_anchor else (2 if num_t >= 3 else 1)
 
                     is_already_in_ticket = any(
                         str(x.get("event_id") or x.get("fixture_id") or f"{x.get('home_team')}_{x.get('away_team')}").strip().lower() == f_key
                         for x in t_final
                     )
                     if not is_already_in_ticket:
-                        if current_count < max_allowed_appearances:
-                            # Apply Smart Alternative Market Hedging across slips for shared matches
+                        if mode == "AUDITOR" and current_count < max_allowed_for_cand:
                             diversified_cand = _derive_alternative_market(cand)
                             t_final.append(diversified_cand)
                             fixture_usage_count[f_key] = current_count + 1
                             assigned_markets_per_fixture.setdefault(f_key, set()).add(str(diversified_cand.get("selection_name")).strip().lower())
                             needed -= 1
-                        elif current_count == 0:
+                        elif mode == "REMOVE" and current_count < max_allowed_for_cand:
+                            # In REMOVE mode: Preserve user's pick, allow Anchor/Orbit allocation
                             t_final.append(cand)
-                            fixture_usage_count[f_key] = 1
+                            fixture_usage_count[f_key] = current_count + 1
                             assigned_markets_per_fixture.setdefault(f_key, set()).add(str(cand.get("selection_name")).strip().lower())
                             needed -= 1
 
@@ -672,7 +840,6 @@ async def re_edit_ticket(
 
         # 3. Target Odds mode handling
         if target_mode == "ODDS" and target_odds > 1.05:
-            # Check if primary bucket needs supplementary games to reach target_odds
             curr_acc = 1.0
             for c in t_final:
                 curr_acc *= float(c.get("estimated_odds") or c.get("odds") or 1.25)
@@ -681,22 +848,30 @@ async def re_edit_ticket(
                 for other_idx, other_bucket in enumerate(ticket_buckets):
                     if other_idx == t_idx:
                         continue
-                    for cand in sorted(other_bucket, key=lambda x: float(x.get("estimated_prob", 0.0)), reverse=True):
+                    candidates_to_borrow = sorted(
+                        other_bucket,
+                        key=lambda x: (1 if x.get("conviction_tier") == "ANCHOR" else 0, float(x.get("estimated_prob", 0.0))),
+                        reverse=True
+                    )
+                    for cand in candidates_to_borrow:
                         f_key = str(cand.get("event_id") or cand.get("fixture_id") or f"{cand.get('home_team')}_{cand.get('away_team')}").strip().lower()
                         current_count = fixture_usage_count.get(f_key, 0)
+                        is_anchor = (cand.get("conviction_tier") == "ANCHOR" or float(cand.get("estimated_prob", 0.0)) >= 0.85)
+                        max_allowed_for_cand = num_t if is_anchor else (2 if num_t >= 3 else 1)
+
                         is_already_in_ticket = any(
                             str(x.get("event_id") or x.get("fixture_id") or f"{x.get('home_team')}_{x.get('away_team')}").strip().lower() == f_key
                             for x in t_final
                         )
                         if not is_already_in_ticket:
-                            if mode == "AUDITOR" and current_count < max_allowed_appearances:
+                            if mode == "AUDITOR" and current_count < max_allowed_for_cand:
                                 diversified_cand = _derive_alternative_market(cand)
                                 t_final.append(diversified_cand)
                                 fixture_usage_count[f_key] = current_count + 1
                                 curr_acc *= float(diversified_cand.get("estimated_odds") or diversified_cand.get("odds") or 1.25)
-                            elif mode == "REMOVE" and current_count == 0:
+                            elif mode == "REMOVE" and current_count < max_allowed_for_cand:
                                 t_final.append(cand)
-                                fixture_usage_count[f_key] = 1
+                                fixture_usage_count[f_key] = current_count + 1
                                 curr_acc *= float(cand.get("estimated_odds") or cand.get("odds") or 1.25)
 
                             if curr_acc >= (target_odds * 0.95) and len(t_final) >= 2:

@@ -158,6 +158,13 @@ HIGH_SCORING_LEAGUES = {
     "NETHERLANDS", "GERMANY", "SWITZERLAND", "AUSTRIA", "BELGIUM", "NORWAY", "ELITESERIEN", "SCO", "PREMIERSHIP"
 }
 
+HIGH_TEMPO_CLUBS = {
+    "atalanta", "roma", "bayern", "dortmund", "leverkusen", "leipzig", "man city", "manchester city",
+    "liverpool", "arsenal", "tottenham", "chelsea", "barcelona", "real madrid", "psg", "monaco",
+    "benfica", "sporting", "porto", "psv", "ajax", "feyenoord", "young boys", "celtic", "rangers",
+    "stuttgart", "frankfurt", "hoffenheim", "brighton", "leeds", "brentford"
+}
+
 @dataclass
 class PickDecision:
     fixture_id: str
@@ -606,11 +613,23 @@ class MatchIQPickEngine:
                 "category": "OVER_UNDER"
             })
 
-        # 5. Under 3.5 & Under 4.5 Goals (Gated against high-scoring H2H games and odds >= 1.15)
-        if ou35_data.get("under"):
+        # 5. Under 3.5 & Under 4.5 Goals (Strictly gated against high-tempo attacking teams, xG >= 2.5, and synthetic odds)
+        h_clean = home.lower()
+        a_clean = away.lower()
+        c_upper = str(comp or "").upper()
+        tot_exp_goals = float(probs_data.get("expected_home_goals", 1.45)) + float(probs_data.get("expected_away_goals", 1.15))
+        is_high_tempo_fixture = (
+            tot_exp_goals >= 2.50 or
+            po25 >= 0.48 or
+            any(c in h_clean or c in a_clean for c in HIGH_TEMPO_CLUBS) or
+            any(l in c_upper for l in HIGH_SCORING_LEAGUES) or
+            h2h_is_high_scoring
+        )
+
+        if ou35_data.get("under") and not is_high_tempo_fixture:
             u35_odds = ou35_data.get("under")
             implied_u35_prob = min(0.95, max(0.75, 1.0 / (float(u35_odds) * 1.04)))
-            if implied_u35_prob >= 0.76 and 1.15 <= float(u35_odds) <= 1.35 and not h2h_is_high_scoring:
+            if implied_u35_prob >= 0.76 and 1.18 <= float(u35_odds) <= 1.35 and tot_exp_goals < 2.30:
                 candidate_markets.append({
                     "market": "Over/Under Goals",
                     "selection": "Under 3.5 Goals",
@@ -620,10 +639,10 @@ class MatchIQPickEngine:
                     "category": "OVER_UNDER"
                 })
 
-        if ou45_data.get("under"):
+        if ou45_data.get("under") and not is_high_tempo_fixture:
             u45_odds = ou45_data.get("under")
             implied_u45_prob = min(0.97, max(0.80, 1.0 / (float(u45_odds) * 1.03)))
-            if implied_u45_prob >= 0.80 and 1.15 <= float(u45_odds) <= 1.25 and not h2h_is_high_scoring:
+            if implied_u45_prob >= 0.80 and 1.15 <= float(u45_odds) <= 1.25 and tot_exp_goals < 2.40:
                 candidate_markets.append({
                     "market": "Over/Under Goals",
                     "selection": "Under 4.5 Goals",
@@ -1961,8 +1980,12 @@ class MatchIQPickEngine:
         base_seed = int(time.time() * 1000)
 
         # Check if we have ample fixtures for strict distinct partitioning
-        # On high-volume match days (e.g. Saturdays/Sundays with >= 30 matches), enforce strict zero-fixture overlap
-        can_strict_partition = (n_pool >= needed_total_picks) or (n_pool >= 30 and num_tickets == 2 and target_legs_count <= 15)
+        # On match days with >= 20 fixtures and 2 tickets, or ZERO_OVERLAP mode with >= 18 fixtures, enforce strict zero-fixture overlap
+        can_strict_partition = (
+            (n_pool >= needed_total_picks)
+            or (n_pool >= 20 and num_tickets <= 2)
+            or (overlap_mode == "ZERO_OVERLAP" and n_pool >= 18)
+        )
 
         if can_strict_partition:
             # Standard Round-Robin Partitions: T1 gets 0, 2, 4... T2 gets 1, 3, 5...

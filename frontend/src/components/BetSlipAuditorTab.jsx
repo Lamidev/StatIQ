@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { decodeBookingCode, runTicketReEdit, generateNewBookingCode, generateVerifiedBookingCode, lockTrackedTicket, fetchTrackedTickets as fetchTrackedTicketsApi, deleteTrackedTicket as deleteTrackedTicketApi, mergeMasterTicket } from "../api/client";
-import { Search, Copy, CheckCircle, CheckCircle2, ShieldCheck, ShieldAlert, AlertTriangle, ArrowRight, RefreshCw, Trash2, Sliders, ExternalLink, X, Receipt, Sparkles, Scissors, Layers, Ticket, Zap } from "lucide-react";
+import { Search, Copy, CheckCircle, CheckCircle2, ShieldCheck, ShieldAlert, AlertTriangle, ArrowRight, RefreshCw, Trash2, Sliders, ExternalLink, X, Receipt, Sparkles, Scissors, Layers, Ticket, Zap, ChevronLeft, ChevronRight } from "lucide-react";
 
 import { calculateFlexShield } from "../utils/flexCalculator";
 import { formatCompetitionWithCountry } from "./TicketBuilderTab";
@@ -1354,8 +1354,13 @@ export default function BetSlipAuditorTab({ onNavigateHistory, onTicketLocked })
                               <button
                                 key={sIdx}
                                 type="button"
-                                onClick={() => setActivePortfolioIndex(sIdx)}
-                                className={`p-3 rounded-xl border text-left transition-all flex flex-col justify-between gap-2 ${
+                                onClick={() => {
+                                  setActivePortfolioIndex(sIdx);
+                                  setTimeout(() => {
+                                    document.getElementById("active-reedit-slip-container")?.scrollIntoView({ behavior: "smooth", block: "start" });
+                                  }, 50);
+                                }}
+                                className={`p-3 rounded-xl border text-left transition-all flex flex-col justify-between gap-2 cursor-pointer ${
                                   isMaster
                                     ? (isCurrent
                                       ? "bg-amber-950/70 border-amber-400 ring-2 ring-amber-400/50 text-white shadow-lg"
@@ -1401,6 +1406,45 @@ export default function BetSlipAuditorTab({ onNavigateHistory, onTicketLocked })
                               </button>
                             );
                           })}
+                        </div>
+
+                        {/* Mobile Quick Prev / Next Navigator */}
+                        <div className="flex items-center justify-between pt-2 border-t border-slate-800 text-xs sm:hidden">
+                          <button
+                            type="button"
+                            disabled={activePortfolioIndex === 0}
+                            onClick={() => {
+                              setActivePortfolioIndex(prev => Math.max(0, prev - 1));
+                              setTimeout(() => {
+                                document.getElementById("active-reedit-slip-container")?.scrollIntoView({ behavior: "smooth", block: "start" });
+                              }, 50);
+                            }}
+                            className={`px-3 py-1.5 rounded-lg font-bold flex items-center gap-1 ${
+                              activePortfolioIndex === 0 ? "text-slate-600 cursor-not-allowed" : "bg-slate-800 text-white hover:bg-slate-700"
+                            }`}
+                          >
+                            <ChevronLeft className="w-4 h-4" />
+                            <span>Prev Slip</span>
+                          </button>
+                          <span className="font-extrabold text-amber-400 text-[11px]">
+                            Viewing {portfolioSlips[activePortfolioIndex]?.is_master ? "⚡ Master Ticket" : `Slip #${activePortfolioIndex + 1}`} of {portfolioSlips.length}
+                          </span>
+                          <button
+                            type="button"
+                            disabled={activePortfolioIndex === portfolioSlips.length - 1}
+                            onClick={() => {
+                              setActivePortfolioIndex(prev => Math.min(portfolioSlips.length - 1, prev + 1));
+                              setTimeout(() => {
+                                document.getElementById("active-reedit-slip-container")?.scrollIntoView({ behavior: "smooth", block: "start" });
+                              }, 50);
+                            }}
+                            className={`px-3 py-1.5 rounded-lg font-bold flex items-center gap-1 ${
+                              activePortfolioIndex === portfolioSlips.length - 1 ? "text-slate-600 cursor-not-allowed" : "bg-slate-800 text-white hover:bg-slate-700"
+                            }`}
+                          >
+                            <span>Next Slip</span>
+                            <ChevronRight className="w-4 h-4" />
+                          </button>
                         </div>
 
                         {/* Merge into Master Ticket Action Panel */}
@@ -1482,7 +1526,7 @@ export default function BetSlipAuditorTab({ onNavigateHistory, onTicketLocked })
                     )}
 
                     {/* Active Slip Banner */}
-                    <div className={`border p-5 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-4 ${
+                    <div id="active-reedit-slip-container" className={`border p-5 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-4 ${
                       activeSlip.is_master || activeSlip.ticket_index === "MASTER"
                         ? "bg-amber-50 border-amber-300 ring-1 ring-amber-300/50"
                         : "bg-emerald-50 border-emerald-200"

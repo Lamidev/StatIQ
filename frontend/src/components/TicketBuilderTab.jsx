@@ -241,7 +241,7 @@ export default function TicketBuilderTab() {
     const dcx2 = parseFloat(dc["X2"] || dc["x2"] || dc.draw_away) || roundOdds(1.0 / ((pD + pA) * 1.04));
     const dc12 = parseFloat(dc["12"] || dc["12"] || dc.home_away) || roundOdds(1.0 / ((pH + pA) * 1.04));
 
-    // 3. Exact or mathematically derived Over/Under Goals (Expectation model)
+    // 3. Exact Over/Under Goals (Strictly from real bookmaker feed ou_lines)
     const ouArray = Array.isArray(ou) ? ou : [];
     const ou15 = ouArray.find(x => String(x.line) === "1.5") || {};
     const ou25 = ouArray.find(x => String(x.line) === "2.5") || {};
@@ -250,16 +250,6 @@ export default function TicketBuilderTab() {
     const ou05 = ouArray.find(x => String(x.line) === "0.5") || {};
 
     const totalGoalExp = (hOdd <= 1.25 || aOdd <= 1.25) ? 3.4 : (hOdd <= 1.55 || aOdd <= 1.55) ? 2.8 : 2.5;
-    const probO15 = 1.0 - Math.exp(-totalGoalExp) * (1 + totalGoalExp);
-    const probO25 = 1.0 - Math.exp(-totalGoalExp) * (1 + totalGoalExp + Math.pow(totalGoalExp, 2)/2);
-    const probU35 = Math.exp(-totalGoalExp) * (1 + totalGoalExp + Math.pow(totalGoalExp, 2)/2 + Math.pow(totalGoalExp, 3)/6);
-    const probU45 = Math.exp(-totalGoalExp) * (1 + totalGoalExp + Math.pow(totalGoalExp, 2)/2 + Math.pow(totalGoalExp, 3)/6 + Math.pow(totalGoalExp, 4)/24);
-
-    const o15_val = parseFloat(ou15.over) || roundOdds(1.0 / (probO15 * 1.05));
-    const o25_val = parseFloat(ou25.over) || roundOdds(1.0 / (probO25 * 1.05));
-    const u35_val = parseFloat(ou35.under) || roundOdds(1.0 / (probU35 * 1.05));
-    const u45_val = parseFloat(ou45.under) || roundOdds(1.0 / (probU45 * 1.05));
-    const o05_val = parseFloat(ou05.over) || 1.04;
 
     // 4. Exact or mathematically derived Win Either Half
     const probWehH = Math.min(0.96, pH * 1.15 + pD * 0.15);
@@ -289,17 +279,29 @@ export default function TicketBuilderTab() {
       { label: `${homeTeam} or ${awayTeam} (12)`, name: `${homeTeam} or ${awayTeam} (12)`, odds: dc12, type: "DC_12" },
       { label: `${homeTeam} Over 1.5 Team Goals`, name: `${homeTeam} Over 1.5 Goals`, odds: teamO15H, type: "TEAM_OU_H15" },
       { label: `${awayTeam} Over 1.5 Team Goals`, name: `${awayTeam} Over 1.5 Goals`, odds: teamO15A, type: "TEAM_OU_A15" },
-      { label: `Over 1.5 Goals`, name: "Over 1.5 Goals", odds: o15_val, type: "OU_O15" },
-      { label: `Over 2.5 Goals`, name: "Over 2.5 Goals", odds: o25_val, type: "OU_O25" },
-      { label: `Under 3.5 Goals`, name: "Under 3.5 Goals", odds: u35_val, type: "OU_U35" },
-      { label: `Under 4.5 Goals`, name: "Under 4.5 Goals", odds: u45_val, type: "OU_U45" },
       { label: `${homeTeam} (-1.0 Asian Handicap)`, name: `${homeTeam} (-1.0 Asian Handicap)`, odds: ahMinus1H, type: "AH_MINUS1" },
       { label: `${homeTeam} (+1.5 Handicap)`, name: `${homeTeam} (+1.5 Handicap)`, odds: ahPlus15H, type: "AH_H15" },
       { label: `${awayTeam} (+1.5 Handicap)`, name: `${awayTeam} (+1.5 Handicap)`, odds: ahPlus15A, type: "AH_A15" },
       { label: `${homeTeam} to Win Either Half`, name: `${homeTeam} to Win Either Half`, odds: wehH, type: "WEH_HOME" },
       { label: `${awayTeam} to Win Either Half`, name: `${awayTeam} to Win Either Half`, odds: wehA, type: "WEH_AWAY" },
-      { label: `Over 0.5 Goals`, name: "Over 0.5 Goals", odds: o05_val, type: "OU_O05" },
     ];
+
+    // Only inject real, bookmaker-published Over/Under lines
+    if (ou15 && parseFloat(ou15.over) > 1.0) {
+      list.push({ label: `Over 1.5 Goals`, name: "Over 1.5 Goals", odds: parseFloat(ou15.over), type: "OU_O15" });
+    }
+    if (ou25 && parseFloat(ou25.over) > 1.0) {
+      list.push({ label: `Over 2.5 Goals`, name: "Over 2.5 Goals", odds: parseFloat(ou25.over), type: "OU_O25" });
+    }
+    if (ou35 && parseFloat(ou35.under) > 1.0) {
+      list.push({ label: `Under 3.5 Goals`, name: "Under 3.5 Goals", odds: parseFloat(ou35.under), type: "OU_U35" });
+    }
+    if (ou45 && parseFloat(ou45.under) > 1.0) {
+      list.push({ label: `Under 4.5 Goals`, name: "Under 4.5 Goals", odds: parseFloat(ou45.under), type: "OU_U45" });
+    }
+    if (ou05 && parseFloat(ou05.over) > 1.0) {
+      list.push({ label: `Over 0.5 Goals`, name: "Over 0.5 Goals", odds: parseFloat(ou05.over), type: "OU_O05" });
+    }
 
     const currentName = leg.selection_name || leg.selection || leg.pick;
     if (currentName && !list.find(item => item.name === currentName || item.label === currentName)) {
@@ -2439,7 +2441,12 @@ export default function TicketBuilderTab() {
                     <button
                       key={scIdx}
                       type="button"
-                      onClick={() => setActivePortfolioIndex(scIdx)}
+                      onClick={() => {
+                        setActivePortfolioIndex(scIdx);
+                        setTimeout(() => {
+                          document.getElementById("active-builder-slip-container")?.scrollIntoView({ behavior: "smooth", block: "start" });
+                        }, 50);
+                      }}
                       className={`w-full p-3 rounded-xl border text-left transition-all flex flex-col justify-between gap-2 cursor-pointer ${
                         isMaster
                           ? (isCurrent
@@ -2569,7 +2576,12 @@ export default function TicketBuilderTab() {
                 <button
                   type="button"
                   disabled={activePortfolioIndex === 0}
-                  onClick={() => setActivePortfolioIndex(prev => Math.max(0, prev - 1))}
+                  onClick={() => {
+                    setActivePortfolioIndex(prev => Math.max(0, prev - 1));
+                    setTimeout(() => {
+                      document.getElementById("active-builder-slip-container")?.scrollIntoView({ behavior: "smooth", block: "start" });
+                    }, 50);
+                  }}
                   className={`px-3 py-1.5 rounded-lg font-bold flex items-center gap-1 ${
                     activePortfolioIndex === 0 ? "text-slate-600 cursor-not-allowed" : "bg-slate-800 text-white hover:bg-slate-700"
                   }`}
@@ -2577,13 +2589,18 @@ export default function TicketBuilderTab() {
                   <ChevronLeft className="w-4 h-4" />
                   <span>Prev Slip</span>
                 </button>
-                <span className="font-extrabold text-emerald-400 text-[11px]">
-                  Viewing {result.scenarios[activePortfolioIndex]?.is_master ? "Master Ticket" : `Slip #${activePortfolioIndex + 1}`} of {result.scenarios.length}
+                <span className="font-extrabold text-amber-400 text-[11px]">
+                  Viewing {result.scenarios[activePortfolioIndex]?.is_master ? "⚡ Master Ticket" : `Slip #${activePortfolioIndex + 1}`} of {result.scenarios.length}
                 </span>
                 <button
                   type="button"
                   disabled={activePortfolioIndex === result.scenarios.length - 1}
-                  onClick={() => setActivePortfolioIndex(prev => Math.min(result.scenarios.length - 1, prev + 1))}
+                  onClick={() => {
+                    setActivePortfolioIndex(prev => Math.min(result.scenarios.length - 1, prev + 1));
+                    setTimeout(() => {
+                      document.getElementById("active-builder-slip-container")?.scrollIntoView({ behavior: "smooth", block: "start" });
+                    }, 50);
+                  }}
                   className={`px-3 py-1.5 rounded-lg font-bold flex items-center gap-1 ${
                     activePortfolioIndex === result.scenarios.length - 1 ? "text-slate-600 cursor-not-allowed" : "bg-slate-800 text-white hover:bg-slate-700"
                   }`}
@@ -2613,7 +2630,7 @@ export default function TicketBuilderTab() {
             const isMasterSlip = scn.is_master || scn.ticket_index === "MASTER";
 
             return (
-              <div key={scn.scenario_id} className={`bg-white p-6 rounded-2xl border space-y-4 shadow-sm relative ${
+              <div id="active-builder-slip-container" key={scn.scenario_id} className={`bg-white p-6 rounded-2xl border space-y-4 shadow-sm relative ${
                 isMasterSlip ? "border-amber-400 ring-2 ring-amber-400/20" : "border-slate-200"
               }`}>
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-slate-100 pb-3 gap-2">

@@ -20,6 +20,36 @@ class FixtureIdentityResolver:
         h = hashlib.md5(raw_key.encode()).hexdigest()[:10]
         return f"fx_{h}"
 
+    @staticmethod
+    def parse_kickoff_datetime(raw_val: Any) -> datetime:
+        if not raw_val:
+            return datetime.now(timezone.utc)
+        if isinstance(raw_val, datetime):
+            return raw_val if raw_val.tzinfo else raw_val.replace(tzinfo=timezone.utc)
+        if isinstance(raw_val, (int, float)):
+            try:
+                ts = raw_val / 1000.0 if raw_val > 1e11 else float(raw_val)
+                return datetime.fromtimestamp(ts, tz=timezone.utc)
+            except Exception:
+                return datetime.now(timezone.utc)
+        if isinstance(raw_val, str):
+            raw_val = raw_val.strip()
+            if not raw_val:
+                return datetime.now(timezone.utc)
+            try:
+                num = float(raw_val)
+                ts = num / 1000.0 if num > 1e11 else num
+                return datetime.fromtimestamp(ts, tz=timezone.utc)
+            except ValueError:
+                pass
+            try:
+                clean_str = raw_val.replace("Z", "+00:00")
+                dt = datetime.fromisoformat(clean_str)
+                return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+            except Exception:
+                pass
+        return datetime.now(timezone.utc)
+
     @classmethod
     def resolve_and_persist(
         cls,
@@ -27,7 +57,7 @@ class FixtureIdentityResolver:
         home_team: str,
         away_team: str,
         competition: str = "League",
-        kickoff_ms: Optional[int] = None,
+        kickoff_ms: Optional[Any] = None,
         sportybet_game_id: Optional[str] = None,
         sportradar_event_id: Optional[str] = None,
         api_football_id: Optional[str] = None,
@@ -39,7 +69,7 @@ class FixtureIdentityResolver:
         clean_h = home_team.strip()
         clean_a = away_team.strip()
         
-        kickoff_dt = datetime.fromtimestamp(kickoff_ms / 1000.0, tz=timezone.utc) if kickoff_ms else datetime.now(timezone.utc)
+        kickoff_dt = cls.parse_kickoff_datetime(kickoff_ms)
         date_str = kickoff_dt.strftime("%Y%m%d")
         
         # Check if provider ID already exists in DB

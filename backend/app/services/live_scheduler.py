@@ -42,7 +42,8 @@ class LiveTrackingScheduler:
                 sleep_interval = self.sync_and_settle_all(db)
                 db.close()
             except Exception as e:
-                print("[LiveTrackingScheduler] Sync loop error:", e)
+                import traceback
+                print(f"[LiveTrackingScheduler] Sync loop error: {e}\n{traceback.format_exc()}")
                 sleep_interval = 30
 
             time.sleep(max(15, sleep_interval))
@@ -115,7 +116,10 @@ class LiveTrackingScheduler:
 
             # Tier 3: Autonomous Gemini Search-Grounded Fallback (Zero-Quota Dependency)
             # If match is finished or >105 mins elapsed but score or corners remain unverified
-            ko_elapsed_mins = int((now_ts * 1000 - (fix.kickoff_utc.timestamp() * 1000)) / 60000) if fix.kickoff_utc else 0
+            ko_dt = fix.kickoff_utc if isinstance(fix.kickoff_utc, datetime) else (
+                FixtureIdentityResolver.parse_kickoff_datetime(fix.kickoff_utc) if fix.kickoff_utc else None
+            )
+            ko_elapsed_mins = int((now_ts * 1000 - (ko_dt.timestamp() * 1000)) / 60000) if ko_dt else 0
             if (not prov_state or prov_state.home_score is None) and (ko_elapsed_mins > 105 or fix.status in ("FINISHED", "CONCLUDED", "FT")):
                 try:
                     from app.services.gemini_service import GeminiAIService
@@ -162,7 +166,7 @@ class LiveTrackingScheduler:
                 db.flush()
 
             # Check priority for scheduler timing
-            ko_ms = int(fix.kickoff_utc.timestamp() * 1000) if fix.kickoff_utc else 0
+            ko_ms = int(ko_dt.timestamp() * 1000) if ko_dt else 0
             if fix.status in ("LIVE", "HALFTIME", "SECOND_HALF"):
                 has_live_matches = True
             elif ko_ms and (ko_ms - (now_ts * 1000)) < 15 * 60 * 1000:
