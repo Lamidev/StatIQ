@@ -537,6 +537,20 @@ def _is_league_match(comp_name: str, country_name: str, code_key: str) -> bool:
         return "1. division" in comp or "1.division" in comp or "nordicbet" in comp
 
     # -----------------------------------------------------------------------
+    # Explicitly checked codes must not match arbitrary lower divisions via fallback:
+    # -----------------------------------------------------------------------
+    EXPLICITLY_HANDLED_CODES = {
+        "PL", "PD", "SA", "BL1", "FL1", "DED", "PPL", "TUR", "BEL", "AUT",
+        "SCO", "SUI", "CRO", "DEN", "GRE", "NOR", "SWE", "POL", "ROU", "ROM",
+        "RUS", "UKR", "BRA", "MLS", "ARG", "COL", "CHI", "MEX", "CZE", "BUL",
+        "TUN", "EGY", "SAU", "COP", "UCL", "UEL", "UECL", "ELC", "SD", "BL2",
+        "IT2", "FL2", "IRL", "DED2", "SUI2", "BEL2", "WAL", "SRB", "SCO2", "PPL2",
+        "POL2", "DEN2"
+    }
+    if code in EXPLICITLY_HANDLED_CODES:
+        return False
+
+    # -----------------------------------------------------------------------
     # COUNTRY-NAME FALLBACK: If a league code has no explicit rule, match by
     # country name so new/unlisted leagues are never silently dropped.
     # -----------------------------------------------------------------------
@@ -641,7 +655,7 @@ async def build_ai_ticket(req: BuildTicketRequest):
 
             if start_ms > 0:
                 diff_sec = (match_dt - now_utc).total_seconds()
-                if diff_sec < 180:  # If kickoff was in the past or within next 3 minutes, skip!
+                if diff_sec < 300:  # If kickoff was in the past or within next 5 minutes, skip!
                     continue
 
             # 1. Strict Date Window Filter
