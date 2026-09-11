@@ -476,7 +476,65 @@ def _is_league_match(comp_name: str, country_name: str, code_key: str) -> bool:
         # Egyptian Premier League
         if country and country not in ["egypt", ""]:
             return False
-        return any(x in comp for x in ["premier league", "egyptian premier", "eg premier"])
+    elif code == "IRL":
+        # Irish Premier Division
+        if country and country not in ["ireland", "republic of ireland", ""]:
+            return False
+        return "premier division" in comp or "premier" in comp
+
+    elif code == "DED2":
+        # Dutch Eerste Divisie (Keuken Kampioen Divisie)
+        if country and country not in ["netherlands", "holland", ""]:
+            return False
+        return "eerste divisie" in comp or "eerste" in comp or "keuken" in comp
+
+    elif code == "SUI2":
+        # Swiss Challenge League
+        if country and country not in ["switzerland", "suisse", "schweiz", ""]:
+            return False
+        return "challenge league" in comp or "challenge" in comp
+
+    elif code == "BEL2":
+        # Belgian Challenger Pro League
+        if country and country not in ["belgium", "belgique", ""]:
+            return False
+        return "challenger pro" in comp or "challenger" in comp or "first division b" in comp
+
+    elif code == "WAL":
+        # Welsh Cymru Premier
+        if country and country not in ["wales", ""]:
+            return False
+        return "cymru premier" in comp or "cymru" in comp or ("premier" in comp and country == "wales")
+
+    elif code == "SRB":
+        # Serbian Superliga
+        if country and country not in ["serbia", ""]:
+            return False
+        return "superliga" in comp or "super liga" in comp or "prva liga" in comp
+
+    elif code == "SCO2":
+        # Scottish Championship & Cup
+        if country and country not in ["scotland", ""]:
+            return False
+        return any(x in comp for x in ["championship", "league cup", "fa cup", "challenge cup"])
+
+    elif code == "PPL2":
+        # Portuguese Liga Portugal 2
+        if country and country not in ["portugal", ""]:
+            return False
+        return any(x in comp for x in ["liga 2", "segunda liga", "liga portugal 2"])
+
+    elif code == "POL2":
+        # Polish 1. Liga
+        if country and country not in ["poland", "polska", ""]:
+            return False
+        return "1. liga" in comp or "1.liga" in comp or "i liga" in comp
+
+    elif code == "DEN2":
+        # Danish 1. Division
+        if country and country not in ["denmark", "danmark", ""]:
+            return False
+        return "1. division" in comp or "1.division" in comp or "nordicbet" in comp
 
     # -----------------------------------------------------------------------
     # COUNTRY-NAME FALLBACK: If a league code has no explicit rule, match by
@@ -538,21 +596,23 @@ async def build_ai_ticket(req: BuildTicketRequest):
     today_str = now.strftime("%Y-%m-%d")
 
     TOP_MAJOR_EUROPEAN_LEAGUES = [
-        # Top 5 European
+        # Top 5 European Flights
         "PL", "PD", "SA", "BL1", "FL1",
-        # Major European Leagues & Saudi Pro League (Czech Republic & Saudi Arabia explicitly included)
+        # Major European Flights & Saudi Pro League
         "DED", "PPL", "TUR", "BEL", "AUT", "SCO", "SUI", "CRO", "DEN", "GRE", "NOR", "SWE", "POL", "ROU", "CZE", "RUS", "UKR", "SAU",
+        # Major Tier-2 European Leagues (High Liquidity Friday / Midweek)
+        "ELC", "SD", "BL2", "IT2", "FL2",
+        # Active European Leagues playing Friday / Midweek
+        "IRL", "DED2", "BUL", "SRB", "WAL", "BEL2", "SUI2", "PPL2", "SCO2", "POL2", "DEN2",
         # European Club Competitions
         "UCL", "UEL", "UECL", "COP"
     ]
 
     ALL_KNOWN_LEAGUES = [
-        # Top Major European Leagues & Saudi
+        # Major European Leagues & Saudi
         *TOP_MAJOR_EUROPEAN_LEAGUES,
-        # Second Divisions (Midweek / Worldwide only)
-        "ELC", "SD", "BL2", "IT2", "FL2",
         # Americas & Africa (Midweek / Worldwide only)
-        "BRA", "MLS", "ARG", "COL", "CHI", "MEX", "BUL", "TUN", "EGY"
+        "BRA", "MLS", "ARG", "COL", "CHI", "MEX", "TUN", "EGY"
     ]
 
     fixture_pool = []
@@ -780,7 +840,7 @@ async def build_ai_ticket(req: BuildTicketRequest):
                 if odds < 1.20 or odds > 3.00:
                     continue
             else:
-                if odds < 1.15 or odds > 1.45:
+                if odds < 1.15 or odds > 1.50:
                     continue
 
             verified.append(leg)

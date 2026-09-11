@@ -257,6 +257,33 @@ TOP_POWERHOUSE_CLUBS = {
     "RED BULL SALZBURG", "SHAKHTAR DONETSK", "DINAMO ZAGREB", "OLYMPIACOS", "PAOK", "AEK ATHENS", "BODØ/GLIMT", "LUDOGORETS", "KRASNODAR"
 }
 
+
+def _normalize_market_category(cat: str) -> str:
+    """
+    Normalizes market category names across frontend and backend formats:
+    - OVER_UNDER_GOALS -> OVER_UNDER
+    - TEAM_TOTAL_GOALS -> TEAM_GOALS
+    - MATCH_RESULT_1X2 -> 1X2
+    - DOUBLE_CHANCE -> DOUBLE_CHANCE
+    - HANDICAP -> HANDICAP
+    - COMBO -> COMBO
+    """
+    c = str(cat or "").strip().upper()
+    if c in ("OVER_UNDER_GOALS", "OVER_UNDER", "TOTAL_GOALS", "GOALS_OVER_UNDER"):
+        return "OVER_UNDER"
+    if c in ("TEAM_TOTAL_GOALS", "TEAM_GOALS", "TEAM_TOTAL", "TEAM_OVER_UNDER"):
+        return "TEAM_GOALS"
+    if c in ("MATCH_RESULT_1X2", "1X2", "MATCH_RESULT", "3_WAY"):
+        return "1X2"
+    if c in ("DOUBLE_CHANCE", "DC"):
+        return "DOUBLE_CHANCE"
+    if c in ("HANDICAP", "ASIAN_HANDICAP", "AH"):
+        return "HANDICAP"
+    if c in ("COMBO", "WIN_EITHER_HALF", "WEH"):
+        return "COMBO"
+    return c
+
+
 class MatchIQPickEngine:
     """
     Core engine enforcing strict 5-gate pipeline validation.
@@ -681,12 +708,12 @@ class MatchIQPickEngine:
             pass
 
         if allowed_markets and len(allowed_markets) > 0 and "ALL" not in [x.upper() for x in allowed_markets]:
-            allowed_upper = [x.upper() for x in allowed_markets]
-            candidate_markets = [c for c in candidate_markets if c.get("category", "").upper() in allowed_upper]
+            allowed_upper = {_normalize_market_category(x) for x in allowed_markets}
+            candidate_markets = [c for c in candidate_markets if _normalize_market_category(c.get("category", "")) in allowed_upper]
 
         if excluded_markets and len(excluded_markets) > 0:
-            excluded_upper = [x.upper() for x in excluded_markets]
-            candidate_markets = [c for c in candidate_markets if c.get("category", "").upper() not in excluded_upper]
+            excluded_upper = {_normalize_market_category(x) for x in excluded_markets}
+            candidate_markets = [c for c in candidate_markets if _normalize_market_category(c.get("category", "")) not in excluded_upper]
 
 
         if not candidate_markets:
@@ -1011,12 +1038,13 @@ class MatchIQPickEngine:
             min_odds_floor = 1.15
             max_odds_cap = 1.48
 
-        # Allowed / Excluded Categories Check
-        allowed_list = [x.upper() for x in allowed_markets] if (allowed_markets and len(allowed_markets) > 0 and "ALL" not in [x.upper() for x in allowed_markets]) else ["DOUBLE_CHANCE", "OVER_UNDER", "TEAM_GOALS", "1X2"]
-        excluded_list = [x.upper() for x in excluded_markets] if excluded_markets else []
+        # Allowed / Excluded Categories Check (Normalized across aliases)
+        allowed_list = {_normalize_market_category(x) for x in allowed_markets} if (allowed_markets and len(allowed_markets) > 0 and "ALL" not in [x.upper() for x in allowed_markets]) else {"DOUBLE_CHANCE", "OVER_UNDER", "TEAM_GOALS", "1X2", "HANDICAP", "COMBO"}
+        excluded_list = {_normalize_market_category(x) for x in excluded_markets} if excluded_markets else set()
 
         def _cat_allowed(cat: str) -> bool:
-            return cat.upper() in allowed_list and cat.upper() not in excluded_list
+            c_norm = _normalize_market_category(cat)
+            return c_norm in allowed_list and c_norm not in excluded_list
 
         ou_lines = fixture.get("ou_lines") or []
         dc_odds = fixture.get("double_chance") or {}
@@ -1980,12 +2008,8 @@ class MatchIQPickEngine:
         base_seed = int(time.time() * 1000)
 
         # Check if we have ample fixtures for strict distinct partitioning
-        # On match days with >= 20 fixtures and 2 tickets, or ZERO_OVERLAP mode with >= 18 fixtures, enforce strict zero-fixture overlap
-        can_strict_partition = (
-            (n_pool >= needed_total_picks)
-            or (n_pool >= 20 and num_tickets <= 2)
-            or (overlap_mode == "ZERO_OVERLAP" and n_pool >= 18)
-        )
+        # Only strictly partition if pool has enough fixtures to give EVERY ticket its full target leg count
+        can_strict_partition = (n_pool >= needed_total_picks)
 
         if can_strict_partition:
             # Standard Round-Robin Partitions: T1 gets 0, 2, 4... T2 gets 1, 3, 5...
@@ -2015,22 +2039,31 @@ class MatchIQPickEngine:
                     a_name = str(leg.get("away_team") or "").strip().lower()
                     f_key = f"{h_name}_vs_{a_name}" if (h_name and a_name) else f_id
                     used_fixtures_all_tickets.add(f_key)
+                    if f_key not in global_market_usage:
+                        global_market_usage[f_key] = set()
+                    global_market_usage[f_key].add(str(leg.get("selection_name") or "").strip().lower())
 
-            # If any ticket is short of target_legs_count, supplement strictly from unused fixtures in pool
+            # If any ticket is short of target_legs_count, supplement from pool
             for t_idx, t_built in enumerate(portfolio):
                 needs_more = False
                 if target_mode == "GAMES" and len(t_built.approved_legs) < target_legs_count:
                     needs_more = True
-                elif target_mode == "ODDS" and t_built.total_odds < (target_total_odds * 0.95) and len(t_built.approved_legs) < target_legs_count:
+                elif target_mode == "ODDS" and t_built.accumulated_odds < (target_total_odds * 0.95) and len(t_built.approved_legs) < target_legs_count:
                     needs_more = True
 
                 if needs_more:
+                    ticket_fix_keys = {
+                        (f"{str(l.get('home_team') or '').strip().lower()}_vs_{str(l.get('away_team') or '').strip().lower()}" if (l.get('home_team') and l.get('away_team')) else str(l.get('fixture_id') or l.get('event_id') or ""))
+                        for l in t_built.approved_legs
+                    }
+
+                    # Pass 1: Try unused fixtures across all tickets
                     for fix in scored_fixtures:
                         f_id = str(fix.get("eventId") or fix.get("event_id") or fix.get("fixture_id") or "")
                         h_name = str(fix.get("home_team") or "").strip().lower()
                         a_name = str(fix.get("away_team") or "").strip().lower()
                         f_key = f"{h_name}_vs_{a_name}" if (h_name and a_name) else f_id
-                        if f_key in used_fixtures_all_tickets:
+                        if f_key in used_fixtures_all_tickets or f_key in ticket_fix_keys:
                             continue
                         cands = self.evaluate_fixture_all_candidates(
                             fixture=fix,
@@ -2068,11 +2101,68 @@ class MatchIQPickEngine:
                             }
                             t_built.approved_legs.append(leg_dict)
                             used_fixtures_all_tickets.add(f_key)
-                            t_built.total_odds = round(t_built.total_odds * chosen.estimated_odds, 2)
+                            ticket_fix_keys.add(f_key)
+                            t_built.accumulated_odds = round(t_built.accumulated_odds * chosen.estimated_odds, 2)
                             if target_mode == "GAMES" and len(t_built.approved_legs) >= target_legs_count:
                                 break
-                            if target_mode == "ODDS" and (t_built.total_odds >= (target_total_odds * 0.95) or len(t_built.approved_legs) >= target_legs_count):
+                            if target_mode == "ODDS" and (t_built.accumulated_odds >= (target_total_odds * 0.95) or len(t_built.approved_legs) >= target_legs_count):
                                 break
+
+                    # Pass 2: If still short, hedge from other fixtures with a DIFFERENT market line
+                    if (target_mode == "GAMES" and len(t_built.approved_legs) < target_legs_count) or (target_mode == "ODDS" and t_built.accumulated_odds < (target_total_odds * 0.95)):
+                        for fix in scored_fixtures:
+                            f_id = str(fix.get("eventId") or fix.get("event_id") or fix.get("fixture_id") or "")
+                            h_name = str(fix.get("home_team") or "").strip().lower()
+                            a_name = str(fix.get("away_team") or "").strip().lower()
+                            f_key = f"{h_name}_vs_{a_name}" if (h_name and a_name) else f_id
+                            if f_key in ticket_fix_keys:
+                                continue
+                            cands = self.evaluate_fixture_all_candidates(
+                                fixture=fix,
+                                per_leg_target_odds=1.25,
+                                risk_profile=risk_profile,
+                                allowed_markets=allowed_markets,
+                                excluded_markets=excluded_markets
+                            )
+                            used_sels = global_market_usage.get(f_key, set())
+                            valid_cands = [c for c in cands if float(c.estimated_odds or 1.0) >= 1.15 and str(c.selection_name).strip().lower() not in used_sels]
+                            if not valid_cands:
+                                valid_cands = [c for c in cands if float(c.estimated_odds or 1.0) >= 1.15 and c.model_probability >= 0.76]
+                            if valid_cands:
+                                valid_cands.sort(key=lambda x: (x.model_probability, float(getattr(x, "tactical_score", 0.0))), reverse=True)
+                                chosen = valid_cands[0]
+                                leg_dict = {
+                                    "fixture_id": chosen.fixture_id,
+                                    "event_id": fix.get("event_id") or fix.get("eventId") or chosen.fixture_id,
+                                    "provider_event_id": fix.get("event_id") or fix.get("eventId") or chosen.fixture_id,
+                                    "home_team": chosen.home_team,
+                                    "away_team": chosen.away_team,
+                                    "competition": chosen.competition,
+                                    "country": fix.get("country", ""),
+                                    "market_name": chosen.market_name,
+                                    "selection_name": chosen.selection_name,
+                                    "model_probability": chosen.model_probability,
+                                    "estimated_odds": chosen.estimated_odds,
+                                    "odds": chosen.estimated_odds,
+                                    "market_id": getattr(chosen, "market_id", "1"),
+                                    "outcome_id": getattr(chosen, "outcome_id", "1"),
+                                    "specifier": getattr(chosen, "specifier", None),
+                                    "tier_context": chosen.tier_context,
+                                    "tactical_reason": getattr(chosen, "tactical_reason", ""),
+                                    "decision_audit_log": [
+                                        f"Alternative Hedge: {chosen.selection_name} @{chosen.estimated_odds:.2f}"
+                                    ]
+                                }
+                                t_built.approved_legs.append(leg_dict)
+                                ticket_fix_keys.add(f_key)
+                                if f_key not in global_market_usage:
+                                    global_market_usage[f_key] = set()
+                                global_market_usage[f_key].add(str(chosen.selection_name).strip().lower())
+                                t_built.accumulated_odds = round(t_built.accumulated_odds * chosen.estimated_odds, 2)
+                                if target_mode == "GAMES" and len(t_built.approved_legs) >= target_legs_count:
+                                    break
+                                if target_mode == "ODDS" and (t_built.accumulated_odds >= (target_total_odds * 0.95) or len(t_built.approved_legs) >= target_legs_count):
+                                    break
         else:
             # Limited Pool: Apply Smart Alternative Market Hedging across slips
             # Distribute fixtures with offset rotation so tickets prioritize different fixtures first
@@ -2206,7 +2296,9 @@ class MatchIQPickEngine:
                         valid_cands = [c for c in cands if float(c.estimated_odds or 1.0) >= 1.15]
                         unused_cands = [c for c in valid_cands if str(c.selection_name).strip().lower() not in used_on_this_fix]
 
-                        # STRICT INVARIANT: Must NEVER duplicate a prediction already used on this fixture in prior tickets
+                        if not unused_cands:
+                            # Fallback: if no completely unused market exists, allow sharing high-probability anchor candidate (>=78%)
+                            unused_cands = [c for c in valid_cands if c.model_probability >= 0.78]
                         if not unused_cands:
                             continue
 
