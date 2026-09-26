@@ -739,20 +739,25 @@ class SportyBetAdapter(BookmakerAdapter):
         """
         url_share = f"{self.BASE_URL}/{country_code.lower()}/orders/share"
         
-        from app.services.sportybet_ingestion import SportyBetIngestionService
-        live_sporty_events = SportyBetIngestionService.fetch_upcoming_fixtures(limit=250)
-
-        # Build lookup maps from live events
+        # Check if any selection needs team name lookup (lacks direct event ID)
+        needs_lookup = any(
+            not (str(s.get("event_id") or s.get("provider_event_id") or s.get("_sportybet_event_id") or s.get("eventId") or s.get("external_fixture_id") or s.get("fixture_id") or s.get("game_id") or s.get("gameId") or "").strip())
+            for s in selections
+        )
+        live_sporty_events = []
         events_by_id = {}
-        for ev in live_sporty_events:
-            if ev.get("eventId"):
-                events_by_id[str(ev["eventId"])] = ev
-            if ev.get("event_id"):
-                events_by_id[str(ev["event_id"])] = ev
-            if ev.get("gameId"):
-                events_by_id[str(ev["gameId"])] = ev
-            if ev.get("game_id"):
-                events_by_id[str(ev["game_id"])] = ev
+        if needs_lookup:
+            from app.services.sportybet_ingestion import SportyBetIngestionService
+            live_sporty_events = SportyBetIngestionService.fetch_upcoming_fixtures(limit=250)
+            for ev in live_sporty_events:
+                if ev.get("eventId"):
+                    events_by_id[str(ev["eventId"])] = ev
+                if ev.get("event_id"):
+                    events_by_id[str(ev["event_id"])] = ev
+                if ev.get("gameId"):
+                    events_by_id[str(ev["gameId"])] = ev
+                if ev.get("game_id"):
+                    events_by_id[str(ev["game_id"])] = ev
 
         selections_payload = []
         STOP_WORDS = {"fc", "sc", "cd", "ud", "ca", "rc", "ac", "fk", "bk", "sk", "ff", "sad", "club", "team"}

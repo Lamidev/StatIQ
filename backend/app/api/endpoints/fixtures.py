@@ -622,13 +622,27 @@ async def get_sportybet_today_fixtures(day: str = "today"):
 
     # Process Strictly Live Dynamic SportyBet Events for target day
     for ev in raw_sporty_fixtures:
-        ev_status = str(ev.get("status") or "").upper().strip()
-        if ev_status in ["LIVE", "STARTED", "1H", "2H", "HT", "FINISHED", "ENDED", "CANCELLED", "POSTPONED", "ABANDONED"]:
+        # Air-tight unstarted pre-match check
+        st_val = ev.get("status")
+        if st_val is not None:
+            try:
+                if int(st_val) != 0:
+                    continue
+            except (ValueError, TypeError):
+                pass
+
+        ev_status = str(ev.get("status") or ev.get("match_status") or ev.get("matchStatus") or "").upper().strip()
+        if ev_status in ["LIVE", "STARTED", "1H", "2H", "HT", "FINISHED", "ENDED", "CANCELLED", "POSTPONED", "ABANDONED", "CLOSED", "CONCLUDED", "INTERRUPTED", "DELAYED"]:
+            continue
+        if ev_status and ev_status not in ("NOT START", "NOT STARTED", "UPCOMING", "PRE-MATCH", "PREMATCH"):
+            continue
+
+        st_ms = ev.get("start_time_ms") or 0
+        if st_ms > 0 and st_ms <= (now_ts * 1000.0 + 180000):
             continue
 
         # Strict Date Filtering for Today / Tomorrow
         if day_str in ("today", "tomorrow"):
-            st_ms = ev.get("start_time_ms") or 0
             if st_ms > 0:
                 ev_date = datetime.datetime.fromtimestamp(st_ms / 1000.0, tz=datetime.timezone.utc).strftime("%Y-%m-%d")
                 if ev_date != target_date_str:
@@ -693,7 +707,7 @@ async def get_sportybet_today_fixtures(day: str = "today"):
                 "X2": max(1.05, dc_x2),
                 "12": max(1.05, dc_12)
             },
-            "ou_lines": _generate_ou_ladder([], o_h, o_a),
+            "ou_lines": _generate_ou_ladder(ev.get("ou_lines") or [], o_h, o_a),
             "ai_prob_home": p_h,
             "ai_prob_draw": p_d,
             "ai_prob_away": p_a,

@@ -154,6 +154,7 @@ export default function TicketBuilderTab() {
   const TOP_MAJOR_EUROPEAN_CODES = [
     "PL", "PD", "SA", "BL1", "FL1", "DED", "PPL", "TUR", "BEL", "AUT",
     "SCO", "SUI", "CRO", "DEN", "GRE", "NOR", "SWE", "POL", "ROU", "CZE", "RUS", "UKR", "SAU",
+    "ELC", "SD", "BL2", "IT2", "FL2",
     "UCL", "UEL", "UECL"
   ];
   const ALL_TOP_LEAGUE_CODES = TOP_MAJOR_EUROPEAN_CODES;
@@ -225,10 +226,23 @@ export default function TicketBuilderTab() {
     const homeTeam = leg.home_team || raw.home_team || raw.home || "Home";
     const awayTeam = leg.away_team || raw.away_team || raw.away || "Away";
 
-    // 1. Exact 1X2 market odds
-    const hOdd = parseFloat(r1x2["1"] || r1x2.home || r1x2.home_odds || raw["1"] || leg.odds) || 2.10;
-    const dOdd = parseFloat(r1x2["X"] || r1x2.draw || r1x2.draw_odds || raw["X"]) || 3.30;
-    const aOdd = parseFloat(r1x2["2"] || r1x2.away || r1x2.away_odds || raw["2"]) || 3.20;
+    // 1. Exact 1X2 market odds from attached result_1x2 or odds_home / odds_away
+    let hOdd = parseFloat(r1x2["1"] || r1x2.home || r1x2.home_odds || raw["1"] || leg.odds_home || raw.odds_home);
+    let dOdd = parseFloat(r1x2["X"] || r1x2.draw || r1x2.draw_odds || raw["X"] || leg.odds_draw || raw.odds_draw);
+    let aOdd = parseFloat(r1x2["2"] || r1x2.away || r1x2.away_odds || raw["2"] || leg.odds_away || raw.odds_away);
+
+    const curPick = String(leg.selection_name || leg.selection || leg.pick || "").toLowerCase();
+    const curOdds = parseFloat(leg.estimated_odds || leg.odds || 0);
+
+    if (!hOdd || isNaN(hOdd) || hOdd <= 1.0) {
+      hOdd = (curPick.includes("to win (1)") || curPick.includes("home to win")) ? (curOdds || 2.10) : 2.10;
+    }
+    if (!dOdd || isNaN(dOdd) || dOdd <= 1.0) {
+      dOdd = 3.30;
+    }
+    if (!aOdd || isNaN(aOdd) || aOdd <= 1.0) {
+      aOdd = (curPick.includes("to win (2)") || curPick.includes("away to win")) ? (curOdds || 3.20) : 3.20;
+    }
 
     // Derived Probabilities from actual market odds (removing bookmaker margin)
     const margin = (1.0 / hOdd) + (1.0 / dOdd) + (1.0 / aOdd);
@@ -1839,10 +1853,12 @@ export default function TicketBuilderTab() {
                 {/* Match Schedule Window */}
                 <div className="pt-2">
                   <label className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider block mb-2">Match Schedule Window</label>
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-2">
                     {[
                       { id: "TODAY", label: "Today's Games", sub: todayData ? `${todayData.total_matches} SportyBet matches` : "Matches playing today" },
                       { id: "NEXT_24H", label: "Next 24 Hours", sub: "Upcoming 24h slate" },
+                      { id: "MIDWEEK", label: "Midweek Slate", sub: "Tue – Thu rounds & Cups" },
+                      { id: "NEXT_48H", label: "Next 48 Hours", sub: "Multi-day midweek window" },
                       { id: "WEEKEND", label: "Weekend Combined", sub: "Saturday & Sunday" },
                       { id: "NEXT_7D", label: "Upcoming 7 Days", sub: "Full week fixture pool" },
                     ].map(w => (
@@ -2029,21 +2045,23 @@ export default function TicketBuilderTab() {
                       🛡️ HEDGE & DIVERSIFY
                     </span>
                   </div>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
                     {[
                       { id: 1, label: "1 Ticket", desc: "Single optimal ticket" },
-                      { id: 2, label: "2 Variant Tickets Portfolio", desc: "2 distinct non-overlapping / hedged slips (Max 15 games or 20–25x odds)" },
+                      { id: 2, label: "2 Variant Slips", desc: "Split 0% Overlap / Hedged" },
+                      { id: 3, label: "3 Variant Slips", desc: "3-Slip Orthogonal Cover" },
+                      { id: 4, label: "4 Variant Slips", desc: "4x13 Block Wheeling" },
                     ].map(nt => (
                       <div
                         key={nt.id}
                         onClick={() => {
                           setNumTickets(nt.id);
-                          if (nt.id === 2) {
+                          if (nt.id >= 2) {
                             if (targetMode === "GAMES") {
-                              setTargetGames(15);
-                              setCustomGamesInput("15");
+                              setTargetGames(13);
+                              setCustomGamesInput("13");
                             } else {
-                              setTargetOdds(22.0);
+                              setTargetOdds(nt.id === 2 ? 22.0 : 40.0);
                               setCustomOdds("");
                               setUseCustom(false);
                             }

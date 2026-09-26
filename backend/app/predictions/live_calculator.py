@@ -274,6 +274,10 @@ def calculate_matchiq_probabilities(home_team: str, away_team: str) -> Dict[str,
     p_home_o05 = round((1.0 - math.exp(-exp_h)) * 100, 1)
     p_away_o05 = round((1.0 - math.exp(-exp_a)) * 100, 1)
 
+    # Team Over 1.5 Goal probabilities (1 - e^-lambda * (1 + lambda))
+    p_home_o15 = round((1.0 - math.exp(-exp_h) * (1.0 + exp_h)) * 100, 1)
+    p_away_o15 = round((1.0 - math.exp(-exp_a) * (1.0 + exp_a)) * 100, 1)
+
     # Win Either Half probabilities
     # 1st half expectations = 0.45 * exp, 2nd half = 0.55 * exp
     exp_h1, exp_a1 = exp_h * 0.45, exp_a * 0.45
@@ -322,6 +326,8 @@ def calculate_matchiq_probabilities(home_team: str, away_team: str) -> Dict[str,
         "ai_prob_over_2_5": po25_pct,
         "ai_prob_home_over_0_5": min(p_home_o05, 96.0),
         "ai_prob_away_over_0_5": min(p_away_o05, 96.0),
+        "ai_prob_home_over_1_5": min(p_home_o15, 92.0),
+        "ai_prob_away_over_1_5": min(p_away_o15, 92.0),
         "ai_prob_home_win_either_half": min(p_home_weh, 95.0),
         "ai_prob_away_win_either_half": min(p_away_weh, 95.0),
         "ai_prob_home_or_over_2_5": min(round(p_home_or_o25 * 100, 1), 96.0),

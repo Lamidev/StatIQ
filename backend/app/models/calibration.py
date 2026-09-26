@@ -1,6 +1,9 @@
 import math
 import numpy as np
-from scipy.optimize import minimize
+try:
+    from scipy.optimize import minimize
+except Exception:
+    minimize = None
 from typing import List, Tuple
 
 class MultinomialTemperatureScaler:
@@ -45,9 +48,10 @@ class MultinomialTemperatureScaler:
             loss = -np.mean(np.log(np.clip(picked_probs, eps, 1.0)))
             return float(loss)
 
-        res = minimize(nll_loss, x0=[1.0], method="Nelder-Mead", bounds=[(0.1, 5.0)])
-        if res.success and res.x[0] > 0.1:
-            self.temperature = float(res.x[0])
+        if minimize is not None:
+            res = minimize(nll_loss, x0=[1.0], method="Nelder-Mead", bounds=[(0.1, 5.0)])
+            if res.success and res.x[0] > 0.1:
+                self.temperature = float(res.x[0])
 
     def calibrate(self, probs: Tuple[float, float, float]) -> Tuple[float, float, float]:
         """

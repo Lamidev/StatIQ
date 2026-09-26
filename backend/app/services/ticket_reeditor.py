@@ -209,15 +209,11 @@ async def score_selection(sel: Dict[str, Any]) -> Dict[str, Any]:
             tot_exp = exp_h + exp_a
             p_draw = m_probs.get("ai_prob_draw", 26.0) / 100.0
 
-            # Fetch historical H2H signals (uses cache & fallback gracefully)
-            from app.services.h2h_fetcher import get_h2h_signals
             h_elo = int(get_team_rating(home))
             a_elo = int(get_team_rating(away))
-            h2h = get_h2h_signals(home, away, home_elo=h_elo, away_elo=a_elo)
-
-            draw_rate = float(h2h.get("draw_rate", p_draw))
-            over15_rate = float(h2h.get("over_15_rate", 0.78))
-            avg_goals = float(h2h.get("avg_goals", 2.5))
+            draw_rate = p_draw
+            over15_rate = float(m_probs.get("ai_prob_over_1_5", 78.0)) / 100.0
+            avg_goals = tot_exp
 
             # A. Double Chance "12" (Home or Away) - Data-Driven Validation
             if "12" in p_lower or "home or away" in p_lower or "12" in m_lower:
@@ -387,6 +383,7 @@ async def re_edit_ticket(
     reshuffle_seed: Optional[int] = None,
     strict_mode: bool = False,
     num_tickets: int = 1,
+    exclude_fixture_ids: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """
     MatchIQ 5-Gate Ticket Re-Editor.
@@ -693,6 +690,14 @@ async def re_edit_ticket(
         jitter = (rng.random() * 0.04) if reshuffle_seed else 0.0
         return p + o_score + anchor_bonus + jitter
 
+    def _get_f_key(c: Dict[str, Any]) -> str:
+        ev = str(c.get("event_id") or c.get("fixture_id") or c.get("external_fixture_id") or c.get("game_id") or "").strip().lower()
+        if ev and ev not in ("none", ""):
+            return ev
+        h = str(c.get("home_team") or "").strip().lower()
+        a = str(c.get("away_team") or "").strip().lower()
+        return f"{h}_{a}"
+
     # Split candidates into Anchors (high certainty, multi-ticket eligible) and Orbits (single-ticket isolation)
     anchors = [s for s in final_selections if s.get("conviction_tier") == "ANCHOR" or float(s.get("estimated_prob", 0.0)) >= 0.88]
     orbits = [s for s in final_selections if s not in anchors]
@@ -702,149 +707,255 @@ async def re_edit_ticket(
 
     sorted_candidates = anchors + orbits
 
-    # Interleaved Round-Robin Partitioning across num_t tickets
-    ticket_buckets: List[List[Dict[str, Any]]] = [[] for _ in range(num_t)]
-    for idx, cand in enumerate(sorted_candidates):
-        ticket_buckets[idx % num_t].append(cand)
-
-    def _derive_alternative_market(cand: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Derives a mathematically sound alternative winnable market for variant slips
-        so that no two tickets share the identical prediction on the same match.
-        Intelligently checks favorite side (Home vs Away) and guarantees minimum odds floor of 1.15.
-        """
-        alt = dict(cand)
-        m_lower = str(cand.get("market_name") or "").lower()
-        s_lower = str(cand.get("selection_name") or "").lower()
-        home = cand.get("home_team", "Home")
-        away = cand.get("away_team", "Away")
-        orig_odds = float(cand.get("odds") or cand.get("estimated_odds") or 1.25)
-
-        is_away_intent = "away" in s_lower or "2" in s_lower or away.lower() in s_lower or "x2" in s_lower
-
-        if "over 1.5" in s_lower or "over 1.5" in m_lower:
-            alt["market_name"] = "Double Chance"
-            if is_away_intent:
-                alt["selection_name"] = f"Draw or {away} (X2)"
-                alt["provider_market_id"] = "10"
-                alt["provider_outcome_id"] = "11"
-            else:
-                alt["selection_name"] = f"{home} or Draw (1X)"
-                alt["provider_market_id"] = "10"
-                alt["provider_outcome_id"] = "9"
-            alt["odds"] = round(max(1.15, min(1.35, orig_odds * 0.96)), 2)
-            alt["estimated_odds"] = alt["odds"]
-            alt["estimated_prob"] = 0.88
-            alt["reason"] = f"Diversified variant: Draw-protected Double Chance ({alt['selection_name']}) instead of Over 1.5"
-            alt["provider_specifier"] = None
-        elif "double chance" in m_lower or "1x" in s_lower or "x2" in s_lower or "12" in s_lower:
-            alt["market_name"] = "Over/Under Goals"
-            alt["selection_name"] = "Over 1.5 Goals"
-            alt["odds"] = round(max(1.15, min(1.30, orig_odds * 0.98)), 2)
-            alt["estimated_odds"] = alt["odds"]
-            alt["estimated_prob"] = 0.87
-            alt["reason"] = f"Diversified variant: Over 1.5 Goals instead of Double Chance"
-            alt["provider_market_id"] = "18"
-            alt["provider_outcome_id"] = "12"
-            alt["provider_specifier"] = "total=1.5"
-        elif "handicap" in m_lower:
-            alt["market_name"] = "Over/Under Goals"
-            alt["selection_name"] = "Under 3.5 Goals"
-            alt["odds"] = round(max(1.18, min(1.35, orig_odds * 1.02)), 2)
-            alt["estimated_odds"] = alt["odds"]
-            alt["estimated_prob"] = 0.89
-            alt["reason"] = f"Diversified variant: Under 3.5 Goals safety cushion"
-            alt["provider_market_id"] = "18"
-            alt["provider_outcome_id"] = "13"
-            alt["provider_specifier"] = "total=3.5"
-        else:
-            alt["market_name"] = "Double Chance"
-            if is_away_intent:
-                alt["selection_name"] = f"Draw or {away} (X2)"
-                alt["provider_market_id"] = "10"
-                alt["provider_outcome_id"] = "11"
-            else:
-                alt["selection_name"] = f"{home} or Draw (1X)"
-                alt["provider_market_id"] = "10"
-                alt["provider_outcome_id"] = "9"
-            alt["odds"] = round(max(1.16, min(1.35, orig_odds * 0.95)), 2)
-            alt["estimated_odds"] = alt["odds"]
-            alt["estimated_prob"] = 0.88
-            alt["reason"] = f"Diversified variant: Draw-protected coverage ({alt['selection_name']})"
-            alt["provider_specifier"] = None
-
-        return alt
+    norm_exclude_set = set()
+    if exclude_fixture_ids:
+        for x in exclude_fixture_ids:
+            if x:
+                norm_exclude_set.add(str(x).strip().lower())
 
     portfolio_slips = []
-    fixture_usage_count: Dict[str, int] = {}
-    assigned_markets_per_fixture: Dict[str, set] = {}
+    sequential_info = None
 
-    for t_idx in range(num_t):
-        primary_bucket = ticket_buckets[t_idx]
+    # CASE A: Sequential Redo Generation with Excluded Matches
+    if norm_exclude_set and num_t == 1:
+        fresh_cands = []
+        staked_cands = []
+        for cand in sorted_candidates:
+            cand_keys = {
+                _get_f_key(cand),
+                str(cand.get("event_id") or "").strip().lower(),
+                str(cand.get("game_id") or "").strip().lower(),
+                str(cand.get("fixture_id") or "").strip().lower(),
+                f"{str(cand.get('home_team')).strip().lower()}_{str(cand.get('away_team')).strip().lower()}"
+            }
+            if any(k and k in norm_exclude_set for k in cand_keys):
+                staked_cands.append(cand)
+            else:
+                fresh_cands.append(cand)
+
         t_final = []
-
-        # 1. First add all selections from this ticket's primary partition
-        for cand in primary_bucket:
-            f_key = str(cand.get("event_id") or cand.get("fixture_id") or f"{cand.get('home_team')}_{cand.get('away_team')}").strip().lower()
-            if fixture_usage_count.get(f_key, 0) == 0:
-                t_final.append(cand)
-                fixture_usage_count[f_key] = 1
-                assigned_markets_per_fixture.setdefault(f_key, set()).add(str(cand.get("selection_name")).strip().lower())
-                if target_mode == "GAMES" and effective_target_games > 0 and len(t_final) >= effective_target_games:
-                    break
-
-        # 2. Supplementary pass if primary partition had fewer games than effective_target_games
-        if target_mode == "GAMES" and effective_target_games > 0 and len(t_final) < effective_target_games:
-            needed = effective_target_games - len(t_final)
-            for other_idx, other_bucket in enumerate(ticket_buckets):
-                if other_idx == t_idx:
-                    continue
-                # Sort other candidates: Prioritize ANCHORS first, then high win-probability
-                candidates_to_borrow = sorted(
-                    other_bucket,
+        if target_mode == "GAMES" and effective_target_games > 0:
+            if len(fresh_cands) >= effective_target_games:
+                t_final = fresh_cands[:effective_target_games]
+                sequential_info = {
+                    "is_sequential": True,
+                    "fresh_count": len(t_final),
+                    "reused_count": 0,
+                    "notice": f"100% Zero-Overlap: Generated {len(t_final)} fresh unpicked games from your pool. 0 matches shared with previous slips."
+                }
+            else:
+                # 3rd or repeated slip: fresh pool has fewer games than requested
+                t_final = list(fresh_cands)
+                needed = effective_target_games - len(t_final)
+                staked_sorted = sorted(
+                    staked_cands,
                     key=lambda x: (1 if x.get("conviction_tier") == "ANCHOR" else 0, float(x.get("estimated_prob", 0.0))),
                     reverse=True
                 )
-                for cand in candidates_to_borrow:
-                    f_key = str(cand.get("event_id") or cand.get("fixture_id") or f"{cand.get('home_team')}_{cand.get('away_team')}").strip().lower()
-                    current_count = fixture_usage_count.get(f_key, 0)
-                    is_anchor = (cand.get("conviction_tier") == "ANCHOR" or float(cand.get("estimated_prob", 0.0)) >= 0.85)
-                    max_allowed_for_cand = num_t if is_anchor else (2 if num_t >= 3 else 1)
-
-                    is_already_in_ticket = any(
-                        str(x.get("event_id") or x.get("fixture_id") or f"{x.get('home_team')}_{x.get('away_team')}").strip().lower() == f_key
-                        for x in t_final
-                    )
-                    if not is_already_in_ticket:
-                        if mode == "AUDITOR" and current_count < max_allowed_for_cand:
-                            diversified_cand = _derive_alternative_market(cand)
-                            t_final.append(diversified_cand)
-                            fixture_usage_count[f_key] = current_count + 1
-                            assigned_markets_per_fixture.setdefault(f_key, set()).add(str(diversified_cand.get("selection_name")).strip().lower())
-                            needed -= 1
-                        elif mode == "REMOVE" and current_count < max_allowed_for_cand:
-                            # In REMOVE mode: Preserve user's pick, allow Anchor/Orbit allocation
-                            t_final.append(cand)
-                            fixture_usage_count[f_key] = current_count + 1
-                            assigned_markets_per_fixture.setdefault(f_key, set()).add(str(cand.get("selection_name")).strip().lower())
-                            needed -= 1
-
-                        if needed <= 0:
-                            break
-                if needed <= 0:
-                    break
-
-        # Enforce max 15 games per ticket
-        if len(t_final) > 15:
-            t_final = t_final[:15]
-
-        # 3. Target Odds mode handling
-        if target_mode == "ODDS" and target_odds > 1.05:
+                borrowed = staked_sorted[:needed]
+                t_final.extend(borrowed)
+                sequential_info = {
+                    "is_sequential": True,
+                    "fresh_count": len(fresh_cands),
+                    "reused_count": len(borrowed),
+                    "notice": f"Slip #3+ Orthogonal Cover: Included {len(fresh_cands)} fresh unused pool games + {len(borrowed)} Tier-1 core locks from previous slips. Insulated from recent tickets to prevent cascading loss."
+                }
+        else:
             curr_acc = 1.0
-            for c in t_final:
-                curr_acc *= float(c.get("estimated_odds") or c.get("odds") or 1.25)
-
+            for cand in fresh_cands:
+                t_final.append(cand)
+                curr_acc *= float(cand.get("estimated_odds") or cand.get("odds") or 1.25)
+                if curr_acc >= (target_odds * 0.95) and len(t_final) >= 2:
+                    break
             if curr_acc < (target_odds * 0.95):
+                for cand in staked_cands:
+                    t_final.append(cand)
+                    curr_acc *= float(cand.get("estimated_odds") or cand.get("odds") or 1.25)
+                    if curr_acc >= (target_odds * 0.95) and len(t_final) >= 2:
+                        break
+            sequential_info = {
+                "is_sequential": True,
+                "fresh_count": len([c for c in t_final if c in fresh_cands]),
+                "reused_count": len([c for c in t_final if c in staked_cands]),
+                "notice": "Sequential Slip Generated: Prioritized fresh pool games to hit target odds."
+            }
+
+        slip_odds = 1.0
+        slip_prob = 0.0
+        for s in t_final:
+            slip_odds *= float(s.get("estimated_odds") or s.get("odds") or 1.25)
+            slip_prob += float(s.get("estimated_prob") or 0.80)
+
+        portfolio_slips.append({
+            "ticket_index": 1,
+            "final_count": len(t_final),
+            "final_selections": t_final,
+            "new_total_odds": round(slip_odds, 2),
+            "avg_win_prob": round(slip_prob / max(1, len(t_final)), 3),
+            "sequential_info": sequential_info
+        })
+
+    # CASE B: REMOVE Mode 4-Block Wheeling (A+B, C+D, A+C, B+D)
+    elif mode == "REMOVE" and num_t == 4 and len(sorted_candidates) >= 16:
+        blocks = [[], [], [], []]
+        for idx, cand in enumerate(sorted_candidates):
+            blocks[idx % 4].append(cand)
+
+        block_pairs = [(0, 1), (2, 3), (0, 2), (1, 3)]
+        for t_idx, (b1, b2) in enumerate(block_pairs):
+            combined = blocks[b1] + blocks[b2]
+            if target_mode == "GAMES" and effective_target_games > 0:
+                t_final = combined[:effective_target_games]
+            elif target_mode == "ODDS" and target_odds > 1.05:
+                curr_acc = 1.0
+                t_final = []
+                for cand in combined:
+                    t_final.append(cand)
+                    curr_acc *= float(cand.get("estimated_odds") or cand.get("odds") or 1.25)
+                    if curr_acc >= (target_odds * 0.95) and len(t_final) >= 2:
+                        break
+            else:
+                t_final = combined[:15]
+
+            slip_odds = 1.0
+            slip_prob = 0.0
+            for s in t_final:
+                slip_odds *= float(s.get("estimated_odds") or s.get("odds") or 1.25)
+                slip_prob += float(s.get("estimated_prob") or 0.80)
+
+            portfolio_slips.append({
+                "ticket_index": t_idx + 1,
+                "block_design": f"Block Wheeling Slip #{t_idx + 1}",
+                "final_count": len(t_final),
+                "final_selections": t_final,
+                "new_total_odds": round(slip_odds, 2),
+                "avg_win_prob": round(slip_prob / max(1, len(t_final)), 3)
+            })
+
+    # CASE C: REMOVE Mode 3-Block Wheeling (A+B, B+C, A+C)
+    elif mode == "REMOVE" and num_t == 3 and len(sorted_candidates) >= 12:
+        blocks = [[], [], []]
+        for idx, cand in enumerate(sorted_candidates):
+            blocks[idx % 3].append(cand)
+
+        block_pairs = [(0, 1), (1, 2), (0, 2)]
+        for t_idx, (b1, b2) in enumerate(block_pairs):
+            combined = blocks[b1] + blocks[b2]
+            if target_mode == "GAMES" and effective_target_games > 0:
+                t_final = combined[:effective_target_games]
+            elif target_mode == "ODDS" and target_odds > 1.05:
+                curr_acc = 1.0
+                t_final = []
+                for cand in combined:
+                    t_final.append(cand)
+                    curr_acc *= float(cand.get("estimated_odds") or cand.get("odds") or 1.25)
+                    if curr_acc >= (target_odds * 0.95) and len(t_final) >= 2:
+                        break
+            else:
+                t_final = combined[:15]
+
+            slip_odds = 1.0
+            slip_prob = 0.0
+            for s in t_final:
+                slip_odds *= float(s.get("estimated_odds") or s.get("odds") or 1.25)
+                slip_prob += float(s.get("estimated_prob") or 0.80)
+
+            portfolio_slips.append({
+                "ticket_index": t_idx + 1,
+                "block_design": f"Block Wheeling Slip #{t_idx + 1}",
+                "final_count": len(t_final),
+                "final_selections": t_final,
+                "new_total_odds": round(slip_odds, 2),
+                "avg_win_prob": round(slip_prob / max(1, len(t_final)), 3)
+            })
+
+    # CASE D: Standard Multi-ticket with Anchor/Orbit Isolation & Alternative Market Hedging
+    else:
+        ticket_buckets: List[List[Dict[str, Any]]] = [[] for _ in range(num_t)]
+        for idx, cand in enumerate(sorted_candidates):
+            ticket_buckets[idx % num_t].append(cand)
+
+        def _derive_alternative_market(cand: Dict[str, Any]) -> Dict[str, Any]:
+            alt = dict(cand)
+            m_lower = str(cand.get("market_name") or "").lower()
+            s_lower = str(cand.get("selection_name") or "").lower()
+            home = cand.get("home_team", "Home")
+            away = cand.get("away_team", "Away")
+            orig_odds = float(cand.get("odds") or cand.get("estimated_odds") or 1.25)
+
+            is_away_intent = "away" in s_lower or "2" in s_lower or away.lower() in s_lower or "x2" in s_lower
+
+            if "over 1.5" in s_lower or "over 1.5" in m_lower:
+                alt["market_name"] = "Double Chance"
+                if is_away_intent:
+                    alt["selection_name"] = f"Draw or {away} (X2)"
+                    alt["provider_market_id"] = "10"
+                    alt["provider_outcome_id"] = "11"
+                else:
+                    alt["selection_name"] = f"{home} or Draw (1X)"
+                    alt["provider_market_id"] = "10"
+                    alt["provider_outcome_id"] = "9"
+                alt["odds"] = round(max(1.15, min(1.35, orig_odds * 0.96)), 2)
+                alt["estimated_odds"] = alt["odds"]
+                alt["estimated_prob"] = 0.88
+                alt["reason"] = f"Diversified variant: Draw-protected Double Chance ({alt['selection_name']}) instead of Over 1.5"
+                alt["provider_specifier"] = None
+            elif "double chance" in m_lower or "1x" in s_lower or "x2" in s_lower or "12" in s_lower:
+                alt["market_name"] = "Over/Under Goals"
+                alt["selection_name"] = "Over 1.5 Goals"
+                alt["odds"] = round(max(1.15, min(1.30, orig_odds * 0.98)), 2)
+                alt["estimated_odds"] = alt["odds"]
+                alt["estimated_prob"] = 0.87
+                alt["reason"] = f"Diversified variant: Over 1.5 Goals instead of Double Chance"
+                alt["provider_market_id"] = "18"
+                alt["provider_outcome_id"] = "12"
+                alt["provider_specifier"] = "total=1.5"
+            elif "handicap" in m_lower:
+                alt["market_name"] = "Over/Under Goals"
+                alt["selection_name"] = "Under 3.5 Goals"
+                alt["odds"] = round(max(1.18, min(1.35, orig_odds * 1.02)), 2)
+                alt["estimated_odds"] = alt["odds"]
+                alt["estimated_prob"] = 0.89
+                alt["reason"] = f"Diversified variant: Under 3.5 Goals safety cushion"
+                alt["provider_market_id"] = "18"
+                alt["provider_outcome_id"] = "13"
+                alt["provider_specifier"] = "total=3.5"
+            else:
+                alt["market_name"] = "Double Chance"
+                if is_away_intent:
+                    alt["selection_name"] = f"Draw or {away} (X2)"
+                    alt["provider_market_id"] = "10"
+                    alt["provider_outcome_id"] = "11"
+                else:
+                    alt["selection_name"] = f"{home} or Draw (1X)"
+                    alt["provider_market_id"] = "10"
+                    alt["provider_outcome_id"] = "9"
+                alt["odds"] = round(max(1.16, min(1.35, orig_odds * 0.95)), 2)
+                alt["estimated_odds"] = alt["odds"]
+                alt["estimated_prob"] = 0.88
+                alt["reason"] = f"Diversified variant: Draw-protected coverage ({alt['selection_name']})"
+                alt["provider_specifier"] = None
+
+            return alt
+
+        fixture_usage_count: Dict[str, int] = {}
+        assigned_markets_per_fixture: Dict[str, set] = {}
+
+        for t_idx in range(num_t):
+            primary_bucket = ticket_buckets[t_idx]
+            t_final = []
+
+            for cand in primary_bucket:
+                f_key = _get_f_key(cand)
+                if fixture_usage_count.get(f_key, 0) == 0:
+                    t_final.append(cand)
+                    fixture_usage_count[f_key] = 1
+                    assigned_markets_per_fixture.setdefault(f_key, set()).add(str(cand.get("selection_name")).strip().lower())
+                    if target_mode == "GAMES" and effective_target_games > 0 and len(t_final) >= effective_target_games:
+                        break
+
+            if target_mode == "GAMES" and effective_target_games > 0 and len(t_final) < effective_target_games:
+                needed = effective_target_games - len(t_final)
                 for other_idx, other_bucket in enumerate(ticket_buckets):
                     if other_idx == t_idx:
                         continue
@@ -854,57 +965,95 @@ async def re_edit_ticket(
                         reverse=True
                     )
                     for cand in candidates_to_borrow:
-                        f_key = str(cand.get("event_id") or cand.get("fixture_id") or f"{cand.get('home_team')}_{cand.get('away_team')}").strip().lower()
+                        f_key = _get_f_key(cand)
                         current_count = fixture_usage_count.get(f_key, 0)
                         is_anchor = (cand.get("conviction_tier") == "ANCHOR" or float(cand.get("estimated_prob", 0.0)) >= 0.85)
                         max_allowed_for_cand = num_t if is_anchor else (2 if num_t >= 3 else 1)
 
-                        is_already_in_ticket = any(
-                            str(x.get("event_id") or x.get("fixture_id") or f"{x.get('home_team')}_{x.get('away_team')}").strip().lower() == f_key
-                            for x in t_final
-                        )
+                        is_already_in_ticket = any(_get_f_key(x) == f_key for x in t_final)
                         if not is_already_in_ticket:
                             if mode == "AUDITOR" and current_count < max_allowed_for_cand:
                                 diversified_cand = _derive_alternative_market(cand)
                                 t_final.append(diversified_cand)
                                 fixture_usage_count[f_key] = current_count + 1
-                                curr_acc *= float(diversified_cand.get("estimated_odds") or diversified_cand.get("odds") or 1.25)
+                                assigned_markets_per_fixture.setdefault(f_key, set()).add(str(diversified_cand.get("selection_name")).strip().lower())
+                                needed -= 1
                             elif mode == "REMOVE" and current_count < max_allowed_for_cand:
                                 t_final.append(cand)
                                 fixture_usage_count[f_key] = current_count + 1
-                                curr_acc *= float(cand.get("estimated_odds") or cand.get("odds") or 1.25)
+                                assigned_markets_per_fixture.setdefault(f_key, set()).add(str(cand.get("selection_name")).strip().lower())
+                                needed -= 1
 
-                            if curr_acc >= (target_odds * 0.95) and len(t_final) >= 2:
+                            if needed <= 0:
                                 break
-                    if curr_acc >= (target_odds * 0.95) and len(t_final) >= 2:
+                    if needed <= 0:
                         break
 
-            # Trim to optimal target odds without undershooting
-            trimmed = []
-            acc_check = 1.0
-            for cand in t_final:
-                leg_odd = float(cand.get("estimated_odds") or cand.get("odds") or 1.25)
-                trimmed.append(cand)
-                acc_check *= leg_odd
-                if acc_check >= (target_odds * 0.95) and len(trimmed) >= 2:
-                    break
-            t_final = trimmed
+            if len(t_final) > 15:
+                t_final = t_final[:15]
 
-        slip_odds = 1.0
-        slip_prob = 0.0
-        for s in t_final:
-            o = float(s.get("estimated_odds") or s.get("odds") or 1.25)
-            p = float(s.get("estimated_prob") or 0.80)
-            slip_odds *= o
-            slip_prob += p
+            if target_mode == "ODDS" and target_odds > 1.05:
+                curr_acc = 1.0
+                for c in t_final:
+                    curr_acc *= float(c.get("estimated_odds") or c.get("odds") or 1.25)
 
-        portfolio_slips.append({
-            "ticket_index": t_idx + 1,
-            "final_count": len(t_final),
-            "final_selections": t_final,
-            "new_total_odds": round(slip_odds, 2),
-            "avg_win_prob": round(slip_prob / max(1, len(t_final)), 3)
-        })
+                if curr_acc < (target_odds * 0.95):
+                    for other_idx, other_bucket in enumerate(ticket_buckets):
+                        if other_idx == t_idx:
+                            continue
+                        candidates_to_borrow = sorted(
+                            other_bucket,
+                            key=lambda x: (1 if x.get("conviction_tier") == "ANCHOR" else 0, float(x.get("estimated_prob", 0.0))),
+                            reverse=True
+                        )
+                        for cand in candidates_to_borrow:
+                            f_key = _get_f_key(cand)
+                            current_count = fixture_usage_count.get(f_key, 0)
+                            is_anchor = (cand.get("conviction_tier") == "ANCHOR" or float(cand.get("estimated_prob", 0.0)) >= 0.85)
+                            max_allowed_for_cand = num_t if is_anchor else (2 if num_t >= 3 else 1)
+
+                            is_already_in_ticket = any(_get_f_key(x) == f_key for x in t_final)
+                            if not is_already_in_ticket:
+                                if mode == "AUDITOR" and current_count < max_allowed_for_cand:
+                                    diversified_cand = _derive_alternative_market(cand)
+                                    t_final.append(diversified_cand)
+                                    fixture_usage_count[f_key] = current_count + 1
+                                    curr_acc *= float(diversified_cand.get("estimated_odds") or diversified_cand.get("odds") or 1.25)
+                                elif mode == "REMOVE" and current_count < max_allowed_for_cand:
+                                    t_final.append(cand)
+                                    fixture_usage_count[f_key] = current_count + 1
+                                    curr_acc *= float(cand.get("estimated_odds") or cand.get("odds") or 1.25)
+
+                                if curr_acc >= (target_odds * 0.95) and len(t_final) >= 2:
+                                    break
+                        if curr_acc >= (target_odds * 0.95) and len(t_final) >= 2:
+                            break
+
+                trimmed = []
+                acc_check = 1.0
+                for cand in t_final:
+                    leg_odd = float(cand.get("estimated_odds") or cand.get("odds") or 1.25)
+                    trimmed.append(cand)
+                    acc_check *= leg_odd
+                    if acc_check >= (target_odds * 0.95) and len(trimmed) >= 2:
+                        break
+                t_final = trimmed
+
+            slip_odds = 1.0
+            slip_prob = 0.0
+            for s in t_final:
+                o = float(s.get("estimated_odds") or s.get("odds") or 1.25)
+                p = float(s.get("estimated_prob") or 0.80)
+                slip_odds *= o
+                slip_prob += p
+
+            portfolio_slips.append({
+                "ticket_index": t_idx + 1,
+                "final_count": len(t_final),
+                "final_selections": t_final,
+                "new_total_odds": round(slip_odds, 2),
+                "avg_win_prob": round(slip_prob / max(1, len(t_final)), 3)
+            })
 
     primary_slip = portfolio_slips[0] if portfolio_slips else {
         "ticket_index": 1,

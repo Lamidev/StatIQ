@@ -27,6 +27,11 @@ export default function BetSlipAuditorTab({ onNavigateHistory, onTicketLocked })
   const [numTickets, setNumTickets] = useState(1);
   const [activePortfolioIndex, setActivePortfolioIndex] = useState(0);
 
+  // Sequential Redo / Exclusion Session State
+  const [sessionExclusionIds, setSessionExclusionIds] = useState([]);
+  const [sequentialNotice, setSequentialNotice] = useState(null);
+  const [sequentialSlipCount, setSequentialSlipCount] = useState(1);
+
   // Processing state & output
   const [reEditing, setReEditing] = useState(false);
   const [reEditResult, setReEditResult] = useState(null);
@@ -414,7 +419,7 @@ export default function BetSlipAuditorTab({ onNavigateHistory, onTicketLocked })
     }
   };
 
-  const handleRunReEdit = async () => {
+  const handleRunReEdit = async (isSequentialRedo = false) => {
     if (!ticketData || !ticketData.selections) return;
 
     // Filter out live, started, ongoing, or concluded matches
@@ -438,37 +443,76 @@ export default function BetSlipAuditorTab({ onNavigateHistory, onTicketLocked })
     setGeneratedCode(null);
     setActivePortfolioIndex(0);
 
-    const finalOdds = useCustomOdds && customOddsInput ? parseFloat(customOddsInput) : targetOdds;
-    const result = await runTicketReEdit(
-      validSelections,
-      finalOdds,
-      mode,
-      targetMode,
-      targetGames,
-      Date.now(),
-      strictMode,
-      numTickets
-    );
-    setReEditing(false);
+    try {
+      const finalOdds = useCustomOdds && customOddsInput ? parseFloat(customOddsInput) : targetOdds;
+      const excludeIds = isSequentialRedo && sessionExclusionIds.length > 0 ? sessionExclusionIds : null;
 
-    // Handle error/timeout responses
-    if (!result || result.status === "TIMEOUT" || result.status === "HTTP_ERROR" || result.status === "ERROR") {
-      const statusMsg = result?.status === "TIMEOUT"
-        ? "Request timed out (>15s). The server may be overloaded — please try again."
-        : result?.status === "HTTP_ERROR"
-        ? `Server returned HTTP ${result.http_status}. Check if the backend is running.`
-        : "MatchIQ engine returned no result. Please try again or check backend logs.";
-      setReEditError(statusMsg);
-      return;
+      const result = await runTicketReEdit(
+        validSelections,
+        finalOdds,
+        mode,
+        targetMode,
+        targetGames,
+        Date.now(),
+        strictMode,
+        numTickets,
+        excludeIds
+      );
+
+      // Handle error/timeout responses
+      if (!result || result.status === "TIMEOUT" || result.status === "HTTP_ERROR" || result.status === "ERROR") {
+        const statusMsg = result?.status === "TIMEOUT"
+          ? "Request timed out (>60s). The server may be busy — please try again."
+          : result?.status === "HTTP_ERROR"
+          ? `Server returned HTTP ${result.http_status}. Check if the backend is running.`
+          : "MatchIQ engine returned no result. Please try again or check backend logs.";
+        setReEditError(statusMsg);
+        return;
+      }
+
+      // Valid result
+      setReEditResult(result);
+
+      // Auto set verified booking code from primary slip
+      if (result.booking_code) {
+        setGeneratedCode(result.booking_code);
+      }
+
+      // Extract match IDs for sequential exclusion tracking
+      const primarySlip = (result.portfolio_tickets && result.portfolio_tickets[0]) || result;
+      const finalLegs = primarySlip.final_selections || [];
+      const newKeys = finalLegs.map(s => {
+        const ev = s.event_id || s.fixture_id || s.external_fixture_id || s.game_id;
+        if (ev) return String(ev).trim().toLowerCase();
+        return `${String(s.home_team || "").trim().toLowerCase()}_${String(s.away_team || "").trim().toLowerCase()}`;
+      });
+
+      setSessionExclusionIds(prev => Array.from(new Set([...prev, ...newKeys])));
+      if (isSequentialRedo) {
+        setSequentialSlipCount(c => c + 1);
+      } else {
+        setSequentialSlipCount(1);
+      }
+
+      const seqInfo = primarySlip.sequential_info || result.portfolio_tickets?.[0]?.sequential_info;
+      if (seqInfo?.notice) {
+        setSequentialNotice(seqInfo.notice);
+      } else {
+        setSequentialNotice(null);
+      }
+    } catch (err) {
+      console.error("handleRunReEdit error:", err);
+      setReEditError(`Error running re-edit: ${err.message || err}`);
+    } finally {
+      setReEditing(false);
     }
+  };
 
-    // Valid result
-    setReEditResult(result);
-
-    // Auto set verified booking code from primary slip
-    if (result.booking_code) {
-      setGeneratedCode(result.booking_code);
-    }
+  const handleResetSessionExclusion = () => {
+    setSessionExclusionIds([]);
+    setSequentialNotice(null);
+    setSequentialSlipCount(1);
+    showNotice("Session exclusion reset! All pool games are available again.");
   };
 
   const copyCode = (code) => {
@@ -1160,10 +1204,12 @@ export default function BetSlipAuditorTab({ onNavigateHistory, onTicketLocked })
                     <label className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider block">
                       Tickets to Generate (Zero-Overlap Portfolio)
                     </label>
-                    <div className="grid grid-cols-2 gap-2">
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                       {[
                         { count: 1, label: "1 Ticket", sub: "Standard Single Slip" },
-                        { count: 2, label: "2 Variant Tickets", sub: "Split 0% Overlap / Hedged Markets" },
+                        { count: 2, label: "2 Slips", sub: "Split 0% Overlap" },
+                        { count: 3, label: "3 Slips", sub: "3-Block Cover" },
+                        { count: 4, label: "4 Slips (4x13)", sub: "A+B, C+D, A+C, B+D" },
                       ].map((item) => (
                         <button
                           key={item.count}
@@ -1171,15 +1217,15 @@ export default function BetSlipAuditorTab({ onNavigateHistory, onTicketLocked })
                           onClick={() => {
                             setNumTickets(item.count);
                             setReEditResult(null);
-                            if (item.count === 2) {
+                            if (item.count >= 2) {
                               if (targetMode === "GAMES") {
-                                setTargetGames(prev => Math.min(15, prev || 15));
+                                setTargetGames(prev => Math.min(15, prev || 13));
                               } else {
-                                setTargetOdds(22.0);
+                                setTargetOdds(item.count === 2 ? 22.0 : 40.0);
                               }
                             }
                           }}
-                          className={`p-3 rounded-xl border text-left transition-all ${
+                          className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
                             numTickets === item.count
                               ? "bg-slate-900 border-slate-900 text-white shadow-sm ring-1 ring-slate-900"
                               : "bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100"
@@ -1200,20 +1246,21 @@ export default function BetSlipAuditorTab({ onNavigateHistory, onTicketLocked })
                     <div className="grid grid-cols-4 sm:grid-cols-8 gap-2">
                       {[
                         { id: "OFF", label: "Off", sub: "Straight" },
-                        { id: "1", label: "Cut 1", sub: "1 Loss" },
-                        { id: "2", label: "Cut 2", sub: "2 Losses" },
-                        { id: "3", label: "Cut 3", sub: "3 Losses" },
-                        { id: "4", label: "Cut 4", sub: "4 Losses" },
-                        { id: "5", label: "Cut 5", sub: "5 Losses" },
-                        { id: "6", label: "Cut 6", sub: "6 Losses" },
-                        { id: "7", label: "Cut 7", sub: "7 Losses" },
+                        { id: "1", label: "Cut 1", sub: "1 Loss Safe" },
+                        { id: "2", label: "Cut 2", sub: "2 Losses Safe" },
+                        { id: "3", label: "Cut 3", sub: "3 Losses Safe" },
+                        { id: "4", label: "Cut 4", sub: "4 Losses Safe" },
+                        { id: "5", label: "Cut 5", sub: "5 Losses Safe" },
+                        { id: "6", label: "Cut 6", sub: "6 Losses Safe" },
+                        { id: "7", label: "Cut 7", sub: "7 Losses Safe" },
                       ].map((item) => (
                         <button
                           key={item.id}
+                          type="button"
                           onClick={() => setSelectedFlexCut(item.id)}
-                          className={`p-2 rounded-xl border text-center transition-all flex flex-col items-center justify-center ${
+                          className={`p-2 rounded-xl border text-center transition-all cursor-pointer flex flex-col items-center justify-center ${
                             selectedFlexCut === item.id
-                              ? "bg-slate-900 border-slate-900 text-white shadow-sm"
+                              ? "bg-slate-900 border-slate-900 text-white shadow-sm ring-1 ring-slate-900"
                               : "bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100"
                           }`}
                         >
@@ -1229,49 +1276,86 @@ export default function BetSlipAuditorTab({ onNavigateHistory, onTicketLocked })
               )}
             </div>
 
+            {/* Sequential Memory Active Notice */}
+            {sessionExclusionIds.length > 0 && (
+              <div className="mx-6 mb-2 bg-amber-50 border border-amber-200 rounded-xl px-3.5 py-2.5 flex items-center justify-between gap-2 text-xs">
+                <div className="flex items-center gap-2 text-amber-900">
+                  <ShieldAlert className="w-4 h-4 text-amber-600 flex-shrink-0" />
+                  <span>
+                    <strong>Sequential Memory Active:</strong> {sessionExclusionIds.length} matches from previously staked slip(s) are blacklisted.
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleResetSessionExclusion}
+                  className="text-xs font-black text-rose-600 hover:text-rose-800 underline flex-shrink-0 cursor-pointer"
+                >
+                  Reset / Clear Blacklist
+                </button>
+              </div>
+            )}
+
+            {/* Sequential Block Wheeling Notice */}
+            {sequentialNotice && (
+              <div className="mx-6 mb-2 bg-emerald-50 border border-emerald-200 rounded-xl px-3.5 py-2.5 flex items-start gap-2 text-xs text-emerald-950">
+                <Sparkles className="w-4 h-4 text-emerald-600 flex-shrink-0 mt-0.5" />
+                <span className="font-semibold">{sequentialNotice}</span>
+              </div>
+            )}
+
             {/* Wizard Footer */}
-            <div className="px-6 py-4 border-t border-slate-100 bg-slate-50/50 flex items-center justify-between gap-3">
+            <div className="px-6 py-4 border-t border-slate-100 bg-slate-50/50 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <button
                 onClick={() => setAuditorStep(s => Math.max(1, s - 1))}
                 disabled={auditorStep === 1}
-                className="px-4 py-2 rounded-xl text-xs font-bold text-slate-600 bg-white border border-slate-200 hover:bg-slate-100 disabled:opacity-30 transition-all"
+                className="px-4 py-2 rounded-xl text-xs font-bold text-slate-600 bg-white border border-slate-200 hover:bg-slate-100 disabled:opacity-30 transition-all cursor-pointer self-start sm:self-auto"
               >
                 ← Back
               </button>
 
-              <span className="text-[10px] text-slate-400 font-medium">Step {auditorStep} of 2</span>
+              <span className="text-[10px] text-slate-400 font-medium hidden sm:inline">Step {auditorStep} of 2</span>
 
               {auditorStep < 2 ? (
                 <button
                   onClick={() => setAuditorStep(s => Math.min(2, s + 1))}
-                  className="px-5 py-2 rounded-xl text-xs font-extrabold bg-slate-900 text-white hover:bg-slate-700 transition-all"
+                  className="px-5 py-2 rounded-xl text-xs font-extrabold bg-slate-900 text-white hover:bg-slate-700 transition-all cursor-pointer"
                 >
                   Next →
                 </button>
               ) : (
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  {sessionExclusionIds.length > 0 && (
+                    <button
+                      onClick={() => handleRunReEdit(true)}
+                      disabled={reEditing}
+                      className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-black flex items-center gap-1.5 transition-all shadow-md cursor-pointer animate-pulse"
+                      title="Generates next fresh 13-game slip from unpicked pool games"
+                    >
+                      <Zap className="w-3.5 h-3.5 text-amber-300" />
+                      <span>⚡ Generate Next Slip (#{sequentialSlipCount + 1})</span>
+                    </button>
+                  )}
+
                   <button
-                    onClick={handleRunReEdit}
+                    onClick={() => handleRunReEdit(false)}
                     disabled={reEditing}
-                    className="px-3.5 py-2 rounded-xl bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 text-xs font-extrabold flex items-center gap-1.5 transition-all shadow-sm"
+                    className="px-3.5 py-2 rounded-xl bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 text-xs font-extrabold flex items-center gap-1.5 transition-all shadow-sm cursor-pointer"
                     title="Generate a fresh, alternative match combination to avoid single-game correlation"
                   >
                     <RefreshCw className={`w-3.5 h-3.5 ${reEditing ? "animate-spin" : ""}`} />
-                    <span>🔀 Reshuffle & Diversify</span>
+                    <span>🔀 Reshuffle</span>
                   </button>
 
                   <button
-                    onClick={handleRunReEdit}
+                    onClick={() => handleRunReEdit(false)}
                     disabled={reEditing}
-                    className="px-5 py-2 rounded-xl btn-black text-xs font-extrabold flex items-center gap-2 transition-all shadow-sm"
+                    className="px-5 py-2 rounded-xl btn-black text-xs font-extrabold flex items-center gap-2 transition-all shadow-sm cursor-pointer"
                   >
                     {reEditing ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : null}
                     {reEditing
                       ? "Running..."
                       : mode === "AUDITOR"
                       ? "Audit & Upgrade Picks"
-                      : mode === "SWAP"
-                      ? "Re-Edit Ticket"
                       : "Remove Risky Picks"}
                   </button>
                 </div>
@@ -1344,7 +1428,7 @@ export default function BetSlipAuditorTab({ onNavigateHistory, onTicketLocked })
                             {reEditResult.portfolio_summary?.total_unique_matches || (activeCount * portfolioSlips.length)} Total Unique Match Picks
                           </span>
                         </div>
-                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                           {portfolioSlips.map((slip, sIdx) => {
                             const isCurrent = activePortfolioIndex === sIdx;
                             const isMaster = slip.is_master || slip.ticket_index === "MASTER";

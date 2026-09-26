@@ -42,6 +42,7 @@ class BuildTicketRequest(BaseModel):
     risk_profile: Optional[str] = "BALANCED"  # "ULTRA_CONSERVATIVE", "BALANCED", "AGGRESSIVE"
     allowed_market_categories: Optional[List[str]] = None
     excluded_market_categories: Optional[List[str]] = None
+    exclude_fixture_ids: Optional[List[str]] = None
 
 
 async def _fetch_fixtures_for_league(comp: str, season: Optional[int] = None) -> List[Dict[str, Any]]:
@@ -125,8 +126,15 @@ def _extract_live_market_data(ev: Dict[str, Any]) -> tuple:
                 except Exception:
                     pass
                     
-    # Over/Under Goals: Extract existing lines from raw feed
-        if m_id == "18" or ("over/under" in m_desc and not any(k in m_desc for k in ["&", "1x2", "dc"])):
+        # Over/Under Goals: Strictly extract genuine FULL-MATCH Over/Under lines (Never 1st/2nd half, corners, cards, or early goals)
+        is_ft_ou = (
+            m_id == "18" or 
+            m_desc in ["over/under", "total goals", "goals over/under", "over/under goals", "match goals"]
+        ) and not any(k in m_desc for k in [
+            "1st half", "2nd half", "half", "corner", "card", "early", "booking", "team", "first", "second", "1h", "2h"
+        ])
+
+        if is_ft_ou:
             line_m = re.search(r"total=(\d+\.?\d*)", spec) or re.search(r"(\d+\.?\d*)", m_desc)
             line_str = line_m.group(1) if line_m else "1.5"
             o_val = None
@@ -156,22 +164,52 @@ def _extract_live_market_data(ev: Dict[str, Any]) -> tuple:
     # Only lines verified and published by the bookmaker are permitted.
     return dc_map, ou_list
 
-def _is_league_match(comp_name: str, country_name: str, code_key: str) -> bool:
+def _is_league_match(comp_name: str, country_name: str, code_key: str, home_team: str = "", away_team: str = "") -> bool:
     comp = (comp_name or "").strip().lower()
     country = (country_name or "").strip().lower()
     code = (code_key or "").upper()
+    h = (home_team or "").strip().lower()
+    a = (away_team or "").strip().lower()
 
-    # Reject non-top flight attributes universally unless specifically a cup code
-    is_cup_code = code in ["UCL", "UEL", "UECL", "COP"]
-    if not is_cup_code:
-        if any(x in comp for x in [
-            "women", "femenino", "feminin", "damen", "frauen", "vrouwen", "kvinner", "bayanlar",
-            "u23", "u21", "u20", "u19", "u18", "u17", "youth", "primavera", "reserve", "reserves",
-            "amateur", "cup", "trophy", "kupa", "pokal", "coppa", "taça", "taca", "copa", "shield",
-            "group a", "group b", "group c", "group d", "group e", "group f", "group g", "group h",
-            "serie c", "serie d", "liga 3", "liga 2", "2. liga", "3. liga", "persha", "druha", "segunda"
+    # Reject non-top flight attributes universally unless specifically a cup or tier-2/3 code
+    is_cup_code = code in ["UCL", "UEL", "UECL", "COP", "FAC", "CDR", "DFB", "CDF", "TCP", "KNVB", "SCOC", "EFL"]
+    is_lower_allowed = code in ["ELC", "SD", "BL2", "IT2", "FL2", "EL1", "EL2", "DED2", "BEL2", "SUI2", "PPL2", "SCO2", "POL2", "DEN2"]
+
+    cup_keywords = ["cup", "trophy", "kupa", "pokal", "coppa", "taça", "taca", "copa", "shield", "beker"]
+    tier_keywords = ["serie c", "serie d", "liga 3", "3. liga", "persha", "druha"]
+
+    # Strict reserve, youth, academy, and amateur filter across competition and team names
+    bad_tokens = [
+        "women", "femenino", "feminin", "damen", "frauen", "vrouwen", "kvinner", "bayanlar",
+        "u23", "u21", "u20", "u19", "u18", "u17", "youth", "primavera", "reserve", "reserves",
+        "amateur", "group a", "group b", "group c", "group d", "group e", "group f", "group g", "group h"
+    ]
+    if any(x in comp for x in bad_tokens):
+        return False
+
+    # Check team names for reserve / academy suffixes (e.g., "Szeged Akademia II", "Bayern II", "Barcelona B")
+    # Use word boundary / spacing check to avoid false positives on normal club names
+    for team_str in [h, a]:
+        padded = f" {team_str} "
+        if any(p in padded for p in [
+            " ii ", " iii ", " iv ", " 2 ", " 3 ", " u23 ", " u21 ", " u20 ", " u19 ", " u18 ", " u17 ",
+            " youth ", " primavera ", " reserve ", " reserves ", " amateur ", " akademia ", " academy ",
+            " b team ", " b-team ", " (am) ", " (b) ", " b squad "
         ]):
+            # Exception: Willem II is a legitimate Dutch top-flight club
+            if "willem ii" in padded:
+                pass
+            else:
+                return False
+        # Catch teams ending in " b" (e.g. "barcelona b", "porto b", "benfica b", "sociedad b")
+        if team_str.endswith(" b") and not is_lower_allowed:
             return False
+
+    if not is_cup_code and any(x in comp for x in cup_keywords):
+        return False
+
+    if not is_lower_allowed and any(x in comp for x in tier_keywords):
+        return False
 
     if code == "PL":
         # English Premier League (Strict Top Flight)
@@ -534,7 +572,86 @@ def _is_league_match(comp_name: str, country_name: str, code_key: str) -> bool:
         # Danish 1. Division
         if country and country not in ["denmark", "danmark", ""]:
             return False
-        return "1. division" in comp or "1.division" in comp or "nordicbet" in comp
+    elif code in ["FAC", "FA_CUP"]:
+        # English FA Cup
+        if country and country not in ["england", "uk", "great britain", ""]:
+            return False
+        return "fa cup" in comp and "women" not in comp and "youth" not in comp
+
+    elif code in ["EL1", "LEAGUE_ONE"]:
+        # English League One
+        if country and country not in ["england", "uk", "great britain", ""]:
+            return False
+        return "league one" in comp and "scotland" not in comp and "women" not in comp
+
+    elif code in ["EL2", "LEAGUE_TWO"]:
+        # English League Two
+        if country and country not in ["england", "uk", "great britain", ""]:
+            return False
+        return "league two" in comp and "scotland" not in comp and "women" not in comp
+
+    elif code in ["EFL", "CARABAO"]:
+        # English EFL Cup
+        if country and country not in ["england", "uk", "great britain", ""]:
+            return False
+        return any(x in comp for x in ["efl cup", "league cup", "carabao"])
+
+    elif code in ["CDR", "COPA_DEL_REY"]:
+        # Spanish Copa del Rey
+        if country and country not in ["spain", ""]:
+            return False
+        return "copa del rey" in comp or (country == "spain" and "copa" in comp)
+
+    elif code in ["DFB", "DFB_POKAL"]:
+        # German DFB Pokal
+        if country and country not in ["germany", ""]:
+            return False
+        return "dfb" in comp or "pokal" in comp
+
+    elif code in ["CDF", "COUPE_DE_FRANCE"]:
+        # French Coupe de France
+        if country and country not in ["france", ""]:
+            return False
+        return "coupe de france" in comp or (country == "france" and "coupe" in comp)
+
+    elif code in ["TCP", "TACA_DE_PORTUGAL"]:
+        # Portuguese Taca de Portugal
+        if country and country not in ["portugal", ""]:
+            return False
+        return any(x in comp for x in ["taca de portugal", "taça de portugal", "taca"])
+
+    elif code in ["KNVB", "BEKER"]:
+        # Dutch KNVB Beker
+        if country and country not in ["netherlands", "holland", ""]:
+            return False
+        return "knvb" in comp or "beker" in comp
+
+    elif code in ["SCOC", "SCOTTISH_CUP"]:
+        # Scottish FA Cup
+        if country and country not in ["scotland", ""]:
+            return False
+        return "scottish cup" in comp or ("scotland" in comp and "cup" in comp)
+
+    elif code == "HUN":
+        # Hungarian NB I (Strict Top Flight Only)
+        if country and country not in ["hungary", "ungarn", ""]:
+            return False
+        if any(x in comp for x in ["nb ii", "nb iii", "nb 2", "nb 3", "nb iv", "megye", "kupa", "cup"]):
+            return False
+        comp_padded = f" {comp} "
+        return (" nb i " in comp_padded) or (" nb 1 " in comp_padded) or (" otp bank " in comp_padded)
+
+    elif code == "SVK":
+        # Slovak Superliga
+        if country and country not in ["slovakia", "slowakei", ""]:
+            return False
+        return "superliga" in comp or "nike liga" in comp or "fortuna liga" in comp
+
+    elif code == "SVN":
+        # Slovenian PrvaLiga
+        if country and country not in ["slovenia", ""]:
+            return False
+        return "prvaliga" in comp or "1. snl" in comp
 
     # -----------------------------------------------------------------------
     # Explicitly checked codes must not match arbitrary lower divisions via fallback:
@@ -545,7 +662,8 @@ def _is_league_match(comp_name: str, country_name: str, code_key: str) -> bool:
         "RUS", "UKR", "BRA", "MLS", "ARG", "COL", "CHI", "MEX", "CZE", "BUL",
         "TUN", "EGY", "SAU", "COP", "UCL", "UEL", "UECL", "ELC", "SD", "BL2",
         "IT2", "FL2", "IRL", "DED2", "SUI2", "BEL2", "WAL", "SRB", "SCO2", "PPL2",
-        "POL2", "DEN2"
+        "POL2", "DEN2", "FAC", "EL1", "EL2", "EFL", "CDR", "DFB", "CDF", "TCP",
+        "KNVB", "SCOC", "HUN", "SVK", "SVN"
     }
     if code in EXPLICITLY_HANDLED_CODES:
         return False
@@ -612,20 +730,20 @@ async def build_ai_ticket(req: BuildTicketRequest):
     TOP_MAJOR_EUROPEAN_LEAGUES = [
         # Top 5 European Flights
         "PL", "PD", "SA", "BL1", "FL1",
-        # Major European Flights & Saudi Pro League
+        # Major European Top Flights
         "DED", "PPL", "TUR", "BEL", "AUT", "SCO", "SUI", "CRO", "DEN", "GRE", "NOR", "SWE", "POL", "ROU", "CZE", "RUS", "UKR", "SAU",
-        # Major Tier-2 European Leagues (High Liquidity Friday / Midweek)
+        # High-Liquidity Major European Tier-2 Flights
         "ELC", "SD", "BL2", "IT2", "FL2",
-        # Active European Leagues playing Friday / Midweek
-        "IRL", "DED2", "BUL", "SRB", "WAL", "BEL2", "SUI2", "PPL2", "SCO2", "POL2", "DEN2",
-        # European Club Competitions
-        "UCL", "UEL", "UECL", "COP"
+        # UEFA Continental Tournaments
+        "UCL", "UEL", "UECL"
     ]
 
     ALL_KNOWN_LEAGUES = [
-        # Major European Leagues & Saudi
+        # Major European Top Flights, Tier-2 & UEFA
         *TOP_MAJOR_EUROPEAN_LEAGUES,
-        # Americas & Africa (Midweek / Worldwide only)
+        # Secondary Regional Leagues (Optional/Explicit selection)
+        "DED2", "HUN",
+        # Americas & Africa (Worldwide only)
         "BRA", "MLS", "ARG", "COL", "CHI", "MEX", "TUN", "EGY"
     ]
 
@@ -671,6 +789,19 @@ async def build_ai_ticket(req: BuildTicketRequest):
                     diff_sec = (match_dt - now_utc).total_seconds()
                     if diff_sec < 180 or diff_sec > 86400:
                         continue
+                elif win in ("MIDWEEK", "MIDWEEK_COMBINED", "TUE_WED_THU"):
+                    diff_days = (match_dt.date() - today_date).days
+                    # Must be upcoming within 5 days and fall on Tue (1), Wed (2), or Thu (3)
+                    if diff_days < 0 or diff_days > 5 or match_dt.weekday() not in (1, 2, 3):
+                        continue
+                elif win in ("NEXT_48H", "48H", "2D"):
+                    diff_sec = (match_dt - now_utc).total_seconds()
+                    if diff_sec < 180 or diff_sec > (2 * 86400):
+                        continue
+                elif win in ("NEXT_72H", "72H", "3D"):
+                    diff_sec = (match_dt - now_utc).total_seconds()
+                    if diff_sec < 180 or diff_sec > (3 * 86400):
+                        continue
                 elif win in ("WEEKEND", "WEEKEND_COMBINED", "SAT_SUN"):
                     diff_days = (match_dt.date() - today_date).days
                     # Must be upcoming within 6 days and fall on Fri (weekday 4), Sat (5), or Sun (6)
@@ -680,6 +811,15 @@ async def build_ai_ticket(req: BuildTicketRequest):
                     diff_sec = (match_dt - now_utc).total_seconds()
                     if diff_sec < 180 or diff_sec > (7 * 86400):
                         continue
+
+            # 1b. Exclude Previous Matches (Sequential Redo)
+            if req.exclude_fixture_ids:
+                norm_ex = {str(x).strip().lower() for x in req.exclude_fixture_ids if x}
+                ev_id = str(ev.get("event_id") or "").strip().lower()
+                game_id = str(ev.get("game_id") or "").strip().lower()
+                match_key = f"{h.strip().lower()}_{a.strip().lower()}"
+                if ev_id in norm_ex or game_id in norm_ex or match_key in norm_ex:
+                    continue
 
             # 2. Strict League Scope Filter (3 Distinct Modes)
             selected_lgs = req.selected_leagues or []
@@ -691,21 +831,21 @@ async def build_ai_ticket(req: BuildTicketRequest):
                 target_league_codes = ["PL", "PD", "SA", "BL1", "FL1"]
                 match_league = False
                 for sel_lg in target_league_codes:
-                    if _is_league_match(comp_name, country_name, sel_lg):
+                    if _is_league_match(comp_name, country_name, sel_lg, home_team=h, away_team=a):
                         match_league = True
                         break
                 if not match_league:
                     continue
             else:
-                # Mode B: All Major European & Premier Leagues (~25 top flight leagues)
-                if not selected_lgs or any(x.upper().replace(" ", "_") in ["ALL", "ALL_TOP_LEAGUES", "TOP_LEAGUES", "EUROPEAN_LEAGUES"] for x in selected_lgs):
+                # Mode B: All Major European & Premier Leagues (~20 top flight leagues + UEFA)
+                if not selected_lgs or any(x.upper().replace(" ", "_") in ["ALL", "ALL_TOP_LEAGUES", "TOP_LEAGUES", "EUROPEAN_LEAGUES"] for x in selected_lgs) or len(selected_lgs) >= 15:
                     target_league_codes = TOP_MAJOR_EUROPEAN_LEAGUES
                 else:
                     target_league_codes = selected_lgs
 
                 match_league = False
                 for sel_lg in target_league_codes:
-                    if _is_league_match(comp_name, country_name, sel_lg):
+                    if _is_league_match(comp_name, country_name, sel_lg, home_team=h, away_team=a):
                         match_league = True
                         break
 
@@ -977,48 +1117,45 @@ async def merge_portfolio_to_master(req: MergeMasterRequest):
     if not req.slips:
         raise HTTPException(status_code=400, detail="No slips provided to merge.")
 
-    # 1. Gather all candidate legs across all slips
-    fixture_candidates: Dict[str, List[Dict[str, Any]]] = {}
-
-    for s_idx, slip in enumerate(req.slips):
+    # 1. Gather and rank legs per slip by conviction (model_probability descending)
+    slips_legs = []
+    for slip in req.slips:
         legs = slip.get("approved_legs") or slip.get("final_selections") or slip.get("selections") or []
-        for leg in legs:
-            f_id = str(leg.get("fixture_id") or leg.get("event_id") or leg.get("provider_event_id") or "")
-            h_name = str(leg.get("home_team") or "").strip().lower()
-            a_name = str(leg.get("away_team") or "").strip().lower()
-            f_key = f"{h_name}_vs_{a_name}" if (h_name and a_name) else f_id
-            if not f_key:
-                continue
+        sorted_slip_legs = sorted(
+            legs,
+            key=lambda l: (
+                float(l.get("model_probability") or l.get("win_prob") or 0.70),
+                -abs(float(l.get("odds") or l.get("estimated_odds") or 1.25) - 1.25)
+            ),
+            reverse=True
+        )
+        if sorted_slip_legs:
+            slips_legs.append(sorted_slip_legs)
 
-            if f_key not in fixture_candidates:
-                fixture_candidates[f_key] = []
-            fixture_candidates[f_key].append(leg)
-
-    if not fixture_candidates:
+    if not slips_legs:
         raise HTTPException(status_code=400, detail="No valid match legs found in provided slips.")
 
-    # 2. For each unique fixture, select the best candidate pick
-    best_picks_per_fixture = []
-    for f_key, leg_list in fixture_candidates.items():
-        def _score_leg(l):
-            prob = float(l.get("model_probability") or l.get("win_prob") or 0.70)
-            odds = float(l.get("odds") or l.get("estimated_odds") or 1.25)
-            return (prob, -abs(odds - 1.25))
-
-        leg_list.sort(key=_score_leg, reverse=True)
-        best_picks_per_fixture.append(leg_list[0])
-
-    # 3. Sort all unique fixtures by conviction (model_probability descending, safety)
-    def _rank_fixture(l):
-        prob = float(l.get("model_probability") or l.get("win_prob") or 0.70)
-        odds = float(l.get("odds") or l.get("estimated_odds") or 1.25)
-        return (prob, odds)
-
-    best_picks_per_fixture.sort(key=_rank_fixture, reverse=True)
-
-    # 4. Slice to prioritized target_games (clamped between 2 and 15)
+    # 2. Select evenly from both variant slips (alternating round-robin)
     t_games = max(2, min(15, int(req.target_games or 10)))
-    master_legs = best_picks_per_fixture[:t_games]
+    master_legs = []
+    seen_fixtures = set()
+
+    max_iter = max(len(l) for l in slips_legs)
+    for round_idx in range(max_iter):
+        for s_idx in range(len(slips_legs)):
+            if len(master_legs) >= t_games:
+                break
+            if round_idx < len(slips_legs[s_idx]):
+                leg = slips_legs[s_idx][round_idx]
+                h_name = str(leg.get("home_team") or "").strip().lower()
+                a_name = str(leg.get("away_team") or "").strip().lower()
+                f_key = f"{h_name}_vs_{a_name}" if (h_name and a_name) else str(leg.get("fixture_id") or leg.get("event_id") or "")
+                if not f_key or f_key in seen_fixtures:
+                    continue
+                seen_fixtures.add(f_key)
+                master_legs.append(leg)
+        if len(master_legs) >= t_games:
+            break
 
     # Recalculate accumulated odds and combined probability
     acc_odds = 1.0

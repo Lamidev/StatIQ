@@ -1,5 +1,8 @@
 import numpy as np
-from scipy.optimize import minimize
+try:
+    from scipy.optimize import minimize
+except Exception:
+    minimize = None
 from typing import Tuple, List
 
 class WeightedEnsemblePredictor:
@@ -35,9 +38,10 @@ class WeightedEnsemblePredictor:
             loss = -np.mean(np.log(np.clip(picked, eps, 1.0)))
             return float(loss)
 
-        res = minimize(ensemble_loss, x0=[0.5], method="Nelder-Mead", bounds=[(0.0, 1.0)])
-        if res.success:
-            self.weight_dc = float(np.clip(res.x[0], 0.0, 1.0))
+        if minimize is not None:
+            res = minimize(ensemble_loss, x0=[0.5], method="Nelder-Mead", bounds=[(0.0, 1.0)])
+            if res.success:
+                self.weight_dc = float(np.clip(res.x[0], 0.0, 1.0))
 
     def predict(self, p_dc: Tuple[float, float, float], p_xgb: Tuple[float, float, float]) -> Tuple[float, float, float]:
         w = self.weight_dc

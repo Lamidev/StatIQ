@@ -102,55 +102,64 @@ class SportyBetIngestionService:
         cls._is_refreshing = True
 
         client = cls._get_client()
+        endpoint = f"{cls.BASE_URL}/wapConfigurableEventsByOrder"
 
-        def _fetch_url(url: str) -> List[Dict[str, Any]]:
+        def _fetch_page(page_num: int, is_today: bool) -> List[Dict[str, Any]]:
+            payload = {
+                "sportId": "sr:sport:1",
+                "pageNum": page_num,
+                "pageSize": 50,
+                "withTwoUpMarket": True,
+                "withOneUpMarket": True
+            }
+            if is_today:
+                payload["todayGames"] = True
+            else:
+                payload["timeline"] = 1
+
             try:
-                resp = client.get(url)
+                resp = client.post(endpoint, json=payload)
                 if resp.status_code == 200:
                     j = resp.json()
                     if j.get("bizCode") == 10000:
-                        data = j.get("data", [])
-                        return data if isinstance(data, list) else data.get("events", [])
+                        return j.get("data", {}).get("tournaments", [])
             except Exception as e:
-                logger.debug(f"[SportyBetIngestion] URL fetch error: {e}")
+                logger.debug(f"[SportyBetIngestion] Page fetch error (p={page_num}, today={is_today}): {e}")
             return []
 
-        # High-density active categories across all major football nations on SportyBet
-        core_categories = [
-            1, 4, 5, 7, 8, 9, 10, 11, 12, 13, 14, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26,
-            30, 31, 32, 33, 34, 35, 44, 46, 47, 48, 49, 51, 52, 57, 66, 67, 77, 78, 85, 86,
-            91, 92, 97, 99, 102, 122, 130, 131, 134, 148, 152, 155, 158, 159, 160, 163, 165,
-            201, 252, 257, 270, 274, 278, 280, 281, 289, 291, 296, 297, 299, 305, 310, 322,
-            329, 339, 352, 353, 365, 367, 379, 385, 386, 388, 389, 393
-        ]
-        fetch_urls = [
-            f"{cls.BASE_URL}/wapUpcomingEvents?sportId=sr:sport:1&pageSize=100",
-            f"{cls.BASE_URL}/wapUpcomingEvents?sportId=sr:sport:1&pageSize=100&pageNum=2",
-            f"{cls.BASE_URL}/wapUpcomingEvents?sportId=sr:sport:1&pageSize=100&pageNum=3",
-            f"{cls.BASE_URL}/wapUpcomingEvents?sportId=sr:sport:1&pageSize=100&pageNum=4",
-            f"{cls.BASE_URL}/wapUpcomingEvents?sportId=sr:sport:1&pageSize=100&pageNum=5",
-        ] + [
-            f"{cls.BASE_URL}/wapUpcomingEvents?sportId=sr:sport:1&categoryId=sr:category:{cid}&pageSize=50"
-            for cid in core_categories
-        ]
-
-        all_events = []
+        # Concurrently fetch pages 1..8 for Today and pages 1..5 for Tomorrow
+        pages_to_fetch = [(p, True) for p in range(1, 9)] + [(p, False) for p in range(1, 6)]
+        all_tournaments = []
         try:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=50) as executor:
-                results = list(executor.map(_fetch_url, fetch_urls))
+            with concurrent.futures.ThreadPoolExecutor(max_workers=14) as executor:
+                results = list(executor.map(lambda x: _fetch_page(x[0], x[1]), pages_to_fetch))
                 for items in results:
-                    all_events.extend(items)
+                    all_tournaments.extend(items)
         finally:
             cls._is_refreshing = False
 
-        # Deduplicate events by eventId
+        # Flatten tournaments and events
         unique_events = []
         seen_ids = set()
-        for ev in all_events:
-            ev_id = str(ev.get("eventId") or ev.get("gameId") or "")
-            if ev_id and ev_id not in seen_ids:
-                seen_ids.add(ev_id)
-                unique_events.append(ev)
+        for tour in all_tournaments:
+            c_name = (tour.get("categoryName") or "").strip()
+            t_name = (tour.get("name") or "").strip()
+            c_id = tour.get("categoryId") or ""
+            t_id = tour.get("id") or ""
+            for ev in tour.get("events", []):
+                ev_id = str(ev.get("eventId") or ev.get("gameId") or "")
+                if ev_id and ev_id not in seen_ids:
+                    seen_ids.add(ev_id)
+                    ev["country"] = c_name
+                    ev["competition"] = t_name
+                    ev["sport"] = {
+                        "category": {
+                            "id": c_id,
+                            "name": c_name,
+                            "tournament": {"id": t_id, "name": t_name}
+                        }
+                    }
+                    unique_events.append(ev)
 
         normalized = cls._normalize_events(unique_events)
         if normalized:
@@ -171,13 +180,26 @@ class SportyBetIngestionService:
         now_ms = time.time() * 1000.0
 
         for ev in events:
-            # STRICT RULE: Any match that has already started or is within 5 minutes of kickoff must be drafted out
+            # AIR-TIGHT PRE-MATCH FILTER:
+            # 1. Start time must be strictly upcoming in the future (>3 minutes from now)
             start_ms = ev.get("estimateStartTime") or ev.get("startTime") or 0
-            if start_ms > 0 and start_ms <= (now_ms + 300000):  # Exclude if within 5 mins or past
+            if start_ms > 0 and start_ms <= (now_ms + 180000):  # Exclude if in the past or starting within 3 mins
                 continue
 
-            status_str = str(ev.get("status") or ev.get("match_status") or "").upper()
-            if status_str in ["LIVE", "STARTED", "1H", "2H", "HT", "FINISHED", "ENDED", "CANCELLED", "POSTPONED", "ABANDONED"]:
+            # 2. SportyBet numerical status (0 = Not started, 1 = Live/In-play, 2 = Finished)
+            st_val = ev.get("status")
+            if st_val is not None:
+                try:
+                    if int(st_val) != 0:
+                        continue
+                except (ValueError, TypeError):
+                    pass
+
+            # 3. SportyBet match status label
+            ms_str = str(ev.get("matchStatus") or ev.get("match_status") or "").strip().upper()
+            if ms_str in ["LIVE", "STARTED", "1H", "2H", "HT", "FINISHED", "ENDED", "CANCELLED", "POSTPONED", "ABANDONED", "CLOSED", "CONCLUDED", "INTERRUPTED", "DELAYED"]:
+                continue
+            if ms_str and ms_str not in ("NOT START", "NOT STARTED", "UPCOMING", "PRE-MATCH", "PREMATCH"):
                 continue
 
             event_id = ev.get("eventId")
@@ -190,13 +212,12 @@ class SportyBetIngestionService:
                 dt = datetime.fromtimestamp(start_ms / 1000.0, tz=timezone.utc)
                 kickoff_str = dt.strftime("%Y-%m-%d %H:%M:%S")
 
-
             sport_info = ev.get("sport", {})
             category_info = sport_info.get("category", {}) if isinstance(sport_info, dict) else {}
             tournament_info = category_info.get("tournament", {}) if isinstance(category_info, dict) else {}
             
-            country = category_info.get("name") if isinstance(category_info, dict) else ""
-            competition = tournament_info.get("name") if isinstance(tournament_info, dict) else (ev.get("tournamentName") or "Football")
+            country = ev.get("country") or (category_info.get("name") if isinstance(category_info, dict) else "")
+            competition = ev.get("competition") or (tournament_info.get("name") if isinstance(tournament_info, dict) else (ev.get("tournamentName") or "Football"))
 
             # Extract structured markets and odds
             markets_dict = {}

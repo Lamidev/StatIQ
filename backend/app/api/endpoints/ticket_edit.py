@@ -39,6 +39,7 @@ class ReEditRequest(BaseModel):
     reshuffle_seed: Optional[int] = None
     strict_mode: bool = False
     num_tickets: Optional[int] = 1
+    exclude_fixture_ids: Optional[List[str]] = None
 
 class GenerateCodeRequest(BaseModel):
     selections: List[Dict[str, Any]]
@@ -91,6 +92,7 @@ async def run_re_edit(req: ReEditRequest, db: Session = Depends(get_db)):
                 reshuffle_seed=req.reshuffle_seed,
                 strict_mode=req.strict_mode,
                 num_tickets=req.num_tickets or 1,
+                exclude_fixture_ids=req.exclude_fixture_ids,
             ),
             timeout=reedit_timeout
         )
@@ -110,35 +112,26 @@ async def run_re_edit(req: ReEditRequest, db: Session = Depends(get_db)):
         }]
 
     if portfolio_slips:
+        res["portfolio_tickets"] = portfolio_slips
+        primary = portfolio_slips[0]
+        # Fast non-blocking booking code attempt for primary slip (2.5s max)
         try:
             adapter = SportyBetAdapter(db)
-
-            async def _generate_booking_for_slip(slip_data):
-                sels = slip_data.get("final_selections", [])
-                if not sels:
-                    return slip_data
-                try:
-                    # Run sync adapter method in thread pool to avoid blocking
-                    b_res = await asyncio.to_thread(adapter.generate_booking_code, sels, "ng")
-                    if b_res.get("status") == "SUCCESS" and b_res.get("booking_code"):
-                        slip_data["booking_code"] = b_res.get("booking_code")
-                        slip_data["share_url"] = b_res.get("load_url")
-                        slip_data["verification_status"] = b_res.get("verification_status", "BOOKING_VERIFIED")
-                except Exception as ex:
-                    logger.warning(f"Slip booking generation error: {ex}")
-                return slip_data
-
-            updated_slips = await asyncio.gather(*[_generate_booking_for_slip(s) for s in portfolio_slips])
-            res["portfolio_tickets"] = updated_slips
-
-            if updated_slips and len(updated_slips) > 0:
-                primary = updated_slips[0]
-                res["booking_code"] = primary.get("booking_code")
-                res["share_url"] = primary.get("share_url")
-                res["verification_status"] = primary.get("verification_status", "BOOKING_VERIFIED")
-
+            primary_sels = primary.get("final_selections", [])
+            if primary_sels:
+                b_res = await asyncio.wait_for(
+                    asyncio.to_thread(adapter.generate_booking_code, primary_sels, "ng"),
+                    timeout=1.2
+                )
+                if b_res.get("status") == "SUCCESS" and b_res.get("booking_code"):
+                    primary["booking_code"] = b_res.get("booking_code")
+                    primary["share_url"] = b_res.get("load_url")
+                    primary["verification_status"] = b_res.get("verification_status", "BOOKING_VERIFIED")
+                    res["booking_code"] = primary.get("booking_code")
+                    res["share_url"] = primary.get("share_url")
+                    res["verification_status"] = primary.get("verification_status", "BOOKING_VERIFIED")
         except Exception as e:
-            logger.warning(f"Portfolio booking generation error: {e}")
+            logger.info(f"Primary slip fast booking skipped ({e}), available on-demand in UI.")
 
     return res
 
@@ -205,44 +198,45 @@ async def merge_portfolio_to_master(req: MergeMasterRequest, db: Session = Depen
     if not req.slips:
         raise HTTPException(status_code=400, detail="No slips provided to merge.")
 
-    fixture_candidates: Dict[str, List[Dict[str, Any]]] = {}
-
-    for s_idx, slip in enumerate(req.slips):
+    # 1. Gather and rank legs per slip by conviction (model_probability descending)
+    slips_legs = []
+    for slip in req.slips:
         legs = slip.get("approved_legs") or slip.get("final_selections") or slip.get("selections") or []
-        for leg in legs:
-            f_id = str(leg.get("fixture_id") or leg.get("event_id") or leg.get("provider_event_id") or "")
-            h_name = str(leg.get("home_team") or "").strip().lower()
-            a_name = str(leg.get("away_team") or "").strip().lower()
-            f_key = f"{h_name}_vs_{a_name}" if (h_name and a_name) else f_id
-            if not f_key:
-                continue
+        sorted_slip_legs = sorted(
+            legs,
+            key=lambda l: (
+                float(l.get("model_probability") or l.get("win_prob") or 0.70),
+                -abs(float(l.get("odds") or l.get("estimated_odds") or 1.25) - 1.25)
+            ),
+            reverse=True
+        )
+        if sorted_slip_legs:
+            slips_legs.append(sorted_slip_legs)
 
-            if f_key not in fixture_candidates:
-                fixture_candidates[f_key] = []
-            fixture_candidates[f_key].append(leg)
-
-    if not fixture_candidates:
+    if not slips_legs:
         raise HTTPException(status_code=400, detail="No valid match legs found in provided slips.")
 
-    best_picks_per_fixture = []
-    for f_key, leg_list in fixture_candidates.items():
-        def _score_leg(l):
-            prob = float(l.get("model_probability") or l.get("win_prob") or 0.70)
-            odds = float(l.get("odds") or l.get("estimated_odds") or 1.25)
-            return (prob, -abs(odds - 1.25))
-
-        leg_list.sort(key=_score_leg, reverse=True)
-        best_picks_per_fixture.append(leg_list[0])
-
-    def _rank_fixture(l):
-        prob = float(l.get("model_probability") or l.get("win_prob") or 0.70)
-        odds = float(l.get("odds") or l.get("estimated_odds") or 1.25)
-        return (prob, odds)
-
-    best_picks_per_fixture.sort(key=_rank_fixture, reverse=True)
-
+    # 2. Select evenly from both variant slips (alternating round-robin)
     t_games = max(2, min(15, int(req.target_games or 10)))
-    master_legs = best_picks_per_fixture[:t_games]
+    master_legs = []
+    seen_fixtures = set()
+
+    max_iter = max(len(l) for l in slips_legs)
+    for round_idx in range(max_iter):
+        for s_idx in range(len(slips_legs)):
+            if len(master_legs) >= t_games:
+                break
+            if round_idx < len(slips_legs[s_idx]):
+                leg = slips_legs[s_idx][round_idx]
+                h_name = str(leg.get("home_team") or "").strip().lower()
+                a_name = str(leg.get("away_team") or "").strip().lower()
+                f_key = f"{h_name}_vs_{a_name}" if (h_name and a_name) else str(leg.get("fixture_id") or leg.get("event_id") or "")
+                if not f_key or f_key in seen_fixtures:
+                    continue
+                seen_fixtures.add(f_key)
+                master_legs.append(leg)
+        if len(master_legs) >= t_games:
+            break
 
     acc_odds = 1.0
     comb_prob = 1.0

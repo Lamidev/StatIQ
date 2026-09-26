@@ -56,5 +56,6 @@ virtual/*.db
 virtual/*.db-shm
 virtual/*.db-wal
 .vfootball_watermark.json
-virtual/.vfootball_watermark.json
-
+# Scratch and temporary scripts
+scratch/
+backend/scratch/

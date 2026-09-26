@@ -233,11 +233,11 @@ export async function fetchMatchStats(matches) {
  * Timeout scales with ticket size: ≤15 games = 30s, 16-30 games = 60s, 31-50 games = 90s.
  * Returns error object on server crash or timeout.
  */
-export async function runTicketReEdit(selections, targetOdds = 5.0, mode = "AUDITOR", targetMode = "ODDS", targetGames = 10, reshuffleSeed = null, strictMode = false, numTickets = 1) {
+export async function runTicketReEdit(selections, targetOdds = 5.0, mode = "AUDITOR", targetMode = "ODDS", targetGames = 10, reshuffleSeed = null, strictMode = false, numTickets = 1, excludeFixtureIds = null) {
   const controller = new AbortController();
   // Adaptive timeout — larger tickets need more time due to parallel HTTP resolution
   const n = Array.isArray(selections) ? selections.length : 0;
-  const timeoutMs = n > 30 ? 90000 : n > 15 ? 60000 : 30000;
+  const timeoutMs = 75000;
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const res = await fetch(`${API_BASE_URL}/ticket-edit/re-edit`, {
@@ -251,7 +251,8 @@ export async function runTicketReEdit(selections, targetOdds = 5.0, mode = "AUDI
         target_games: targetGames,
         reshuffle_seed: reshuffleSeed || Date.now(),
         strict_mode: strictMode,
-        num_tickets: numTickets || 1
+        num_tickets: numTickets || 1,
+        exclude_fixture_ids: excludeFixtureIds || null
       }),
       signal: controller.signal
     });
