@@ -4,7 +4,7 @@ from typing import List, Dict, Any, Tuple
 try:
     import xgboost as xgb
     XGBOOST_AVAILABLE = True
-except ImportError:
+except Exception:
     XGBOOST_AVAILABLE = False
 
 class XGBoostPredictor:

@@ -91,13 +91,12 @@ def start_background_ticket_sync_worker():
     # Start V2.0 Autonomous Tracking Scheduler
     LiveTrackingScheduler.start_scheduler()
 
-    # Start 24/7 Virtual Front-Testing Daemon
-    try:
-        from virtual.workers.fronttest_worker import VirtualFrontTestWorker
-        VirtualFrontTestWorker.start()
-        print("[VirtualTrader] 24/7 vFootball Front-Testing Worker started in background daemon.")
-    except Exception as e:
-        print(f"[VirtualTrader] Worker startup note: {e}")
+    # Virtual Front-Testing Daemon disabled per user instruction
+    # try:
+    #     from virtual.workers.fronttest_worker import VirtualFrontTestWorker
+    #     VirtualFrontTestWorker.start()
+    # except Exception as e:
+    #     pass
 
     import threading
     import time

@@ -36,7 +36,7 @@ class VirtualFrontTestWorker:
     Authoritatively bound to the SQLite `virtual_agent_config` table.
     """
     _running: bool = False
-    _enabled: bool = True
+    _enabled: bool = False
     _thread: threading.Thread = None
     _last_run_time: float = 0.0
     _poll_interval: int = 10  # Poll every 10 seconds
@@ -55,6 +55,9 @@ class VirtualFrontTestWorker:
 
     @classmethod
     def start(cls):
+        if not cls._enabled:
+            logger.info("[FrontTestWorker] Virtual trader worker disabled.")
+            return
         if cls._running:
             return
         cls._running = True
