@@ -186,7 +186,7 @@ export default function TicketBuilderTab() {
   const [mergingMaster, setMergingMaster] = useState(false);
   const [masterPrioritizedGames, setMasterPrioritizedGames] = useState(10);
   const [customMasterGamesInput, setCustomMasterGamesInput] = useState("10");
-  const [selectedLeagues, setSelectedLeagues] = useState(TOP_MAJOR_EUROPEAN_CODES);
+  const [selectedLeagues, setSelectedLeagues] = useState(["ALL_TODAY"]);
   const [dateWindow, setDateWindow] = useState("TODAY");
   const [selectedFlexCut, setSelectedFlexCut] = useState("OFF");
   const [customOdds, setCustomOdds] = useState("500");
@@ -1341,7 +1341,18 @@ export default function TicketBuilderTab() {
                     Browse all available matches on SportyBet. Select matches to let StatIQ evaluate H2H & form, then generate a ticket with genuine booking code.
                   </p>
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <button
+                    onClick={() => {
+                      setSelectedLeagues(["ALL_TODAY"]);
+                      setBuilderMode("ACCUMULATOR");
+                      setBuilderStep(2);
+                    }}
+                    className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 text-white text-xs font-black shadow-md shadow-emerald-200 hover:from-emerald-700 hover:to-teal-700 transition-all flex-shrink-0"
+                  >
+                    <Sparkles className="w-3.5 h-3.5" />
+                    <span>AI Auto-Pick from Today's Pool</span>
+                  </button>
                   <button
                     onClick={() => loadTodayGames(todayDayFilter)}
                     disabled={todayLoading}
@@ -1791,6 +1802,21 @@ export default function TicketBuilderTab() {
                 <div className="flex items-center gap-2 flex-wrap">
                   <button
                     type="button"
+                    onClick={() => setSelectedLeagues(["ALL_TODAY"])}
+                    className={`px-3.5 py-2 rounded-xl text-xs font-black transition-all flex items-center gap-2 ${
+                      selectedLeagues.includes("ALL_TODAY") || selectedLeagues.includes("ALL_WORLDWIDE")
+                        ? "bg-slate-900 text-white shadow-md shadow-slate-200 ring-2 ring-emerald-500"
+                        : "bg-slate-100 text-slate-700 hover:bg-slate-200"
+                    }`}
+                  >
+                    <span>⚡</span>
+                    <span>All SportyBet Today Games (Wide Pool)</span>
+                    <span className="text-[9px] font-black uppercase px-1.5 py-0.5 rounded-full bg-emerald-500 text-white">
+                      Recommended
+                    </span>
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => setSelectedLeagues(INTERNATIONAL_BREAK_CODES)}
                     className={`px-3 py-1.5 rounded-lg text-xs font-extrabold transition-all flex items-center gap-1.5 ${
                       INTERNATIONAL_BREAK_CODES.every(l => selectedLeagues.includes(l)) && selectedLeagues.length === INTERNATIONAL_BREAK_CODES.length
@@ -1823,30 +1849,45 @@ export default function TicketBuilderTab() {
                   >
                     All Top Leagues
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => setSelectedLeagues(["ALL_WORLDWIDE"])}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-extrabold transition-all ${
-                      selectedLeagues.includes("ALL_WORLDWIDE")
-                        ? "bg-slate-900 text-white"
-                        : "bg-slate-100 text-slate-700 hover:bg-slate-200"
-                    }`}
-                  >
-                    Worldwide (All Matches)
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setSelectedLeagues([])}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
-                      selectedLeagues.length === 0 ? "bg-slate-900 text-white" : "text-slate-500 hover:bg-slate-100"
-                    }`}
-                  >
-                    Clear Selection
-                  </button>
                 </div>
 
-                {/* League Multi-Select Chips */}
-                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
+                {/* Wide Pool Active Banner OR Specific League Chips */}
+                {(selectedLeagues.includes("ALL_TODAY") || selectedLeagues.includes("ALL_WORLDWIDE")) ? (
+                  <div className="bg-gradient-to-br from-emerald-50 via-teal-50 to-emerald-50/40 border border-emerald-200 rounded-2xl p-4.5 space-y-2.5">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <span className="flex h-2.5 w-2.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                        <h4 className="text-xs font-black uppercase tracking-wider text-emerald-900">
+                          ⚡ Full SportyBet Today Fixtures Pool Active
+                        </h4>
+                      </div>
+                      <span className="text-[10px] font-extrabold bg-emerald-200/60 text-emerald-800 px-2 py-0.5 rounded-full">
+                        Wide Range: 200+ Matches
+                      </span>
+                    </div>
+                    <p className="text-xs text-emerald-800 font-medium leading-relaxed">
+                      StatIQ will evaluate all scheduled matches from SportyBet for your selected timeframe (both club football and international tournaments). No need to select competitions manually — the 5-Gate engine scans the full board to pick the safest high-value games based on your target odds and games.
+                    </p>
+                    <div className="flex items-center gap-4 pt-1 text-[11px] font-bold text-emerald-700 flex-wrap">
+                      <span className="flex items-center gap-1">✓ Senior International & Major Tournaments</span>
+                      <span className="flex items-center gap-1">✓ Active Domestic Club Leagues</span>
+                      <span className="flex items-center gap-1">✓ Anti-SRL & Youth Protection</span>
+                    </div>
+                  </div>
+                ) : (
+                  <div>
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-xs font-bold text-slate-700">Filter by specific leagues ({selectedLeagues.length} selected):</span>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedLeagues([])}
+                        className="text-xs text-slate-500 hover:text-slate-800 font-semibold"
+                      >
+                        Clear Selection
+                      </button>
+                    </div>
+                    {/* League Multi-Select Chips */}
+                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
                   {AVAILABLE_LEAGUES.map((lg) => {
                     const isSelected = selectedLeagues.includes(lg.code);
                     return (
@@ -1877,7 +1918,9 @@ export default function TicketBuilderTab() {
                       </div>
                     );
                   })}
-                </div>
+                    </div>
+                  </div>
+                )}
 
                 {/* Match Schedule Window */}
                 <div className="pt-2">

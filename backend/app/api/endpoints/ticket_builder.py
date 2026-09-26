@@ -870,9 +870,25 @@ async def build_ai_ticket(req: BuildTicketRequest):
 
             # 2. Strict League Scope Filter (4 Distinct Modes)
             selected_lgs = req.selected_leagues or []
-            if any(x.upper() in ["ALL_WORLDWIDE", "WORLDWIDE", "ALL_MATCHES"] for x in selected_lgs):
-                # Mode C: Worldwide — Allow 100% of matches from SportyBet Today board (250+ matches)
-                pass
+            is_all_pool = any(x.upper() in ["ALL_WORLDWIDE", "WORLDWIDE", "ALL_MATCHES", "ALL_TODAY", "ALL_SPORTYBET", "SPORTYBET_TODAY"] for x in selected_lgs) or (req.league_scope in ["ALL_TODAY", "WORLDWIDE", "ALL"] and not selected_lgs)
+            if is_all_pool:
+                # Mode C: Full SportyBet Today Pool — Scan 100% of matches across club & international fixtures
+                comp_l = comp_name.lower()
+                # Anti-noise filter: protect ticket from SRL, club friendlies, youth, and women's exhibition matches
+                if any(x in comp_l for x in ["srl", "simulated reality", "simulated", "club friendly", "club friendlies", "u21", "u19", "u23", "u20", "u18", "u17", "youth", "women", "damallsvenskan", "femenino", "frauen"]):
+                    continue
+                skip_res = False
+                for team_str in [h.lower(), a.lower()]:
+                    if any(team_str.endswith(sfx) for sfx in [" dff", " wfc", " women", " (w)", " b", " ii"]):
+                        skip_res = True
+                        break
+                    padded = f" {team_str} "
+                    if any(p in padded for p in [" ii ", " iii ", " b team ", " b-team ", " reserve ", " reserves ", " amateur "]):
+                        if "willem ii" not in padded:
+                            skip_res = True
+                            break
+                if skip_res:
+                    continue
             elif any(x.upper().replace(" ", "_") in ["TOP_5_EUROPEAN", "TOP_5", "TOP5"] for x in selected_lgs):
                 # Mode A: Top 5 Major European Leagues (Premier League, LaLiga, Serie A, Bundesliga, Ligue 1)
                 target_league_codes = ["PL", "PD", "SA", "BL1", "FL1"]
