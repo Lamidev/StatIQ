@@ -172,17 +172,22 @@ def _is_league_match(comp_name: str, country_name: str, code_key: str, home_team
     a = (away_team or "").strip().lower()
 
     # Reject non-top flight attributes universally unless specifically a cup or tier-2/3 code
-    is_cup_code = code in ["UCL", "UEL", "UECL", "COP", "FAC", "CDR", "DFB", "CDF", "TCP", "KNVB", "SCOC", "EFL"]
+    is_international_code = code in ["INT", "INTERNATIONAL", "INTL", "ALL_INTL", "UNL", "WCQ", "AFCON", "CONCACAF", "INT_FRIENDLY", "GULF_CUP", "INTERNATIONAL_BREAK"]
+    is_cup_code = (code in ["UCL", "UEL", "UECL", "COP", "FAC", "CDR", "DFB", "CDF", "TCP", "KNVB", "SCOC", "EFL"]) or is_international_code
     is_lower_allowed = code in ["ELC", "SD", "BL2", "IT2", "FL2", "EL1", "EL2", "DED2", "BEL2", "SUI2", "PPL2", "SCO2", "POL2", "DEN2"]
+
+    # Universal rejection: Simulated Reality Leagues (SRL) & Club Friendly matches
+    if any(x in comp for x in ["srl", "simulated reality", "simulated", "club friendly", "club friendlies"]):
+        return False
 
     cup_keywords = ["cup", "trophy", "kupa", "pokal", "coppa", "taça", "taca", "copa", "shield", "beker"]
     tier_keywords = ["serie c", "serie d", "liga 3", "3. liga", "persha", "druha"]
 
     # Strict reserve, youth, academy, and amateur filter across competition and team names
     bad_tokens = [
-        "women", "femenino", "feminin", "damen", "frauen", "vrouwen", "kvinner", "bayanlar",
+        "women", "femenino", "feminin", "damen", "damallsvenskan", "frauen", "vrouwen", "kvinner", "bayanlar", "femmes", "wom.",
         "u23", "u21", "u20", "u19", "u18", "u17", "youth", "primavera", "reserve", "reserves",
-        "amateur", "group a", "group b", "group c", "group d", "group e", "group f", "group g", "group h"
+        "amateur"
     ]
     if any(x in comp for x in bad_tokens):
         return False
@@ -194,15 +199,17 @@ def _is_league_match(comp_name: str, country_name: str, code_key: str, home_team
         if any(p in padded for p in [
             " ii ", " iii ", " iv ", " 2 ", " 3 ", " u23 ", " u21 ", " u20 ", " u19 ", " u18 ", " u17 ",
             " youth ", " primavera ", " reserve ", " reserves ", " amateur ", " akademia ", " academy ",
-            " b team ", " b-team ", " (am) ", " (b) ", " b squad "
+            " b team ", " b-team ", " (am) ", " (b) ", " b squad ", " women ", " wfc ", " dff "
         ]):
             # Exception: Willem II is a legitimate Dutch top-flight club
             if "willem ii" in padded:
                 pass
             else:
                 return False
-        # Catch teams ending in " b" (e.g. "barcelona b", "porto b", "benfica b", "sociedad b")
+        # Catch teams ending in " b" (e.g. "barcelona b", "porto b", "benfica b", "sociedad b") or women's club suffixes
         if team_str.endswith(" b") and not is_lower_allowed:
+            return False
+        if any(team_str.endswith(sfx) for sfx in [" dff", " wfc", " women", " (w)"]):
             return False
 
     if not is_cup_code and any(x in comp for x in cup_keywords):
@@ -647,11 +654,48 @@ def _is_league_match(comp_name: str, country_name: str, code_key: str, home_team
             return False
         return "superliga" in comp or "nike liga" in comp or "fortuna liga" in comp
 
-    elif code == "SVN":
-        # Slovenian PrvaLiga
-        if country and country not in ["slovenia", ""]:
+    elif code in ["UNL", "NATIONS_LEAGUE"]:
+        # UEFA Nations League (Senior Men)
+        if any(x in comp for x in ["u21", "u19", "women", "femenino"]):
             return False
-        return "prvaliga" in comp or "1. snl" in comp
+        return "nations league" in comp and "concacaf" not in comp
+
+    elif code in ["WCQ", "WORLD_CUP_QUAL", "WORLD_CUP"]:
+        # World Cup Qualification (UEFA, CAF, CONMEBOL, AFC, CONCACAF)
+        if any(x in comp for x in ["u20", "u17", "women", "femenino"]):
+            return False
+        return "world cup" in comp
+
+    elif code in ["AFCON", "AFCON_QUAL", "AFRICA_CUP"]:
+        # Africa Cup of Nations & Qualifiers
+        if any(x in comp for x in ["u20", "u17", "women", "femenino"]):
+            return False
+        return "africa cup" in comp or "afcon" in comp
+
+    elif code in ["CONCACAF", "CONCACAF_NL"]:
+        # CONCACAF Nations League
+        if any(x in comp for x in ["women", "femenino"]):
+            return False
+        return "concacaf" in comp and "nations league" in comp
+
+    elif code in ["INT_FRIENDLY", "FRIENDLY_INT"]:
+        # Senior Men's International Friendlies
+        if country and country not in ["international", "world", "europe", "africa", "asia", "americas", ""]:
+            return False
+        if any(x in comp for x in ["club friendly", "club", "women", "femenino", "u21", "u19"]):
+            return False
+        return any(x in comp for x in ["friendly games", "friendlies", "int. friendly"])
+
+    elif code in ["INT", "INTERNATIONAL", "INTL", "ALL_INTL", "INTERNATIONAL_BREAK"]:
+        # Universal Senior Men's International Tournament & Qualifier Handler
+        if any(bad in comp for bad in ["u23", "u21", "u20", "u19", "u18", "u17", "youth", "women", "femenino", "club friendly"]):
+            return False
+        is_intl_cat = country in ["international", "world", "europe", "africa", "asia", "americas", ""] or "international" in comp
+        intl_tournaments = [
+            "nations league", "africa cup", "afcon", "world cup", "euro qualification",
+            "european championship", "copa america", "asian cup", "gulf cup", "friendly games", "int. friendly"
+        ]
+        return is_intl_cat and any(t in comp for t in intl_tournaments)
 
     # -----------------------------------------------------------------------
     # Explicitly checked codes must not match arbitrary lower divisions via fallback:
@@ -663,7 +707,8 @@ def _is_league_match(comp_name: str, country_name: str, code_key: str, home_team
         "TUN", "EGY", "SAU", "COP", "UCL", "UEL", "UECL", "ELC", "SD", "BL2",
         "IT2", "FL2", "IRL", "DED2", "SUI2", "BEL2", "WAL", "SRB", "SCO2", "PPL2",
         "POL2", "DEN2", "FAC", "EL1", "EL2", "EFL", "CDR", "DFB", "CDF", "TCP",
-        "KNVB", "SCOC", "HUN", "SVK", "SVN"
+        "KNVB", "SCOC", "HUN", "SVK", "SVN",
+        "INT", "INTERNATIONAL", "INTL", "ALL_INTL", "UNL", "WCQ", "AFCON", "CONCACAF", "INT_FRIENDLY", "INTERNATIONAL_BREAK"
     }
     if code in EXPLICITLY_HANDLED_CODES:
         return False
@@ -735,11 +780,13 @@ async def build_ai_ticket(req: BuildTicketRequest):
         # High-Liquidity Major European Tier-2 Flights
         "ELC", "SD", "BL2", "IT2", "FL2",
         # UEFA Continental Tournaments
-        "UCL", "UEL", "UECL"
+        "UCL", "UEL", "UECL",
+        # Senior International Tournaments & Qualifiers (Dynamic Break Coverage)
+        "INT", "UNL", "WCQ", "AFCON", "CONCACAF", "INT_FRIENDLY"
     ]
 
     ALL_KNOWN_LEAGUES = [
-        # Major European Top Flights, Tier-2 & UEFA
+        # Major European Top Flights, Tier-2 & UEFA & International
         *TOP_MAJOR_EUROPEAN_LEAGUES,
         # Secondary Regional Leagues (Optional/Explicit selection)
         "DED2", "HUN",
@@ -821,7 +868,7 @@ async def build_ai_ticket(req: BuildTicketRequest):
                 if ev_id in norm_ex or game_id in norm_ex or match_key in norm_ex:
                     continue
 
-            # 2. Strict League Scope Filter (3 Distinct Modes)
+            # 2. Strict League Scope Filter (4 Distinct Modes)
             selected_lgs = req.selected_leagues or []
             if any(x.upper() in ["ALL_WORLDWIDE", "WORLDWIDE", "ALL_MATCHES"] for x in selected_lgs):
                 # Mode C: Worldwide — Allow 100% of matches from SportyBet Today board (250+ matches)
@@ -836,8 +883,18 @@ async def build_ai_ticket(req: BuildTicketRequest):
                         break
                 if not match_league:
                     continue
+            elif any(x.upper().replace(" ", "_") in ["INTERNATIONAL", "INT", "INTL", "INTERNATIONAL_BREAK", "NATIONS_LEAGUE"] for x in selected_lgs):
+                # Mode D: Dedicated International Break Scope (Senior Men's International Matches)
+                target_league_codes = ["INT", "UNL", "WCQ", "AFCON", "CONCACAF", "INT_FRIENDLY"]
+                match_league = False
+                for sel_lg in target_league_codes:
+                    if _is_league_match(comp_name, country_name, sel_lg, home_team=h, away_team=a):
+                        match_league = True
+                        break
+                if not match_league:
+                    continue
             else:
-                # Mode B: All Major European & Premier Leagues (~20 top flight leagues + UEFA)
+                # Mode B: All Major European & Premier Leagues (~20 top flight leagues + UEFA + Senior International)
                 if not selected_lgs or any(x.upper().replace(" ", "_") in ["ALL", "ALL_TOP_LEAGUES", "TOP_LEAGUES", "EUROPEAN_LEAGUES"] for x in selected_lgs) or len(selected_lgs) >= 15:
                     target_league_codes = TOP_MAJOR_EUROPEAN_LEAGUES
                 else:

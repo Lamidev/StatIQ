@@ -6,6 +6,12 @@ import { generateSafePick, buildSafeTicket, scoreFixtures } from "../utils/pickE
 import { calculateFlexShield } from "../utils/flexCalculator";
 
 const AVAILABLE_LEAGUES = [
+  { code: "INT", name: "International Matches", country: "International" },
+  { code: "UNL", name: "UEFA Nations League", country: "Europe" },
+  { code: "WCQ", name: "World Cup Qualifiers", country: "International" },
+  { code: "AFCON", name: "AFCON Qualifiers", country: "Africa" },
+  { code: "CONCACAF", name: "CONCACAF Nations League", country: "Americas" },
+  { code: "INT_FRIENDLY", name: "Int. Friendlies", country: "International" },
   { code: "PL", name: "Premier League", country: "England" },
   { code: "PD", name: "La Liga", country: "Spain" },
   { code: "SA", name: "Serie A", country: "Italy" },
@@ -46,6 +52,12 @@ const AVAILABLE_LEAGUES = [
 ];
 
 const LEAGUE_COUNTRY_MAP = {
+  "INT": "International",
+  "UNL": "Europe",
+  "WCQ": "International",
+  "AFCON": "Africa",
+  "CONCACAF": "Americas",
+  "INT_FRIENDLY": "International",
   "PL": "England",
   "PREMIER LEAGUE": "England",
   "PD": "Spain",
@@ -151,11 +163,16 @@ export default function TicketBuilderTab() {
   const [leagueScope, setLeagueScope] = useState("MULTI");
   const [singleLeague, setSingleLeague] = useState("PL");
   const TOP_5_LEAGUE_CODES = ["PL", "PD", "SA", "BL1", "FL1"];
+  const INTERNATIONAL_BREAK_CODES = [
+    "INT", "UNL", "WCQ", "AFCON", "CONCACAF", "INT_FRIENDLY",
+    "SD", "MLS", "BRA"
+  ];
   const TOP_MAJOR_EUROPEAN_CODES = [
     "PL", "PD", "SA", "BL1", "FL1", "DED", "PPL", "TUR", "BEL", "AUT",
     "SCO", "SUI", "CRO", "DEN", "GRE", "NOR", "SWE", "POL", "ROU", "CZE", "RUS", "UKR", "SAU",
     "ELC", "SD", "BL2", "IT2", "FL2",
-    "UCL", "UEL", "UECL"
+    "UCL", "UEL", "UECL",
+    "INT", "UNL", "WCQ", "AFCON", "CONCACAF", "INT_FRIENDLY"
   ];
   const ALL_TOP_LEAGUE_CODES = TOP_MAJOR_EUROPEAN_CODES;
 
@@ -1774,6 +1791,18 @@ export default function TicketBuilderTab() {
                 <div className="flex items-center gap-2 flex-wrap">
                   <button
                     type="button"
+                    onClick={() => setSelectedLeagues(INTERNATIONAL_BREAK_CODES)}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-extrabold transition-all flex items-center gap-1.5 ${
+                      INTERNATIONAL_BREAK_CODES.every(l => selectedLeagues.includes(l)) && selectedLeagues.length === INTERNATIONAL_BREAK_CODES.length
+                        ? "bg-emerald-600 text-white shadow-sm shadow-emerald-200"
+                        : "bg-emerald-50 text-emerald-800 hover:bg-emerald-100 border border-emerald-200"
+                    }`}
+                  >
+                    <span>🌍</span>
+                    <span>International Break</span>
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => setSelectedLeagues(TOP_5_LEAGUE_CODES)}
                     className={`px-3 py-1.5 rounded-lg text-xs font-extrabold transition-all ${
                       TOP_5_LEAGUE_CODES.every(l => selectedLeagues.includes(l)) && selectedLeagues.length === TOP_5_LEAGUE_CODES.length
@@ -2241,6 +2270,18 @@ export default function TicketBuilderTab() {
                 <p className="text-[11px] text-slate-400">Strictly filters matches to chosen leagues only.</p>
               </div>
               <div className="flex items-center gap-1.5 flex-wrap">
+                <button
+                  type="button"
+                  onClick={() => setSelectedLeagues(INTERNATIONAL_BREAK_CODES)}
+                  className={`px-2.5 py-1 rounded-lg text-[11px] font-extrabold transition-all flex items-center gap-1 ${
+                    INTERNATIONAL_BREAK_CODES.every(l => selectedLeagues.includes(l)) && selectedLeagues.length === INTERNATIONAL_BREAK_CODES.length
+                      ? "bg-emerald-600 text-white shadow-sm shadow-emerald-200"
+                      : "bg-emerald-50 text-emerald-800 hover:bg-emerald-100 border border-emerald-200"
+                  }`}
+                >
+                  <span>🌍</span>
+                  <span>International Break</span>
+                </button>
                 <button
                   type="button"
                   onClick={() => setSelectedLeagues(TOP_5_LEAGUE_CODES)}

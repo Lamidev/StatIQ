@@ -155,11 +155,49 @@ TEAM_RATINGS: Dict[str, int] = {
     "Willem II": 1540, "Willem II Tilburg": 1540, "NEC Nijmegen": 1670, "N.E.C. Nijmegen": 1670,
     "Bryne FK": 1480, "Bryne": 1480, "Moss FK": 1460, "Moss": 1460,
 
-    # Nordic & South America
+    # Nordic & South America Clubs
     "Malmo": 1680, "Malmö FF": 1680, "Rosenborg": 1640, "Rosenborg BK": 1640, "Lillestroem SK": 1580,
     "Greuther Furth": 1560, "St. Pauli": 1660, "FC St. Pauli": 1660,
     "Flamengo": 1810, "Palmeiras": 1820, "Botafogo": 1770, "River Plate": 1800, "Boca Juniors": 1780,
-    "Argentina": 1990, "France": 1985, "England": 1950, "Brazil": 1940, "Spain": 1960, "Germany": 1920,
+
+    # =========================================================================
+    # International Men's National Teams (Calibrated World Elo Ratings)
+    # =========================================================================
+    # Top Tier & UEFA Elite
+    "Spain": 2080, "Argentina": 2070, "France": 2030, "England": 1980,
+    "Portugal": 1970, "Brazil": 1960, "Netherlands": 1940, "Holland": 1940,
+    "Germany": 1930, "Colombia": 1920, "Italy": 1900, "Uruguay": 1880,
+    "Belgium": 1880, "Croatia": 1875, "Switzerland": 1840, "Morocco": 1830,
+    "Japan": 1820, "Denmark": 1820, "Austria": 1815, "Senegal": 1800,
+    "USA": 1780, "United States": 1780, "Ecuador": 1780, "Iran": 1770,
+    "Mexico": 1770, "Czechia": 1765, "Czech Republic": 1765, "Ukraine": 1760,
+    "Turkey": 1755, "Turkiye": 1755, "South Korea": 1750, "Korea Republic": 1750,
+    "Sweden": 1740, "Poland": 1740, "Canada": 1740, "Scotland": 1745,
+    "Norway": 1740, "Ivory Coast": 1740, "Cote d'Ivoire": 1740, "Serbia": 1735,
+    "Nigeria": 1730, "Algeria": 1730, "Egypt": 1720, "Australia": 1720,
+    "Hungary": 1715, "Wales": 1705, "Slovenia": 1695, "Slovakia": 1685,
+    "Cameroon": 1680, "Peru": 1675, "Chile": 1670, "Greece": 1670,
+    "Romania": 1665, "Georgia": 1660, "Tunisia": 1660, "Mali": 1655,
+    "Venezuela": 1655, "Paraguay": 1650, "Albania": 1650, "South Africa": 1640,
+    "Finland": 1635, "Ireland": 1630, "Republic of Ireland": 1630,
+    "Iceland": 1625, "DR Congo": 1620, "Congo DR": 1620, "Ghana": 1620,
+    "Saudi Arabia": 1620, "Uzbekistan": 1620, "Qatar": 1615, "Bosnia": 1610,
+    "Bosnia and Herzegovina": 1610, "Israel": 1610, "Northern Ireland": 1585,
+    "Burkina Faso": 1600, "Costa Rica": 1600, "Panama": 1595, "Jamaica": 1590,
+    "Cape Verde": 1585, "Guinea": 1580, "Honduras": 1570, "Jordan": 1570,
+    "Iraq": 1570, "North Macedonia": 1565, "Montenegro": 1560, "Bolivia": 1560,
+    "Bulgaria": 1550, "Armenia": 1545, "Angola": 1540, "Bahrain": 1535,
+    "Oman": 1530, "Zambia": 1525, "Gabon": 1520, "Uganda": 1515,
+    "Luxembourg": 1510, "Kazakhstan": 1510, "Benin": 1500, "Kosovo": 1500,
+    "Belarus": 1485, "Azerbaijan": 1480, "Cyprus": 1475, "Kenya": 1460,
+    "Kuwait": 1455, "Mozambique": 1450, "Madagascar": 1450, "Tanzania": 1445,
+    "Estonia": 1425, "Latvia": 1420, "Lithuania": 1410, "Zimbabwe": 1410,
+    "Faroe Islands": 1390, "Moldova": 1390, "Malta": 1280, "Andorra": 1050,
+    "Gibraltar": 820, "Liechtenstein": 830, "San Marino": 720,
+    "Montserrat": 1080, "Saint-Martin": 980, "French Guiana": 1310,
+    "Saint Vincent and the Grenadines": 1180, "Virgin Islands, British": 740,
+    "Virgin Islands, U.S.": 730, "Antigua and Barbuda": 1190, "Anguilla": 680,
+    "Eritrea": 1140, "Namibia": 1430, "Rwanda": 1400, "Burundi": 1380,
 }
 
 def get_team_rating(team_name: str) -> int:
