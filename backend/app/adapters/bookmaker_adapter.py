@@ -1002,12 +1002,12 @@ class SportyBetAdapter(BookmakerAdapter):
                                     pass
                                 break
 
-            if outcome_live_odds is not None and outcome_live_odds < 1.08:
+            if outcome_live_odds is not None and outcome_live_odds < 1.15:
                 # If selection is already a Handicap pick (14 or 16), DO NOT corrupt it into Double Chance!
                 if str(item_payload.get("marketId")) in ("14", "16"):
                     logger.warning(f"[SportyBetAdapter] Handicap pick {home_target} vs {away_target} odds {outcome_live_odds:.2f} are retained as Handicap.")
                 else:
-                    logger.warning(f"[SportyBetAdapter] Outcome {item_payload['marketId']}:{item_payload['outcomeId']} on {home_target} vs {away_target} live odds {outcome_live_odds:.2f} are below 1.08 floor.")
+                    logger.warning(f"[SportyBetAdapter] Outcome {item_payload['marketId']}:{item_payload['outcomeId']} on {home_target} vs {away_target} live odds {outcome_live_odds:.2f} are below 1.15 floor.")
                     repaired = False
                     for em in ev_markets:
                         em_id = str(em.get("id") or em.get("market_id") or "")
@@ -1018,7 +1018,7 @@ class SportyBetAdapter(BookmakerAdapter):
                                     eo_odds = float(eo.get("odds") or eo.get("oddsValue") or 0.0)
                                 except Exception:
                                     eo_odds = 0.0
-                                if eo_odds >= 1.08 and eo_odds <= 1.45:
+                                if eo_odds >= 1.15 and eo_odds <= 1.45:
                                     is_away_intent = "away" in sel_text or "2" in sel_text or (away_target and away_target in sel_text)
                                     if em_id == "10" and ((is_away_intent and eo_id == "11") or (not is_away_intent and eo_id == "9")):
                                         item_payload["marketId"] = "10"
@@ -1034,8 +1034,8 @@ class SportyBetAdapter(BookmakerAdapter):
                                         break
                             if repaired:
                                 break
-                    if not repaired and outcome_live_odds < 1.08:
-                        logger.warning(f"[SportyBetAdapter] Purged sub-1.08 pick ({outcome_live_odds:.2f}) from booking payload.")
+                    if not repaired and outcome_live_odds < 1.15:
+                        logger.warning(f"[SportyBetAdapter] Purged sub-1.15 pick ({outcome_live_odds:.2f}) from booking payload.")
                         continue
 
             # Update selection copy with repaired/verified market details

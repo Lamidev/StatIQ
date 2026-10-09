@@ -1340,6 +1340,55 @@ async def build_ai_ticket(req: BuildTicketRequest):
             c_res = adapter.generate_booking_code(b_t.approved_legs, country_code="ng")
             if c_res.get("status") == "SUCCESS" and c_res.get("booking_code"):
                 final_legs = c_res.get("booked_selections") or b_t.approved_legs
+                if req.target_mode == "GAMES" and len(final_legs) < target_games:
+                    used_ids = {str(l.get("event_id") or l.get("fixture_id")) for l in final_legs}
+                    backfill_legs = list(final_legs)
+                    for candidate_fix in fixture_pool:
+                        if len(backfill_legs) >= target_games:
+                            break
+                        cf_id = str(candidate_fix.get("event_id") or candidate_fix.get("fixture_id") or "")
+                        if cf_id in used_ids:
+                            continue
+                        cands = engine.evaluate_fixture_all_candidates(
+                            fixture=candidate_fix,
+                            per_leg_target_odds=1.35,
+                            min_prob_threshold=0.58,
+                            risk_profile=req.risk_profile or "BALANCED",
+                            allowed_markets=req.allowed_market_categories,
+                            excluded_markets=req.excluded_market_categories,
+                        )
+                        valid_c = [c for c in (cands or []) if c.approved and float(c.estimated_odds or 0) >= 1.15]
+                        if valid_c:
+                            best_p = max(valid_c, key=lambda x: (x.model_probability, float(getattr(x, "tactical_score", 0.0))))
+                            ev_id = str((best_p.raw_match_data or {}).get("event_id") or best_p.fixture_id)
+                            backfill_legs.append({
+                                "fixture_id": best_p.fixture_id,
+                                "event_id": ev_id,
+                                "provider_event_id": ev_id,
+                                "game_id": best_p.fixture_id,
+                                "home_team": best_p.home_team,
+                                "away_team": best_p.away_team,
+                                "competition": best_p.competition,
+                                "country": (best_p.raw_match_data or {}).get("country") or "",
+                                "kickoff_datetime": best_p.kickoff_datetime,
+                                "market_name": best_p.market_name,
+                                "selection_name": best_p.selection_name,
+                                "model_probability": best_p.model_probability,
+                                "estimated_odds": best_p.estimated_odds,
+                                "odds": best_p.estimated_odds,
+                                "confidence_tier": best_p.confidence_tier,
+                                "elo_gap": best_p.elo_gap,
+                                "tier_context": best_p.tier_context,
+                                "market_id": best_p.market_id,
+                                "outcome_id": best_p.outcome_id,
+                                "specifier": best_p.specifier,
+                                "tactical_reason": getattr(best_p, "tactical_reason", ""),
+                            })
+                            used_ids.add(cf_id)
+                    if len(backfill_legs) > len(final_legs):
+                        c_res2 = adapter.generate_booking_code(backfill_legs, country_code="ng")
+                        if c_res2.get("status") == "SUCCESS" and c_res2.get("booking_code"):
+                            return c_res2.get("booking_code"), c_res2.get("load_url"), (c_res2.get("booked_selections") or backfill_legs)
                 return c_res.get("booking_code"), c_res.get("load_url"), final_legs
         except Exception as e:
             logger.warning(f"SportyBet booking code generation error: {e}")
