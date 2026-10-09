@@ -118,7 +118,7 @@ class SportyBetIngestionService:
                 payload["timeline"] = 1
 
             try:
-                resp = client.post(endpoint, json=payload)
+                resp = client.post(endpoint, json=payload, timeout=8.0)
                 if resp.status_code == 200:
                     j = resp.json()
                     if j.get("bizCode") == 10000:
@@ -127,12 +127,13 @@ class SportyBetIngestionService:
                 logger.debug(f"[SportyBetIngestion] Page fetch error (p={page_num}, today={is_today}): {e}")
             return []
 
-        # Concurrently fetch pages 1..8 for Today and pages 1..5 for Tomorrow
-        pages_to_fetch = [(p, True) for p in range(1, 9)] + [(p, False) for p in range(1, 6)]
+        # Deep concurrent pagination: fetch up to 15 pages for Today and 8 pages for Tomorrow
+        pages_today = [(p, True) for p in range(1, 16)]
+        pages_tomorrow = [(p, False) for p in range(1, 9)]
         all_tournaments = []
         try:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=14) as executor:
-                results = list(executor.map(lambda x: _fetch_page(x[0], x[1]), pages_to_fetch))
+            with concurrent.futures.ThreadPoolExecutor(max_workers=12) as executor:
+                results = list(executor.map(lambda x: _fetch_page(x[0], x[1]), pages_today + pages_tomorrow))
                 for items in results:
                     all_tournaments.extend(items)
         finally:
@@ -167,23 +168,21 @@ class SportyBetIngestionService:
 
         return normalized[:limit] if limit else normalized
 
-
-
-
-
     @classmethod
     def _normalize_events(cls, events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
-        Transforms raw SportyBet events into canonical StatIQ fixtures with structured odds.
+        Transforms raw SportyBet events into canonical StatIQ fixtures with comprehensive
+        multi-market coverage (1X2, DC, Over/Under, BTTS, Team Goals, DNB, Handicaps, 1st Half).
         """
         results = []
         now_ms = time.time() * 1000.0
 
         for ev in events:
             # AIR-TIGHT PRE-MATCH FILTER:
-            # 1. Start time must be strictly upcoming in the future (>3 minutes from now)
+            # 1. Start time must be strictly upcoming in the future (>= 10 minutes from now)
+            # SportyBet suspends markets when kickoff is under 10 minutes away
             start_ms = ev.get("estimateStartTime") or ev.get("startTime") or 0
-            if start_ms > 0 and start_ms <= (now_ms + 180000):  # Exclude if in the past or starting within 3 mins
+            if start_ms > 0 and start_ms <= (now_ms + 600000):  # Exclude if starting within 10 mins
                 continue
 
             # 2. SportyBet numerical status (0 = Not started, 1 = Live/In-play, 2 = Finished)
@@ -204,8 +203,8 @@ class SportyBetIngestionService:
 
             event_id = ev.get("eventId")
             game_id = str(ev.get("gameId") or "")
-            home_team = ev.get("homeTeamName") or "Home"
-            away_team = ev.get("awayTeamName") or "Away"
+            home_team = (ev.get("homeTeamName") or "Home").strip()
+            away_team = (ev.get("awayTeamName") or "Away").strip()
             
             kickoff_str = ""
             if start_ms > 0:
@@ -219,9 +218,31 @@ class SportyBetIngestionService:
             country = ev.get("country") or (category_info.get("name") if isinstance(category_info, dict) else "")
             competition = ev.get("competition") or (tournament_info.get("name") if isinstance(tournament_info, dict) else (ev.get("tournamentName") or "Football"))
 
-            # Extract structured markets and odds
+            # Extract structured markets and odds: STRICTLY ACTIVE ONLY (status == 0, isActive == 1)
             markets_dict = {}
-            raw_markets = ev.get("markets", [])
+            raw_markets_input = ev.get("markets", [])
+            raw_markets = []
+            for m_item in raw_markets_input:
+                if not isinstance(m_item, dict):
+                    continue
+                # Market must be status == 0 (Active/Bettable)
+                m_st = m_item.get("status")
+                if m_st is not None and str(m_st) != "0":
+                    continue
+                m_copy = dict(m_item)
+                out_list = m_copy.get("outcomes", [])
+                if isinstance(out_list, dict):
+                    out_list = list(out_list.values())
+                # Outcomes must be active (isActive == 1 and status == 0)
+                active_outs = [
+                    o for o in out_list
+                    if isinstance(o, dict)
+                    and (o.get("isActive") in (1, "1", True, None))
+                    and (o.get("status") in (0, "0", None))
+                ]
+                if active_outs:
+                    m_copy["outcomes"] = active_outs
+                    raw_markets.append(m_copy)
 
             for m in raw_markets:
                 m_id = str(m.get("id"))
@@ -278,10 +299,21 @@ class SportyBetIngestionService:
                     elif desc in ("AWAY", "2"):
                         odds_away = ov
 
-            # Extract structured double_chance and ou_lines for immediate use by pick engine
+            # Extract structured multi-market components for pick engine:
             dc_map = {}
             ou_list = []
+            btts_map = {}
+            home_goals_list = []
+            away_goals_list = []
+            dnb_map = {}
+            handicaps_list = []
+            half_1x2_map = {}
+            half_ou_list = []
+
             import re
+
+            h_lower_clean = home_team.lower()
+            a_lower_clean = away_team.lower()
 
             for m in raw_markets:
                 m_id = str(m.get("id") or "")
@@ -291,24 +323,80 @@ class SportyBetIngestionService:
                 if isinstance(outcomes, dict):
                     outcomes = list(outcomes.values())
 
-                # Double Chance (Market 10)
-                if m_id == "10" or ("double chance" in m_desc and not any(k in m_desc for k in ["&", "over", "under", "gg", "corner"])):
+                # 1. Double Chance (Market 10)
+                if m_id == "10" or ("double chance" in m_desc and not any(k in m_desc for k in ["&", "over", "under", "gg", "corner", "half"])):
                     for o in outcomes:
                         o_id = str(o.get("id") or o.get("outcome_id") or "")
                         o_desc = str(o.get("desc") or o.get("name") or "").upper()
                         try:
                             ov = float(o.get("odds") or o.get("oddsValue") or 0.0)
                             if ov >= 1.02:
-                                if o_id == "9" or "1X" in o_desc: dc_map["1X"] = ov
-                                elif o_id == "11" or "X2" in o_desc: dc_map["X2"] = ov
-                                elif o_id == "10" or "12" in o_desc: dc_map["12"] = ov
+                                if o_id == "9" or "1X" in o_desc:
+                                    dc_map["1X"] = ov
+                                    dc_map["1X_id"] = o_id
+                                elif o_id == "11" or "X2" in o_desc:
+                                    dc_map["X2"] = ov
+                                    dc_map["X2_id"] = o_id
+                                elif o_id == "10" or "12" in o_desc:
+                                    dc_map["12"] = ov
+                                    dc_map["12_id"] = o_id
                         except Exception:
                             pass
 
-                # Over/Under Goals (Market 18)
-                if m_id == "18" or ("over/under" in m_desc and not any(k in m_desc for k in ["&", "1x2", "dc", "corner", "booking"])):
+                # 2. Over/Under Goals (Market 18)
+                if m_id == "18" or ("over/under" in m_desc and not any(k in m_desc for k in ["&", "1x2", "dc", "corner", "booking", "half", "team"])):
                     line_m = re.search(r"total=(\d+\.?\d*)", spec) or re.search(r"(\d+\.?\d*)", m_desc)
                     line_str = line_m.group(1) if line_m else "1.5"
+                    o_val, u_val = None, None
+                    o_id_val, u_id_val = None, None
+                    for o in outcomes:
+                        o_desc = str(o.get("desc") or o.get("name") or "").lower()
+                        o_id = str(o.get("id") or o.get("outcome_id") or "")
+                        try:
+                            ov = float(o.get("odds") or o.get("oddsValue") or 0.0)
+                            if ov >= 1.02:
+                                if "over" in o_desc or o_id == "12":
+                                    o_val = ov
+                                    o_id_val = o_id
+                                elif "under" in o_desc or o_id == "13":
+                                    u_val = ov
+                                    u_id_val = o_id
+                        except Exception:
+                            pass
+                    if o_val or u_val:
+                        ou_list.append({
+                            "line": line_str,
+                            "over": o_val,
+                            "under": u_val,
+                            "over_id": o_id_val or "12",
+                            "under_id": u_id_val or "13",
+                            "market_id": m_id or "18",
+                            "specifier": f"total={line_str}"
+                        })
+
+                # 3. GG/NG / Both Teams to Score (Market 29)
+                if m_id == "29" or ("gg/ng" in m_desc or "both teams to score" in m_desc):
+                    for o in outcomes:
+                        o_desc = str(o.get("desc") or o.get("name") or "").lower()
+                        o_id = str(o.get("id") or o.get("outcome_id") or "")
+                        try:
+                            ov = float(o.get("odds") or o.get("oddsValue") or 0.0)
+                            if ov >= 1.02:
+                                if "yes" in o_desc or o_id == "74":
+                                    btts_map["yes"] = ov
+                                    btts_map["yes_id"] = o_id
+                                elif "no" in o_desc or o_id == "76":
+                                    btts_map["no"] = ov
+                                    btts_map["no_id"] = o_id
+                        except Exception:
+                            pass
+                    if btts_map:
+                        btts_map["market_id"] = m_id or "29"
+
+                # 4. Home Team Total Goals (Market 19)
+                if m_id == "19" or ("over/under" in m_desc and (h_lower_clean in m_desc or "home" in m_desc)):
+                    line_m = re.search(r"total=(\d+\.?\d*)", spec) or re.search(r"(\d+\.?\d*)", m_desc)
+                    line_str = line_m.group(1) if line_m else "0.5"
                     o_val, u_val = None, None
                     for o in outcomes:
                         o_desc = str(o.get("desc") or o.get("name") or "").lower()
@@ -321,7 +409,79 @@ class SportyBetIngestionService:
                         except Exception:
                             pass
                     if o_val or u_val:
-                        ou_list.append({"line": line_str, "over": o_val, "under": u_val})
+                        home_goals_list.append({"line": line_str, "over": o_val, "under": u_val, "market_id": m_id or "19", "specifier": f"total={line_str}"})
+
+                # 5. Away Team Total Goals (Market 20)
+                if m_id == "20" or ("over/under" in m_desc and (a_lower_clean in m_desc or "away" in m_desc)):
+                    line_m = re.search(r"total=(\d+\.?\d*)", spec) or re.search(r"(\d+\.?\d*)", m_desc)
+                    line_str = line_m.group(1) if line_m else "0.5"
+                    o_val, u_val = None, None
+                    for o in outcomes:
+                        o_desc = str(o.get("desc") or o.get("name") or "").lower()
+                        o_id = str(o.get("id") or o.get("outcome_id") or "")
+                        try:
+                            ov = float(o.get("odds") or o.get("oddsValue") or 0.0)
+                            if ov >= 1.02:
+                                if "over" in o_desc or o_id == "12": o_val = ov
+                                elif "under" in o_desc or o_id == "13": u_val = ov
+                        except Exception:
+                            pass
+                    if o_val or u_val:
+                        away_goals_list.append({"line": line_str, "over": o_val, "under": u_val, "market_id": m_id or "20", "specifier": f"total={line_str}"})
+
+                # 6. Handicaps (Market 14)
+                if m_id == "14" or "handicap" in m_desc:
+                    hcp_m = re.search(r"hcp=(\d+:\d+)", spec) or re.search(r"(\d+:\d+)", m_desc)
+                    if hcp_m:
+                        h_line = hcp_m.group(1)
+                        h_o, d_o, a_o = None, None, None
+                        for o in outcomes:
+                            o_desc = str(o.get("desc") or o.get("name") or "").lower()
+                            o_id = str(o.get("id") or o.get("outcome_id") or "")
+                            try:
+                                ov = float(o.get("odds") or o.get("oddsValue") or 0.0)
+                                if ov >= 1.02:
+                                    if "home" in o_desc or o_id == "1711": h_o = ov
+                                    elif "draw" in o_desc or o_id == "1712": d_o = ov
+                                    elif "away" in o_desc or o_id == "1713": a_o = ov
+                            except Exception:
+                                pass
+                        if h_o or a_o:
+                            handicaps_list.append({"line": h_line, "specifier": f"hcp={h_line}", "home": h_o, "draw": d_o, "away": a_o, "market_id": m_id or "14"})
+
+                # 7. 1st Half 1X2 (Market 60)
+                if m_id == "60" or "1st half - 1x2" in m_desc:
+                    for o in outcomes:
+                        o_desc = str(o.get("desc") or o.get("name") or "").lower()
+                        o_id = str(o.get("id") or o.get("outcome_id") or "")
+                        try:
+                            ov = float(o.get("odds") or 0.0)
+                            if ov >= 1.02:
+                                if "home" in o_desc or o_id == "1": half_1x2_map["home"] = ov
+                                elif "draw" in o_desc or o_id == "2": half_1x2_map["draw"] = ov
+                                elif "away" in o_desc or o_id == "3": half_1x2_map["away"] = ov
+                        except Exception:
+                            pass
+                    if half_1x2_map:
+                        half_1x2_map["market_id"] = m_id or "60"
+
+                # 8. 1st Half Over/Under (Market 68)
+                if m_id == "68" or ("1st half" in m_desc and "over/under" in m_desc):
+                    line_m = re.search(r"total=(\d+\.?\d*)", spec) or re.search(r"(\d+\.?\d*)", m_desc)
+                    line_str = line_m.group(1) if line_m else "0.5"
+                    o_val, u_val = None, None
+                    for o in outcomes:
+                        o_desc = str(o.get("desc") or o.get("name") or "").lower()
+                        o_id = str(o.get("id") or o.get("outcome_id") or "")
+                        try:
+                            ov = float(o.get("odds") or 0.0)
+                            if ov >= 1.02:
+                                if "over" in o_desc or o_id == "12": o_val = ov
+                                elif "under" in o_desc or o_id == "13": u_val = ov
+                        except Exception:
+                            pass
+                    if o_val or u_val:
+                        half_ou_list.append({"line": line_str, "over": o_val, "under": u_val, "market_id": m_id or "68", "specifier": f"total={line_str}"})
 
             # Accurate overround margin conversion if specific submarket not expanded in list
             if "1X" not in dc_map and odds_home > 1.0 and odds_draw > 1.0:
@@ -347,6 +507,12 @@ class SportyBetIngestionService:
                 "markets": markets_dict,
                 "double_chance": dc_map,
                 "ou_lines": ou_list,
+                "btts": btts_map,
+                "home_team_goals": home_goals_list,
+                "away_team_goals": away_goals_list,
+                "handicaps": handicaps_list,
+                "half_1x2": half_1x2_map,
+                "half_ou": half_ou_list,
                 "provider": "SPORTYBET"
             })
 

@@ -5,11 +5,14 @@ Uses MatchIQPickEngine 5-Gate Pipeline to evaluate live/historical fixture pools
 and build high-confidence accumulator tickets or multi-day rollover strategies.
 """
 
+import re
 import httpx
 import asyncio
 import logging
 import datetime
-from typing import List, Dict, Any, Optional
+import time
+from typing import List, Dict, Any, Optional, Tuple
+from difflib import SequenceMatcher
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
@@ -112,27 +115,25 @@ def _extract_live_market_data(ev: Dict[str, Any]) -> tuple:
         if isinstance(outcomes, dict):
             outcomes = list(outcomes.values())
             
-        # Double Chance
+        # Double Chance (Market 10)
         if m_id == "10" or ("double chance" in m_desc and not any(k in m_desc for k in ["&", "over", "under"])):
             for o in outcomes:
                 o_id = str(o.get("outcome_id") or o.get("id") or "")
                 o_desc = str(o.get("selection_name") or o.get("desc") or "").upper()
                 try:
                     ov = float(o.get("odds") or o.get("oddsValue") or 0.0)
-                    if ov >= 1.02:
+                    if ov >= 1.00:
                         if o_id == "9" or "1X" in o_desc: dc_map["1X"] = ov
                         elif o_id == "11" or "X2" in o_desc: dc_map["X2"] = ov
                         elif o_id == "10" or "12" in o_desc: dc_map["12"] = ov
                 except Exception:
                     pass
                     
-        # Over/Under Goals: Strictly extract genuine FULL-MATCH Over/Under lines (Never 1st/2nd half, corners, cards, or early goals)
-        is_ft_ou = (
-            m_id == "18" or 
-            m_desc in ["over/under", "total goals", "goals over/under", "over/under goals", "match goals"]
-        ) and not any(k in m_desc for k in [
-            "1st half", "2nd half", "half", "corner", "card", "early", "booking", "team", "first", "second", "1h", "2h"
-        ])
+        # Over/Under Goals: Strictly extract genuine FULL-MATCH Over/Under lines (Market 18 ONLY)
+        is_ft_ou = (m_id == "18") or (
+            m_desc in ["over/under", "total goals", "goals over/under", "over/under goals", "match goals"] and
+            not any(k in m_desc for k in ["1st half", "2nd half", "half", "corner", "card", "early", "booking", "team", "first", "second", "1h", "2h", "home", "away"])
+        )
 
         if is_ft_ou:
             line_m = re.search(r"total=(\d+\.?\d*)", spec) or re.search(r"(\d+\.?\d*)", m_desc)
@@ -144,7 +145,7 @@ def _extract_live_market_data(ev: Dict[str, Any]) -> tuple:
                 o_id = str(o.get("outcome_id") or o.get("id") or "")
                 try:
                     ov = float(o.get("odds") or o.get("oddsValue") or 0.0)
-                    if ov >= 1.02:
+                    if ov >= 1.00:
                         if "over" in o_desc or o_id == "12": o_val = ov
                         elif "under" in o_desc or o_id == "13": u_val = ov
                 except Exception:
@@ -152,13 +153,14 @@ def _extract_live_market_data(ev: Dict[str, Any]) -> tuple:
             if o_val or u_val:
                 ou_list.append({"line": line_str, "over": o_val, "under": u_val, "is_real": True})
                 
-    # Double Chance conversion from 1X2 if not explicitly listed in summary feed
-    if "1X" not in dc_map and o_h > 1.0 and o_d > 1.0:
-        dc_map["1X"] = round(1.0 / max(0.01, (1.0 / o_h + 1.0 / o_d) * 1.08), 2)
-    if "X2" not in dc_map and o_a > 1.0 and o_d > 1.0:
-        dc_map["X2"] = round(1.0 / max(0.01, (1.0 / o_a + 1.0 / o_d) * 1.08), 2)
-    if "12" not in dc_map and o_h > 1.0 and o_a > 1.0:
-        dc_map["12"] = round(1.0 / max(0.01, (1.0 / o_h + 1.0 / o_a) * 1.08), 2)
+    # Double Chance conversion from 1X2 ONLY for legacy mock feeds if raw_mkts is completely absent
+    if not raw_mkts:
+        if "1X" not in dc_map and o_h > 1.0 and o_d > 1.0:
+            dc_map["1X"] = round(1.0 / max(0.01, (1.0 / o_h + 1.0 / o_d) * 1.08), 2)
+        if "X2" not in dc_map and o_a > 1.0 and o_d > 1.0:
+            dc_map["X2"] = round(1.0 / max(0.01, (1.0 / o_a + 1.0 / o_d) * 1.08), 2)
+        if "12" not in dc_map and o_h > 1.0 and o_a > 1.0:
+            dc_map["12"] = round(1.0 / max(0.01, (1.0 / o_h + 1.0 / o_a) * 1.08), 2)
 
     # STRICT: Never fabricate synthetic Over/Under lines (1.5, 2.5, 3.5, 4.5).
     # Only lines verified and published by the bookmaker are permitted.
@@ -796,11 +798,192 @@ async def build_ai_ticket(req: BuildTicketRequest):
 
     fixture_pool = []
 
+    selected_lgs = req.selected_leagues or []
+    is_today_live_requested = any(x.upper() in ["ALL_TODAY", "ALL_SPORTYBET", "SPORTYBET_TODAY", "ALL_WORLDWIDE", "ALL_MATCHES"] for x in selected_lgs) or (req.date_window == "TODAY")
+
     if req.custom_fixtures and len(req.custom_fixtures) > 0:
         fixture_pool = [_normalize_fixture_item(f, req.single_league or "PL") for f in req.custom_fixtures]
     else:
-        # 1. Fetch live upcoming fixtures directly from SportyBet API
-        raw_sporty_fixtures = SportyBetIngestionService.fetch_upcoming_fixtures(limit=0)
+        raw_sporty_fixtures = []
+
+        # 1. Fetch directly from SportyBet's LIVE Today endpoint if requested
+        if is_today_live_requested:
+            from app.services.elite_rollover_engine import EliteRolloverEngine
+            try:
+                live_events = await EliteRolloverEngine.fetch_sportybet_today_events(max_pages=15)
+                if live_events:
+                    raw_sporty_fixtures = SportyBetIngestionService._normalize_events(live_events)
+                    logger.info(f"[TicketBuilder] Live feed loaded {len(raw_sporty_fixtures)} bettable fixtures directly from SportyBet Today API.")
+            except Exception as e:
+                logger.warning(f"[TicketBuilder] Live SportyBet Today fetch failed, falling back to mirror DB: {e}")
+                raw_sporty_fixtures = []
+
+        # 2. Fallback to local SportyBet Mirror DB or ingestion service
+        if not raw_sporty_fixtures:
+            from sqlalchemy.orm import selectinload, joinedload
+            from app.db.session import SessionLocal
+            from app.db.models import SportyBetEvent, SportyBetMarket
+            db_sess = SessionLocal()
+            try:
+                db_events = (
+                    db_sess.query(SportyBetEvent)
+                    .options(
+                        joinedload(SportyBetEvent.competition_rel),
+                        selectinload(SportyBetEvent.markets).selectinload(SportyBetMarket.outcomes)
+                    )
+                    .filter(SportyBetEvent.status == "SCHEDULED")
+                    .all()
+                )
+                if db_events and len(db_events) > 0:
+                    now_ms = time.time() * 1000.0
+                    for ev in db_events:
+                        # 10-minute pre-match cutoff on mirror events (SportyBet suspends markets under 10m)
+                        if ev.start_time_ms and ev.start_time_ms <= (now_ms + 600000):
+                            continue
+
+                        comp_name = ev.competition_rel.name if ev.competition_rel else "Football"
+                        country_name = ev.competition_rel.country if ev.competition_rel else None
+
+                        # Extract 1X2 odds
+                        o_h, o_d, o_a = 2.50, 3.00, 2.50
+                        m1 = next((m for m in ev.markets if str(m.sporty_market_id) == "1" and (m.status is None or str(m.status) == "0")), None)
+                        if m1:
+                            for oc in m1.outcomes:
+                                if oc.status is not None and str(oc.status) != "0": continue
+                                sel_u = oc.selection.upper()
+                                if sel_u in ["1", "HOME", ev.home_team.upper()]: o_h = oc.odds
+                                elif sel_u in ["X", "DRAW"]: o_d = oc.odds
+                                elif sel_u in ["2", "AWAY", ev.away_team.upper()]: o_a = oc.odds
+
+                        # Extract Markets
+                        dc_map = {}
+                        ou_list = []
+                        btts_dict = {}
+                        home_goals_list = []
+                        away_goals_list = []
+
+                        for m in ev.markets:
+                            # Strict: skip non-active/suspended markets
+                            if m.status is not None and str(m.status) != "0":
+                                continue
+                            m_id = str(m.sporty_market_id or "")
+                            m_desc = (m.market_name or "").lower()
+                            spec = str(m.specifier or "")
+
+                            # Double Chance (Market 10)
+                            if m_id == "10" or "double chance" in m_desc:
+                                for oc in m.outcomes:
+                                    if oc.status is not None and str(oc.status) != "0": continue
+                                    o_desc = (oc.selection or "").upper()
+                                    o_id = str(oc.sporty_outcome_id or "")
+                                    ov = float(oc.odds or 0.0)
+                                    if ov >= 1.15:
+                                        if o_id == "9" or "1X" in o_desc: dc_map["1X"] = ov
+                                        elif o_id == "11" or "X2" in o_desc: dc_map["X2"] = ov
+                                        elif o_id == "10" or "12" in o_desc: dc_map["12"] = ov
+
+                            # Over/Under (Market 18 ONLY)
+                            elif m_id == "18" or (
+                                m_desc in ["over/under", "total goals", "goals over/under", "over/under goals", "match goals"] and
+                                not any(k in m_desc for k in ["1st half", "2nd half", "half", "corner", "card", "early", "booking", "team", "first", "second", "1h", "2h", "home", "away"])
+                            ):
+                                line_m = re.search(r"total=(\d+\.?\d*)", spec) or re.search(r"(\d+\.?\d*)", m_desc)
+                                line_str = line_m.group(1) if line_m else "1.5"
+                                o_val, u_val = None, None
+                                for oc in m.outcomes:
+                                    if oc.status is not None and str(oc.status) != "0": continue
+                                    o_desc = (oc.selection or "").lower()
+                                    o_id = str(oc.sporty_outcome_id or "")
+                                    ov = float(oc.odds or 0.0)
+                                    if ov >= 1.15:
+                                        if "over" in o_desc or o_id == "12": o_val = ov
+                                        elif "under" in o_desc or o_id == "13": u_val = ov
+                                if o_val or u_val:
+                                    ou_list.append({"line": line_str, "over": o_val, "under": u_val, "specifier": f"total={line_str}"})
+
+                            # BTTS (Market 29)
+                            elif m_id == "29" or "both teams to score" in m_desc:
+                                for oc in m.outcomes:
+                                    if oc.status is not None and str(oc.status) != "0": continue
+                                    sel_u = (oc.selection or "").upper()
+                                    ov = float(oc.odds or 0.0)
+                                    if ov >= 1.15:
+                                        if sel_u in ["YES", "GG"]: btts_dict["yes"] = oc.odds; btts_dict["yes_id"] = oc.sporty_outcome_id
+                                        elif sel_u in ["NO", "NG"]: btts_dict["no"] = oc.odds; btts_dict["no_id"] = oc.sport_outcome_id
+                                if btts_dict: btts_dict["market_id"] = "29"
+
+                            # Home Team Goals (Market 19)
+                            elif m_id == "19" or ("home" in m_desc and "over/under" in m_desc):
+                                line_m = re.search(r"total=(\d+\.?\d*)", spec) or re.search(r"(\d+\.?\d*)", m_desc)
+                                line_str = line_m.group(1) if line_m else "1.5"
+                                o_val, u_val = None, None
+                                for oc in m.outcomes:
+                                    if oc.status is not None and str(oc.status) != "0": continue
+                                    o_desc = (oc.selection or "").lower()
+                                    o_id = str(oc.sporty_outcome_id or "")
+                                    ov = float(oc.odds or 0.0)
+                                    if ov >= 1.15:
+                                        if "over" in o_desc or o_id == "12": o_val = ov
+                                        elif "under" in o_desc or o_id == "13": u_val = ov
+                                if o_val or u_val:
+                                    home_goals_list.append({"line": line_str, "over": o_val, "under": u_val, "market_id": "19", "specifier": f"total={line_str}"})
+
+                            # Away Team Goals (Market 20)
+                            elif m_id == "20" or ("away" in m_desc and "over/under" in m_desc):
+                                line_m = re.search(r"total=(\d+\.?\d*)", spec) or re.search(r"(\d+\.?\d*)", m_desc)
+                                line_str = line_m.group(1) if line_m else "1.5"
+                                o_val, u_val = None, None
+                                for oc in m.outcomes:
+                                    if oc.status is not None and str(oc.status) != "0": continue
+                                    o_desc = (oc.selection or "").lower()
+                                    o_id = str(oc.sporty_outcome_id or "")
+                                    ov = float(oc.odds or 0.0)
+                                    if ov >= 1.15:
+                                        if "over" in o_desc or o_id == "12": o_val = ov
+                                        elif "under" in o_desc or o_id == "13": u_val = ov
+                                if o_val or u_val:
+                                    away_goals_list.append({"line": line_str, "over": o_val, "under": u_val, "market_id": "20", "specifier": f"total={line_str}"})
+
+                        raw_sporty_fixtures.append({
+                            "id": f"fx_{ev.sporty_game_id}" if ev.sporty_game_id else f"fx_{ev.sporty_event_id.replace(':', '_')}",
+                            "event_id": ev.sporty_event_id,
+                            "game_id": ev.sporty_game_id,
+                            "home_team": ev.home_team,
+                            "away_team": ev.away_team,
+                            "country": country_name,
+                            "competition": comp_name,
+                            "kickoff_time": ev.start_time.strftime("%Y-%m-%d %H:%M:%S"),
+                            "start_time_ms": ev.start_time_ms,
+                            "status": ev.status,
+                            "match_status": ev.status,
+                            "odds_home": o_h,
+                            "odds_draw": o_d,
+                            "odds_away": o_a,
+                            "double_chance": dc_map,
+                            "ou_lines": ou_list,
+                            "home_team_goals": home_goals_list,
+                            "away_team_goals": away_goals_list,
+                            "btts": btts_dict,
+                            "markets": [
+                                {
+                                    "market_id": m.sporty_market_id,
+                                    "market_name": m.market_name,
+                                    "market_type": m.market_type,
+                                    "specifier": m.specifier,
+                                    "outcomes": [
+                                        {"outcome_id": oc.sporty_outcome_id, "selection_name": oc.selection, "odds": oc.odds, "probability": oc.probability}
+                                        for oc in m.outcomes if (oc.status is None or str(oc.status) == "0") and float(oc.odds or 0) >= 1.15
+                                    ]
+                                }
+                                for m in ev.markets if (m.status is None or str(m.status) == "0")
+                            ],
+                            "provider": "SPORTYBET"
+                        })
+                else:
+                    raw_sporty_fixtures = SportyBetIngestionService.fetch_upcoming_fixtures(limit=0)
+            finally:
+                db_sess.close()
+
         now_utc = datetime.datetime.now(datetime.timezone.utc)
         today_date = now_utc.date()
 
@@ -813,14 +996,14 @@ async def build_ai_ticket(req: BuildTicketRequest):
             match_dt = datetime.datetime.fromtimestamp(start_ms / 1000.0, tz=datetime.timezone.utc) if start_ms > 0 else now_utc
 
             # 0. STRICT UNSTARTED PRE-MATCH FILTER:
-            # Must NOT have already started, be live, or kick off within 3 minutes
+            # Must NOT have already started, be live, or kick off within 10 minutes
             status_str = str(ev.get("status") or ev.get("match_status") or ev.get("match_status_code") or "").upper()
             if status_str in ["LIVE", "STARTED", "1H", "2H", "HT", "FINISHED", "ENDED", "CANCELLED", "POSTPONED", "ABANDONED", "CLOSED", "CONCLUDED"]:
                 continue
 
             if start_ms > 0:
                 diff_sec = (match_dt - now_utc).total_seconds()
-                if diff_sec < 300:  # If kickoff was in the past or within next 5 minutes, skip!
+                if diff_sec < 600:  # If kickoff was in the past or within next 10 minutes, skip!
                     continue
 
             # 1. Strict Date Window Filter
@@ -910,29 +1093,28 @@ async def build_ai_ticket(req: BuildTicketRequest):
                 if not match_league:
                     continue
             else:
-                # Mode B: All Major European & Premier Leagues (~20 top flight leagues + UEFA + Senior International)
-                if not selected_lgs or any(x.upper().replace(" ", "_") in ["ALL", "ALL_TOP_LEAGUES", "TOP_LEAGUES", "EUROPEAN_LEAGUES"] for x in selected_lgs) or len(selected_lgs) >= 15:
-                    target_league_codes = TOP_MAJOR_EUROPEAN_LEAGUES
+                # Mode B: If specific individual leagues are selected (e.g. ['PL']), filter by them.
+                # If 'ALL', 'ALL_TOP_LEAGUES', 'TOP_LEAGUES', or empty, accept all valid senior competitive matches!
+                if not selected_lgs or any(x.upper().replace(" ", "_") in ["ALL", "ALL_TOP_LEAGUES", "TOP_LEAGUES", "EUROPEAN_LEAGUES", "ALL_WORLDWIDE", "ALL_TODAY"] for x in selected_lgs):
+                    pass  # Accept full competitive match catalogue
                 else:
                     target_league_codes = selected_lgs
-
-                match_league = False
-                for sel_lg in target_league_codes:
-                    if _is_league_match(comp_name, country_name, sel_lg, home_team=h, away_team=a):
-                        match_league = True
-                        break
-
-                if not match_league:
-                    continue
-
+                    match_league = False
+                    for sel_lg in target_league_codes:
+                        if _is_league_match(comp_name, country_name, sel_lg, home_team=h, away_team=a):
+                            match_league = True
+                            break
+                    if not match_league:
+                        continue
 
             r1x2_ev = {
                 "home": ev.get("odds_home", 2.0),
                 "draw": ev.get("odds_draw", 3.2),
                 "away": ev.get("odds_away", 3.0)
             }
-
             dc_data, ou_data = _extract_live_market_data(ev)
+            dc_use = ev.get("double_chance") or dc_data
+            ou_use = ev.get("ou_lines") or ou_data
 
             fixture_pool.append({
                 "fixture_id": ev.get("event_id"),
@@ -949,8 +1131,14 @@ async def build_ai_ticket(req: BuildTicketRequest):
                 "start_time_ms": start_ms,
                 "markets": ev.get("markets", {}),
                 "result_1x2": r1x2_ev,
-                "ou_lines": ou_data,
-                "double_chance": dc_data,
+                "ou_lines": ou_use,
+                "double_chance": dc_use,
+                "btts": ev.get("btts", {}),
+                "home_team_goals": ev.get("home_team_goals", []),
+                "away_team_goals": ev.get("away_team_goals", []),
+                "handicaps": ev.get("handicaps", []),
+                "half_1x2": ev.get("half_1x2", {}),
+                "half_ou": ev.get("half_ou", []),
             })
 
     # If no fixtures match the user's specific filter, return clear feedback rather than giving arbitrary games
@@ -979,22 +1167,6 @@ async def build_ai_ticket(req: BuildTicketRequest):
         }
 
 
-
-    # -----------------------------------------------------------------------
-    # H2H BATCH FETCH: Enrich all fixtures with Head-to-Head stats in parallel
-    # Runs concurrently against SportyBet's H2H endpoint (max 1.5s timeout per fixture)
-    # Attaches h2h_data to each fixture so pick_engine can apply H2H gates
-    # -----------------------------------------------------------------------
-    if fixture_pool and req.use_live_odds:
-        try:
-            h2h_map = SportyBetIngestionService.fetch_h2h_batch(fixture_pool)
-            for fix in fixture_pool:
-                ev_id = str(fix.get("event_id") or fix.get("fixture_id") or "")
-                if ev_id and ev_id in h2h_map:
-                    fix["h2h_data"] = h2h_map[ev_id]
-            logger.info(f"[H2H] Enriched {len(h2h_map)} / {len(fixture_pool)} fixtures with H2H data")
-        except Exception as h2h_err:
-            logger.warning(f"[H2H Batch] Non-fatal H2H fetch error: {h2h_err}")
 
     # Determine pick limit
     target_games = req.target_games or 5
@@ -1053,6 +1225,15 @@ async def build_ai_ticket(req: BuildTicketRequest):
 
             # Strict Global 1.15 Odds Floor: Reject all unviable micro-odds
             if odds < 1.15:
+                logger.warning(f"[OddsVerify] REJECTED micro-odd: {leg.get('home_team')} vs {leg.get('away_team')} | {selection} @{odds:.2f} < 1.15")
+                continue
+
+            # Strict Guardrail: Reject volatile Over 2.5+ or Under <= 2.5 goals
+            if "over" in selection and any(x in selection for x in ["over 2.5", "over 3.5", "over 4.5", "over 5.5"]):
+                logger.warning(f"[OddsVerify] REJECTED volatile high over: {leg.get('home_team')} vs {leg.get('away_team')} | {selection}")
+                continue
+            if "under" in selection and any(x in selection for x in ["under 0.5", "under 1.5", "under 2.5"]):
+                logger.warning(f"[OddsVerify] REJECTED volatile low under: {leg.get('home_team')} vs {leg.get('away_team')} | {selection}")
                 continue
 
             is_dc = "double chance" in market
@@ -1082,19 +1263,6 @@ async def build_ai_ticket(req: BuildTicketRequest):
             pre_count = len(b_ticket.approved_legs)
             verified_legs = _verify_odds_pre_booking(b_ticket.approved_legs, fixture_pool)
             
-            # If verification trimmed any legs and we are in GAMES mode, preserve the original approved legs
-            # if verified_legs count fell below requested target_games
-            if req.target_mode == "GAMES" and len(verified_legs) < target_games and len(b_ticket.approved_legs) >= target_games:
-                # Keep verified legs and backfill with remaining approved legs from the engine
-                seen_f = {str(x.get("fixture_id") or f"{x.get('home_team')}_{x.get('away_team')}") for x in verified_legs}
-                for orig_l in b_ticket.approved_legs:
-                    f_k = str(orig_l.get("fixture_id") or f"{orig_l.get('home_team')}_{orig_l.get('away_team')}")
-                    if f_k not in seen_f and float(orig_l.get("odds") or orig_l.get("estimated_odds") or 1.0) >= 1.15:
-                        verified_legs.append(orig_l)
-                        seen_f.add(f_k)
-                        if len(verified_legs) >= target_games:
-                            break
-            
             b_ticket.approved_legs = verified_legs
             acc = 1.0
             for leg in b_ticket.approved_legs:
@@ -1117,34 +1285,51 @@ async def build_ai_ticket(req: BuildTicketRequest):
                 acc *= float(leg.get("odds", 1.5))
             b_ticket.accumulated_odds = round(acc, 2)
 
-        booking_code = None
-        share_url = None
-        if b_ticket.approved_legs:
-            try:
-                code_res = adapter.generate_booking_code(b_ticket.approved_legs, country_code="ng")
-                if code_res.get("status") == "SUCCESS" and code_res.get("booking_code"):
-                    booking_code = code_res.get("booking_code")
-                    share_url = code_res.get("load_url")
-            except Exception as e:
-                logger.warning(f"SportyBet booking code generation error for ticket #{idx+1}: {e}")
+    # Parallel Verified Booking Code Generation across all portfolio tickets
+    import concurrent.futures
+
+    def _gen_code_for_ticket(b_t):
+        if not b_t.approved_legs:
+            return None, None, b_t.approved_legs
+        try:
+            c_res = adapter.generate_booking_code(b_t.approved_legs, country_code="ng")
+            if c_res.get("status") == "SUCCESS" and c_res.get("booking_code"):
+                final_legs = c_res.get("booked_selections") or b_t.approved_legs
+                return c_res.get("booking_code"), c_res.get("load_url"), final_legs
+        except Exception as e:
+            logger.warning(f"SportyBet booking code generation error: {e}")
+        return None, None, b_t.approved_legs
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(4, len(portfolio_built))) as tpool:
+        booking_results = list(tpool.map(_gen_code_for_ticket, portfolio_built))
+
+    for idx, b_ticket in enumerate(portfolio_built):
+        booking_code, share_url, final_legs = booking_results[idx] if idx < len(booking_results) else (None, None, b_ticket.approved_legs)
+        b_ticket.approved_legs = final_legs
+        acc = 1.0
+        for leg in final_legs:
+            acc *= float(leg.get("odds") or leg.get("estimated_odds") or 1.25)
+        b_ticket.accumulated_odds = round(acc, 2)
 
         notice = None
-        if req.target_mode == "GAMES" and len(b_ticket.approved_legs) < target_games:
-            notice = f"Found all {len(b_ticket.approved_legs)} top-flight matches currently playing for {req.date_window}."
+        if req.target_mode == "GAMES" and len(final_legs) < target_games:
+            notice = f"Found all {len(final_legs)} top-flight matches currently playing for {req.date_window}."
 
         t_dict = {
             "ticket_index": idx + 1,
+            "title": f"Ticket {idx+1} ({len(final_legs)} Legs)" if num_t > 1 else f"Accumulator ({len(final_legs)} Legs)",
             "mode": b_ticket.mode,
             "target_mode": req.target_mode,
             "target_odds": req.target_odds,
-            "target_games": target_games,
+            "target_games": len(final_legs) if req.target_mode == "GAMES" else target_games,
             "accumulated_odds": b_ticket.accumulated_odds,
             "combined_probability": b_ticket.combined_probability,
             "correlation_adjusted_probability": b_ticket.correlation_adjusted_probability,
             "confidence_tier": b_ticket.confidence_tier,
             "recommended_stake_pct": b_ticket.recommended_stake_pct,
             "leg_config": b_ticket.leg_config,
-            "approved_legs": b_ticket.approved_legs,
+            "approved_legs": final_legs,
+            "selections": final_legs,
             "rejected_picks": b_ticket.rejected_picks,
             "total_evaluated": b_ticket.total_evaluated,
             "decision_audit_summary": b_ticket.decision_audit_summary,
@@ -1252,6 +1437,12 @@ async def merge_portfolio_to_master(req: MergeMasterRequest):
         if code_res.get("status") == "SUCCESS" and code_res.get("booking_code"):
             booking_code = code_res.get("booking_code")
             share_url = code_res.get("load_url")
+            if code_res.get("booked_selections"):
+                master_legs = code_res.get("booked_selections")
+                acc_odds = 1.0
+                for leg in master_legs:
+                    acc_odds *= float(leg.get("odds") or leg.get("estimated_odds") or 1.25)
+                acc_odds = round(acc_odds, 2)
     except Exception as e:
         logger.warning(f"Error generating SportyBet code for master ticket: {e}")
 
@@ -1285,6 +1476,392 @@ async def merge_portfolio_to_master(req: MergeMasterRequest):
     return {
         "status": "SUCCESS",
         "master_ticket": master_ticket
+    }
+
+
+# =========================================================================
+# Custom Fixture Shortlist Ingestion & Auto-Prediction Engine
+# =========================================================================
+
+class ShortlistBuildRequest(BaseModel):
+    raw_text: Optional[str] = None
+    matches_text: Optional[str] = None
+    match_pairs: Optional[List[Dict[str, str]]] = None  # [{"home": "...", "away": "..."}]
+    target_odds: Optional[float] = 5.0
+    target_games: Optional[int] = 5
+    target_mode: Optional[str] = "GAMES"  # "ODDS" or "GAMES"
+    num_tickets: Optional[int] = 1  # 1, 2, 3 portfolio variants
+    risk_profile: Optional[str] = "BALANCED"
+    country_code: Optional[str] = "ng"
+    reshuffle_seed: Optional[int] = None
+    min_odds: Optional[float] = 1.15
+    allowed_market_categories: Optional[List[str]] = None
+    excluded_market_categories: Optional[List[str]] = None
+
+
+def parse_shortlist_text(text: str) -> List[Tuple[str, str]]:
+    """
+    Parses user-pasted match text into (home_team, away_team) pairs.
+    Supports:
+      1. Delimited lines: 'Team A vs Team B', 'Team A - Team B', 'Team A v Team B', 'Team A, Team B'
+      2. SportyBet / Flashscore multi-line copied blocks
+    """
+    if not text or not text.strip():
+        return []
+
+    lines = [l.strip() for l in text.strip().splitlines() if l.strip()]
+    pairs = []
+
+    # Strategy 1: Check for explicit delimiters per line
+    delims = [r"\s+vs\.?\s+", r"\s+v\.?\s+", r"\s*-\s*", r"\s*,\s*"]
+    for line in lines:
+        for d in delims:
+            parts = re.split(d, line, flags=re.IGNORECASE)
+            if len(parts) == 2 and len(parts[0].strip()) >= 2 and len(parts[1].strip()) >= 2:
+                # Exclude pure numbers/odds
+                if not re.match(r"^[\d\.\s]+$", parts[0]) and not re.match(r"^[\d\.\s]+$", parts[1]):
+                    pairs.append((parts[0].strip(), parts[1].strip()))
+                    break
+
+    if pairs:
+        return pairs
+
+    # Strategy 2: Block / Multiline copy-paste from betting websites
+    noise_keywords = [
+        "way", "o/u", "double chance", "gg/ng", "draw no bet", "other markets",
+        "goals", "over", "under", "matches", "outrights", "saturday", "sunday",
+        "monday", "tuesday", "wednesday", "thursday", "friday", "today", "tomorrow"
+    ]
+    candidate_tokens = []
+    for line in lines:
+        l_low = line.lower()
+        if re.match(r"^[\d\.\:\+\s\-]+$", line):
+            continue
+        if re.match(r"^id\s*:\s*\d+", l_low):
+            continue
+        if any(k in l_low for k in noise_keywords) and len(line.split()) <= 4:
+            continue
+        if line.strip().upper() in ["1", "X", "2", "1X", "X2", "12"]:
+            continue
+        candidate_tokens.append(line.strip())
+
+    i = 0
+    while i < len(candidate_tokens) - 1:
+        pairs.append((candidate_tokens[i], candidate_tokens[i+1]))
+        i += 2
+
+    return pairs
+
+
+def _normalize_name_for_match(name: str) -> str:
+    s = str(name or "").lower().strip()
+    aliases = {
+        "czech republic": "czechia",
+        "usa": "united states",
+        "south korea": "korea republic",
+        "ivory coast": "cote divoire",
+        "cape verde": "cabo verde",
+        "bosnia": "bosnia and herzegovina",
+        "man utd": "manchester united",
+        "man city": "manchester city",
+        "wolves": "wolverhampton",
+        "spurs": "tottenham",
+        "psg": "paris saint germain",
+        "atletico": "atletico madrid",
+        "real": "real madrid"
+    }
+    for a, r in aliases.items():
+        if s == a:
+            s = r
+            break
+
+    s = re.sub(r"[^\w\s]", " ", s)
+    stop = {"fc", "cf", "sc", "cd", "ec", "fk", "sk", "bk", "afc", "ac", "as", "club", "united", "city", "town"}
+    filtered = [t for t in s.split() if t not in stop]
+    return " ".join(filtered) if filtered else s
+
+
+@router.post("/build-from-shortlist")
+async def build_from_custom_shortlist(req: ShortlistBuildRequest):
+    """
+    Evaluates user-submitted custom shortlist of fixtures against live SportyBet markets.
+    Applies StatIQ 5-Gate Pick Engine and generates genuine SportyBet booking codes.
+    """
+    # 1. Parse matches from input
+    parsed_pairs = []
+    raw_input_text = req.matches_text or req.raw_text
+    if req.match_pairs and len(req.match_pairs) > 0:
+        for p in req.match_pairs:
+            h = str(p.get("home") or "").strip()
+            a = str(p.get("away") or "").strip()
+            if h and a:
+                parsed_pairs.append((h, a))
+    elif raw_input_text:
+        parsed_pairs = parse_shortlist_text(raw_input_text)
+
+    if not parsed_pairs:
+        raise HTTPException(
+            status_code=400,
+            detail="No fixtures detected. Please paste your matches (e.g. 'Team A vs Team B' on separate lines)."
+        )
+
+    # 2. Fetch live SportyBet fixture pool from Mirror DB (fallback to live client)
+    from app.db.session import SessionLocal
+    from app.db.models import SportyBetEvent
+    db_sess = SessionLocal()
+    try:
+        db_events = db_sess.query(SportyBetEvent).filter(SportyBetEvent.status == "SCHEDULED").all()
+        if db_events and len(db_events) > 0:
+            raw_sporty_fixtures = []
+            for ev in db_events:
+                comp_name = ev.competition_rel.name if ev.competition_rel else "Football"
+                country_name = ev.competition_rel.country if ev.competition_rel else None
+                raw_sporty_fixtures.append({
+                    "id": f"fx_{ev.sporty_game_id}" if ev.sporty_game_id else f"fx_{ev.sporty_event_id.replace(':', '_')}",
+                    "event_id": ev.sporty_event_id,
+                    "game_id": ev.sporty_game_id,
+                    "home_team": ev.home_team,
+                    "away_team": ev.away_team,
+                    "country": country_name,
+                    "competition": comp_name,
+                    "kickoff_time": ev.start_time.strftime("%Y-%m-%d %H:%M:%S"),
+                    "start_time_ms": ev.start_time_ms,
+                    "markets": [
+                        {
+                            "market_id": m.sporty_market_id,
+                            "market_name": m.market_name,
+                            "market_type": m.market_type,
+                            "specifier": m.specifier,
+                            "outcomes": [
+                                {"outcome_id": oc.sporty_outcome_id, "selection_name": oc.selection, "odds": oc.odds, "probability": oc.probability}
+                                for oc in m.outcomes
+                            ]
+                        }
+                        for m in ev.markets
+                    ],
+                    "provider": "SPORTYBET"
+                })
+        else:
+            raw_sporty_fixtures = SportyBetIngestionService.fetch_upcoming_fixtures(limit=0)
+    finally:
+        db_sess.close()
+
+    now_utc = datetime.datetime.now(datetime.timezone.utc)
+    now_ms = now_utc.timestamp() * 1000.0
+
+    resolved_pool = []
+    seen_event_ids = set()
+    unmatched_items = []
+
+    for req_h, req_a in parsed_pairs:
+        h_norm = _normalize_name_for_match(req_h)
+        a_norm = _normalize_name_for_match(req_a)
+
+        best_match = None
+        best_score = 0.0
+
+        for ev in raw_sporty_fixtures:
+            ev_id = str(ev.get("event_id") or ev.get("game_id") or "")
+            if ev_id in seen_event_ids:
+                continue
+
+            # Must not have started
+            start_ms = ev.get("start_time_ms") or 0
+            if start_ms > 0 and start_ms <= (now_ms + 180000):
+                continue
+
+            ev_status = str(ev.get("status") or "").upper()
+            if ev_status in ["LIVE", "STARTED", "1H", "2H", "HT", "FINISHED", "ENDED", "CANCELLED", "POSTPONED", "ABANDONED"]:
+                continue
+
+            sb_h = str(ev.get("home_team") or "")
+            sb_a = str(ev.get("away_team") or "")
+            sb_h_norm = _normalize_name_for_match(sb_h)
+            sb_a_norm = _normalize_name_for_match(sb_a)
+
+            # Check standard order (Home vs Away)
+            score_h = SequenceMatcher(None, h_norm, sb_h_norm).ratio()
+            score_a = SequenceMatcher(None, a_norm, sb_a_norm).ratio()
+
+            # Substring boost
+            if h_norm and (h_norm in sb_h_norm or sb_h_norm in h_norm):
+                score_h = max(score_h, 0.90)
+            if a_norm and (a_norm in sb_a_norm or sb_a_norm in a_norm):
+                score_a = max(score_a, 0.90)
+
+            # Check reverse order (in case user pasted Away vs Home)
+            score_h_rev = SequenceMatcher(None, h_norm, sb_a_norm).ratio()
+            score_a_rev = SequenceMatcher(None, a_norm, sb_h_norm).ratio()
+            if h_norm and (h_norm in sb_a_norm or sb_a_norm in h_norm):
+                score_h_rev = max(score_h_rev, 0.90)
+            if a_norm and (a_norm in sb_a_norm or sb_a_norm in a_norm):
+                score_a_rev = max(score_a_rev, 0.90)
+
+            combined_std = (score_h + score_a) / 2.0
+            combined_rev = (score_h_rev + score_a_rev) / 2.0
+            combined = max(combined_std, combined_rev)
+
+            if combined >= 0.65 and min(score_h, score_a) >= 0.50 and combined > best_score:
+                best_score = combined
+                best_match = ev
+
+        if best_match:
+            ev_id = str(best_match.get("event_id") or best_match.get("game_id") or "")
+            seen_event_ids.add(ev_id)
+            h_act = best_match.get("home_team") or req_h
+            a_act = best_match.get("away_team") or req_a
+            comp_name = (best_match.get("competition") or "Football").strip()
+            country_name = (best_match.get("country") or "").strip()
+            start_ms = best_match.get("start_time_ms") or 0
+            match_dt = datetime.datetime.fromtimestamp(start_ms / 1000.0, tz=datetime.timezone.utc) if start_ms > 0 else now_utc
+
+            r1x2_ev = {
+                "home": best_match.get("odds_home", 2.0),
+                "draw": best_match.get("odds_draw", 3.2),
+                "away": best_match.get("odds_away", 3.0)
+            }
+            dc_data, ou_data = _extract_live_market_data(best_match)
+
+            resolved_pool.append({
+                "fixture_id": ev_id,
+                "event_id": ev_id,
+                "game_id": best_match.get("game_id"),
+                "provider_event_id": ev_id,
+                "external_fixture_id": ev_id,
+                "home_team": h_act,
+                "away_team": a_act,
+                "competition": comp_name,
+                "competition_code": comp_name,
+                "country": country_name,
+                "kickoff_datetime": best_match.get("kickoff_time") or match_dt.strftime("%Y-%m-%d %H:%M:%S"),
+                "start_time_ms": start_ms,
+                "markets": best_match.get("markets", {}),
+                "result_1x2": r1x2_ev,
+                "ou_lines": ou_data,
+                "double_chance": dc_data,
+                "matched_from_input": f"{req_h} vs {req_a}",
+            })
+        else:
+            unmatched_items.append(f"{req_h} vs {req_a}")
+
+    if not resolved_pool:
+        return {
+            "status": "NO_MATCHES_RESOLVED",
+            "message": f"Could not find any of the {len(parsed_pairs)} submitted matches on SportyBet's active today board. Ensure match names are accurate and matches haven't kicked off yet.",
+            "total_submitted": len(parsed_pairs),
+            "total_resolved": 0,
+            "unmatched_items": unmatched_items,
+        }
+
+    # 3. Enrich with H2H
+    try:
+        h2h_map = SportyBetIngestionService.fetch_h2h_batch(resolved_pool)
+        for fix in resolved_pool:
+            f_id = str(fix.get("event_id") or fix.get("fixture_id") or "")
+            if f_id and f_id in h2h_map:
+                fix["h2h_data"] = h2h_map[f_id]
+    except Exception as e:
+        logger.warning(f"[Shortlist] H2H fetch error: {e}")
+
+    # 4. Pick Engine
+    t_games = req.target_games or min(5, len(resolved_pool))
+    t_games = min(15, t_games)
+    t_odds = req.target_odds if req.target_mode == "ODDS" else 999.0
+    num_t = max(1, min(3, int(req.num_tickets or 1)))
+
+    engine = MatchIQPickEngine(use_live_odds=True)
+
+    if num_t > 1:
+        portfolio_built = engine.build_portfolio(
+            fixture_pool=resolved_pool,
+            num_tickets=num_t,
+            target_total_odds=t_odds,
+            mode="ACCUMULATOR",
+            target_mode=req.target_mode,
+            target_games=t_games,
+            max_league_picks=20,
+            risk_profile=req.risk_profile or "BALANCED",
+            overlap_mode="ZERO_OVERLAP"
+        )
+    else:
+        portfolio_built = [engine.build_ticket(
+            fixture_pool=resolved_pool,
+            target_total_odds=t_odds,
+            mode="ACCUMULATOR",
+            target_mode=req.target_mode,
+            target_games=t_games,
+            max_league_picks=20,
+            reshuffle_seed=req.reshuffle_seed,
+            risk_profile=req.risk_profile or "BALANCED",
+        )]
+
+    # 5. Book on SportyBet
+    from app.adapters.bookmaker_adapter import SportyBetAdapter
+    adapter = SportyBetAdapter()
+    portfolio_results = []
+
+    for idx, b_ticket in enumerate(portfolio_built):
+        # Enforce minimum odds floor 1.15
+        valid_legs = [l for l in b_ticket.approved_legs if float(l.get("odds") or l.get("estimated_odds") or 1.0) >= 1.15]
+        if req.target_mode == "GAMES" and len(valid_legs) > t_games:
+            valid_legs = valid_legs[:t_games]
+        elif len(valid_legs) > 15:
+            valid_legs = valid_legs[:15]
+
+        b_ticket.approved_legs = valid_legs
+
+        acc = 1.0
+        for l in valid_legs:
+            acc *= float(l.get("odds", 1.5))
+        b_ticket.accumulated_odds = round(acc, 2)
+
+        booking_code = None
+        share_url = None
+        if valid_legs:
+            try:
+                c_res = adapter.generate_booking_code(valid_legs, country_code=req.country_code or "ng")
+                if c_res.get("status") == "SUCCESS" and c_res.get("booking_code"):
+                    booking_code = c_res.get("booking_code")
+                    share_url = c_res.get("load_url")
+                    if c_res.get("booked_selections"):
+                        valid_legs = c_res.get("booked_selections")
+                        acc = 1.0
+                        for l in valid_legs:
+                            acc *= float(l.get("odds", 1.25))
+                        b_ticket.accumulated_odds = round(acc, 2)
+            except Exception as exc:
+                logger.warning(f"[Shortlist] Booking code error for variant {idx+1}: {exc}")
+
+        t_dict = {
+            "scenario_id": f"SHORTLIST-V{idx+1}-{len(valid_legs)}G",
+            "ticket_index": idx + 1,
+            "title": f"Ticket {idx+1} ({len(valid_legs)} Legs)" if num_t > 1 else f"Shortlist Ticket ({len(valid_legs)} Legs)",
+            "target_mode": req.target_mode,
+            "target_games": t_games,
+            "target_odds": req.target_odds,
+            "accumulated_odds": b_ticket.accumulated_odds,
+            "combined_probability": b_ticket.combined_probability,
+            "confidence_tier": b_ticket.confidence_tier,
+            "recommended_stake_pct": b_ticket.recommended_stake_pct,
+            "approved_legs": valid_legs,
+            "selections": valid_legs,
+            "rejected_picks": b_ticket.rejected_picks,
+            "booking_code": booking_code,
+            "share_url": share_url or (f"https://www.sportybet.com/ng/?shareCode={booking_code}" if booking_code else None),
+            "total_evaluated": len(resolved_pool)
+        }
+        portfolio_results.append(t_dict)
+
+    primary_ticket = portfolio_results[0] if portfolio_results else {}
+
+    return {
+        "status": "SUCCESS",
+        "total_submitted": len(parsed_pairs),
+        "total_resolved": len(resolved_pool),
+        "unmatched_items": unmatched_items,
+        "ticket": primary_ticket,
+        "scenarios": portfolio_results,
+        "portfolio_tickets": portfolio_results if num_t > 1 else None
     }
 
 

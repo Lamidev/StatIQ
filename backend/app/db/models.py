@@ -505,6 +505,126 @@ class TrackedLeg(Base):
     created_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), default=datetime.datetime.utcnow)
 
 
+# ── STATIQ V2.0: SPORTYBET FEED MIRROR MODELS ─────────────────────────────────
+
+class SportyBetCompetition(Base):
+    """
+    Authoritative SportyBet Competition Entity.
+    Discovered dynamically from SportyBet's tournament tree.
+    """
+    __tablename__ = "sportybet_competitions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    sporty_competition_id: Mapped[str] = mapped_column(String(100), unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(150), index=True)
+    country: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, index=True)
+    category: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    status: Mapped[str] = mapped_column(String(30), default="ACTIVE", index=True)
+    raw_payload: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    first_seen_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), default=datetime.datetime.utcnow)
+    last_seen_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), default=datetime.datetime.utcnow)
+    updated_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+
+    events = relationship("SportyBetEvent", back_populates="competition_rel", cascade="all, delete-orphan")
+
+
+class SportyBetEvent(Base):
+    """
+    Authoritative SportyBet Event Entity.
+    Canonical mirror of SportyBet fixtures with exact event and game IDs.
+    """
+    __tablename__ = "sportybet_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    sporty_event_id: Mapped[str] = mapped_column(String(100), unique=True, index=True)
+    sporty_game_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True, index=True)
+    competition_id: Mapped[Optional[int]] = mapped_column(ForeignKey("sportybet_competitions.id"), nullable=True, index=True)
+    home_team: Mapped[str] = mapped_column(String(150), index=True)
+    away_team: Mapped[str] = mapped_column(String(150), index=True)
+    start_time: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), index=True)
+    start_time_ms: Mapped[int] = mapped_column(Integer, index=True)
+    status: Mapped[str] = mapped_column(String(30), default="SCHEDULED", index=True)  # SCHEDULED, LIVE, FINISHED, CANCELLED
+    event_state: Mapped[str] = mapped_column(String(30), default="NOT_STARTED", index=True)
+    raw_payload: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    first_seen_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), default=datetime.datetime.utcnow)
+    last_seen_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), default=datetime.datetime.utcnow)
+    updated_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+
+    competition_rel = relationship("SportyBetCompetition", back_populates="events")
+    markets = relationship("SportyBetMarket", back_populates="event_rel", cascade="all, delete-orphan")
+    odds_snapshots = relationship("SportyBetOddsSnapshot", back_populates="event_rel", cascade="all, delete-orphan")
+
+
+class SportyBetMarket(Base):
+    """
+    Authoritative SportyBet Market Entity.
+    Stores all markets returned by SportyBet dynamically without hardcoded filtering.
+    """
+    __tablename__ = "sportybet_markets"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    sporty_market_id: Mapped[str] = mapped_column(String(50), index=True)
+    event_id: Mapped[int] = mapped_column(ForeignKey("sportybet_events.id"), index=True)
+    market_type: Mapped[str] = mapped_column(String(100), index=True)
+    market_name: Mapped[str] = mapped_column(String(150))
+    line: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    specifier: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    status: Mapped[str] = mapped_column(String(30), default="ACTIVE", index=True)
+    raw_payload: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    first_seen_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), default=datetime.datetime.utcnow)
+    last_seen_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), default=datetime.datetime.utcnow)
+    updated_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+
+    event_rel = relationship("SportyBetEvent", back_populates="markets")
+    outcomes = relationship("SportyBetOutcome", back_populates="market_rel", cascade="all, delete-orphan")
+    odds_snapshots = relationship("SportyBetOddsSnapshot", back_populates="market_rel", cascade="all, delete-orphan")
+
+
+class SportyBetOutcome(Base):
+    """
+    Authoritative SportyBet Outcome Entity.
+    Stores every individual selection and decimal price directly from SportyBet.
+    """
+    __tablename__ = "sportybet_outcomes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    market_id: Mapped[int] = mapped_column(ForeignKey("sportybet_markets.id"), index=True)
+    sporty_outcome_id: Mapped[str] = mapped_column(String(50), index=True)
+    label: Mapped[str] = mapped_column(String(100))
+    selection: Mapped[str] = mapped_column(String(100))
+    odds: Mapped[float] = mapped_column(Float)
+    probability: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    status: Mapped[str] = mapped_column(String(30), default="ACTIVE", index=True)
+    raw_payload: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    first_seen_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), default=datetime.datetime.utcnow)
+    last_seen_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), default=datetime.datetime.utcnow)
+    updated_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+
+    market_rel = relationship("SportyBetMarket", back_populates="outcomes")
+    odds_snapshots = relationship("SportyBetOddsSnapshot", back_populates="outcome_rel", cascade="all, delete-orphan")
+
+
+class SportyBetOddsSnapshot(Base):
+    """
+    Append-Only Historical Odds Snapshot Entity.
+    Logs every odds drift and change over time for true historical backtesting.
+    """
+    __tablename__ = "sportybet_odds_snapshots"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    event_id: Mapped[int] = mapped_column(ForeignKey("sportybet_events.id"), index=True)
+    market_id: Mapped[int] = mapped_column(ForeignKey("sportybet_markets.id"), index=True)
+    outcome_id: Mapped[int] = mapped_column(ForeignKey("sportybet_outcomes.id"), index=True)
+    odds: Mapped[float] = mapped_column(Float)
+    captured_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), default=datetime.datetime.utcnow, index=True)
+    source_timestamp: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
+    event_rel = relationship("SportyBetEvent", back_populates="odds_snapshots")
+    market_rel = relationship("SportyBetMarket", back_populates="odds_snapshots")
+    outcome_rel = relationship("SportyBetOutcome", back_populates="odds_snapshots")
+
+
+
 
 
 

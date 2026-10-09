@@ -1,0 +1,21 @@
+{
+  "is_enabled": true,
+  "active_days": [
+    "FRI",
+    "SAT",
+    "SUN"
+  ],
+  "target_odds": 2.0,
+  "max_leg_odds": 1.45,
+  "dispatch_time": "10:00",
+  "campaign_mode": "CHALLENGE",
+  "challenge_days": 3,
+  "challenge_day_current": 1,
+  "challenge_start_date": "2026-10-09",
+  "challenge_end_date": "2026-10-11",
+  "starting_stake": 5000,
+  "challenge_status": "ACTIVE",
+  "last_run_date": null,
+  "last_ticket": null,
+  "run_history": []
+}

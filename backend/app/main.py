@@ -58,6 +58,11 @@ app.include_router(ticket_builder_router, prefix="/api/v1/ai-ticket", tags=["AI 
 app.include_router(notifications_router, prefix="/api/v1/notifications", tags=["Win Notifications"])
 from app.api.endpoints.reconciliation import router as reconciliation_router
 app.include_router(reconciliation_router, prefix="/api/v1/ticket-tracker", tags=["Tracking Reconciliation & Health"])
+from app.api.endpoints.sportybet import router as sportybet_router, feed_scheduler
+app.include_router(sportybet_router, prefix="/api/v1/sportybet", tags=["SportyBet Feed Mirror"])
+from app.api.endpoints.rollover_cron import router as rollover_cron_router
+from app.services.rollover_cron_scheduler import rollover_scheduler
+app.include_router(rollover_cron_router, prefix="/api/v1", tags=["StatIQ Automated Rollover Cron"])
 
 # Mount Virtual Trader & 24/7 Front-Testing Engine
 try:
@@ -88,8 +93,14 @@ from app.services.ticket_tracker import (
 
 @app.on_event("startup")
 def start_background_ticket_sync_worker():
+    # Start SportyBet Autonomous Feed Scheduler
+    feed_scheduler.start()
+    
     # Start V2.0 Autonomous Tracking Scheduler
     LiveTrackingScheduler.start_scheduler()
+
+    # Start StatIQ 10:00 AM WAT Automated Rollover Cron Daemon
+    rollover_scheduler.start()
 
     # Virtual Front-Testing Daemon disabled per user instruction
     # try:

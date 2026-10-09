@@ -625,3 +625,110 @@ export async function mergeMasterTicket(payload, endpoint = "/ai-ticket/merge-ma
 }
 
 
+/**
+ * Evaluates a custom user-pasted match shortlist, matches against live SportyBet board,
+ * and builds ticket(s) with genuine booking code.
+ */
+export async function buildTicketFromShortlist(payload) {
+  try {
+    const res = await fetch(`${API_BASE_URL}/ai-ticket/build-from-shortlist`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    if (res.ok) return await res.json();
+    const errorData = await res.json().catch(() => ({}));
+    return { 
+      status: "HTTP_ERROR", 
+      http_status: res.status, 
+      message: errorData.detail || errorData.message || `Server error (${res.status})` 
+    };
+  } catch (err) {
+    console.error("Build ticket from shortlist error:", err);
+    return { status: "NETWORK_ERROR", message: "Failed to connect to backend server." };
+  }
+}
+
+
+/**
+ * Automated 10:00 AM WAT Rollover Cron Scheduler API Methods
+ */
+export async function fetchRolloverSchedule() {
+  try {
+    const res = await fetch(`${API_BASE_URL}/rollover-cron/schedule`);
+    if (res.ok) return await res.json();
+  } catch (err) {
+    console.error("Fetch rollover schedule error:", err);
+  }
+  return { status: "ERROR", config: null };
+}
+
+export async function updateRolloverSchedule(payload) {
+  try {
+    const res = await fetch(`${API_BASE_URL}/rollover-cron/schedule`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    if (res.ok) return await res.json();
+  } catch (err) {
+    console.error("Update rollover schedule error:", err);
+  }
+  return { status: "ERROR" };
+}
+
+export async function runRolloverNow(targetOdds = 2.00, maxLegOdds = 1.45) {
+  try {
+    const res = await fetch(`${API_BASE_URL}/rollover-cron/run-now`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ target_odds: targetOdds, max_leg_odds: maxLegOdds })
+    });
+    if (res.ok) return await res.json();
+    const err = await res.json().catch(() => ({}));
+    return { status: "ERROR", message: err.detail || "Failed to execute rollover run" };
+  } catch (err) {
+    console.error("Run rollover now error:", err);
+    return { status: "NETWORK_ERROR", message: "Network connection error" };
+  }
+}
+
+export async function testRolloverTelegram() {
+  try {
+    const res = await fetch(`${API_BASE_URL}/rollover-cron/telegram-test`, {
+      method: "POST"
+    });
+    if (res.ok) return await res.json();
+  } catch (err) {
+    console.error("Test rollover telegram error:", err);
+  }
+  return { status: "ERROR", message: "Failed to connect to Telegram" };
+}
+
+export async function fetchRolloverHistory() {
+  try {
+    const res = await fetch(`${API_BASE_URL}/rollover-cron/history`);
+    if (res.ok) return await res.json();
+  } catch (err) {
+    console.error("Fetch rollover history error:", err);
+  }
+  return { status: "ERROR", history: [] };
+}
+
+export async function resetRolloverChallenge(challengeDays = 10, startingStake = 5000) {
+  try {
+    const res = await fetch(`${API_BASE_URL}/rollover-cron/challenge/reset`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        challenge_days: challengeDays,
+        starting_stake: startingStake
+      })
+    });
+    if (res.ok) return await res.json();
+  } catch (err) {
+    console.error("Reset rollover challenge error:", err);
+  }
+  return { status: "ERROR", message: "Failed to reset challenge" };
+}
+

@@ -2,6 +2,7 @@ import random
 import re
 import string
 import logging
+import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Dict, Any, List, Optional, Tuple
@@ -518,12 +519,19 @@ class SportyBetAdapter(BookmakerAdapter):
             for mkt in m_list:
                 m_id = str(mkt.get("id") or mkt.get("market_id") or "")
                 if m_id == target_m_id:
+                    spec_mkt = str(mkt.get("specifier") or "").strip()
+                    # STRICT GUARD: Must match requested line (e.g. 1.5) and NEVER match 0.5!
+                    if spec_mkt and (f"total={line_val}" != spec_mkt and line_val not in spec_mkt):
+                        continue
+                    target_spec = spec_mkt if spec_mkt else f"total={line_val}"
                     for oc in (mkt.get("outcomes") or []):
                         o_desc = (oc.get("desc") or oc.get("name") or "").lower()
                         o_id = str(oc.get("id") or oc.get("outcome_id") or "")
                         if (is_over and ("over" in o_desc or o_id == "12")) or (not is_over and ("under" in o_desc or o_id == "13")):
                             return target_m_id, o_id, target_spec
-            return target_m_id, "12" if is_over else "13", target_spec
+            # If the exact team goals line (e.g. Over 1.5) is not offered, fallback to Double Chance 1X / X2.
+            # NEVER fallback to Over 0.5 goals which carries sub-1.15 odds!
+            return "10", "11" if is_away else "9", None
 
         # ── 4. Win Either Half (Home: 73, Away: 74) ───────────────────────
         if _is_either_half or "win either half" in s_lower:
@@ -566,15 +574,37 @@ class SportyBetAdapter(BookmakerAdapter):
             hcp_raw = hcp_match.group(1) if hcp_match else "1.5"
             hcp_val = hcp_raw.replace("+", "")
             target_spec = f"hcp={hcp_val}"
+
             for mkt in m_list:
                 m_id = str(mkt.get("id") or mkt.get("market_id") or "")
-                if m_id in ("16", "17", "28") or "handicap" in (mkt.get("desc") or "").lower():
-                    for oc in (mkt.get("outcomes") or []):
+                m_desc = (mkt.get("desc") or mkt.get("name") or "").lower()
+                m_spec = str(mkt.get("specifier") or "")
+
+                # SportyBet 3-Way Handicap (Market 14, e.g. 'Handicap 0:1', spec='hcp=0:1')
+                if m_id == "14" or ("handicap" in m_desc and ":" in m_spec):
+                    outcomes = mkt.get("outcomes", [])
+                    if isinstance(outcomes, dict): outcomes = list(outcomes.values())
+                    for oc in outcomes:
                         o_id = str(oc.get("id") or oc.get("outcome_id") or "")
                         o_desc = (oc.get("desc") or oc.get("name") or "").lower()
-                        if (is_away and (o_id in ("1715", "3", "2") or "2" in o_desc or "away" in o_desc)) or (not is_away and (o_id in ("1714", "1") or "1" in o_desc or "home" in o_desc)):
-                            return m_id, o_id, target_spec
-            # Exact SportyBet Asian Handicap Market ID is 16, outcome 1715 (Away) or 1714 (Home)
+                        if is_away and (o_id == "1713" or "away" in o_desc or "2" in o_desc):
+                            return "14", o_id or "1713", m_spec or ("hcp=0:1" if is_away else "hcp=1:0")
+                        elif not is_away and (o_id == "1711" or "home" in o_desc or "1" in o_desc):
+                            return "14", o_id or "1711", m_spec or ("hcp=1:0" if not is_away else "hcp=0:1")
+
+                # SportyBet Asian Handicap (Market 16)
+                elif m_id in ("16", "17", "28") or "asian handicap" in m_desc:
+                    outcomes = mkt.get("outcomes", [])
+                    if isinstance(outcomes, dict): outcomes = list(outcomes.values())
+                    for oc in outcomes:
+                        o_id = str(oc.get("id") or oc.get("outcome_id") or "")
+                        o_desc = (oc.get("desc") or oc.get("name") or "").lower()
+                        if is_away and (o_id in ("1715", "3", "2") or "away" in o_desc or "2" in o_desc):
+                            return m_id, o_id or "1715", m_spec or target_spec
+                        elif not is_away and (o_id in ("1714", "1") or "home" in o_desc or "1" in o_desc):
+                            return m_id, o_id or "1714", m_spec or target_spec
+
+            # Dedicated Handicap Fallback: NEVER fallback to Double Chance!
             return "16", "1715" if is_away else "1714", target_spec
 
 
@@ -739,34 +769,55 @@ class SportyBetAdapter(BookmakerAdapter):
         """
         url_share = f"{self.BASE_URL}/{country_code.lower()}/orders/share"
         
-        # Check if any selection needs team name lookup (lacks direct event ID)
-        needs_lookup = any(
-            not (str(s.get("event_id") or s.get("provider_event_id") or s.get("_sportybet_event_id") or s.get("eventId") or s.get("external_fixture_id") or s.get("fixture_id") or s.get("game_id") or s.get("gameId") or "").strip())
-            for s in selections
-        )
+        target_ids = set()
+        for s in selections:
+            ev_id = str(s.get("event_id") or s.get("provider_event_id") or s.get("eventId") or s.get("fixture_id") or "").strip()
+            if ev_id:
+                target_ids.add(ev_id)
+
+        # Load only selected SportyBet events from mirror DB for instant validation (sub-millisecond)
         live_sporty_events = []
         events_by_id = {}
-        if needs_lookup:
-            from app.services.sportybet_ingestion import SportyBetIngestionService
-            live_sporty_events = SportyBetIngestionService.fetch_upcoming_fixtures(limit=250)
-            for ev in live_sporty_events:
-                if ev.get("eventId"):
-                    events_by_id[str(ev["eventId"])] = ev
-                if ev.get("event_id"):
-                    events_by_id[str(ev["event_id"])] = ev
-                if ev.get("gameId"):
-                    events_by_id[str(ev["gameId"])] = ev
-                if ev.get("game_id"):
-                    events_by_id[str(ev["game_id"])] = ev
+        from sqlalchemy.orm import selectinload
+        from app.db.session import SessionLocal
+        from app.db.models import SportyBetEvent, SportyBetMarket
+        db_sess = SessionLocal()
+        try:
+            q = db_sess.query(SportyBetEvent).options(selectinload(SportyBetEvent.markets).selectinload(SportyBetMarket.outcomes))
+            if target_ids:
+                q = q.filter(SportyBetEvent.sporty_event_id.in_(target_ids))
+            else:
+                q = q.filter(SportyBetEvent.status == "SCHEDULED")
+            db_evs = q.all()
+            for ev in db_evs:
+                ev_dict = {
+                    "eventId": ev.sporty_event_id,
+                    "event_id": ev.sporty_event_id,
+                    "gameId": ev.sporty_game_id,
+                    "game_id": ev.sporty_game_id,
+                    "homeTeamName": ev.home_team,
+                    "awayTeamName": ev.away_team,
+                    "status": ev.status,
+                    "start_time_ms": ev.start_time_ms,
+                    "markets": [
+                        {"id": m.sporty_market_id, "desc": m.market_name, "specifier": m.specifier, "outcomes": [{"id": oc.sporty_outcome_id, "desc": oc.selection, "odds": oc.odds} for oc in m.outcomes]}
+                        for m in ev.markets
+                    ]
+                }
+                live_sporty_events.append(ev_dict)
+                if ev.sporty_event_id: events_by_id[ev.sporty_event_id] = ev_dict
+                if ev.sporty_game_id: events_by_id[ev.sporty_game_id] = ev_dict
+        except Exception:
+            pass
+        finally:
+            db_sess.close()
 
         selections_payload = []
         STOP_WORDS = {"fc", "sc", "cd", "ud", "ca", "rc", "ac", "fk", "bk", "sk", "ff", "sad", "club", "team"}
 
-
         for s in selections:
             raw_event_id = str(s.get("event_id") or s.get("provider_event_id") or s.get("_sportybet_event_id") or s.get("eventId") or s.get("external_fixture_id") or s.get("fixture_id") or s.get("game_id") or s.get("gameId") or "").strip()
             home_target = (s.get("home_team") or s.get("fixture") or "").lower().strip()
-
             away_target = (s.get("away_team") or "").lower().strip()
             sel_text = (s.get("selection_name") or s.get("selection") or s.get("prediction") or "").lower()
 
@@ -836,18 +887,36 @@ class SportyBetAdapter(BookmakerAdapter):
                     elif "(1)" in s_lower or "home" in s_lower or "to win (1)" in s_lower:
                         clean_oc_id = "1"
 
-                # If boutique market (Win Either Half / Combo) is not offered on this specific match, fallback to Double Chance
+                # If boutique or team market is not offered or specifier differs, fallback to valid line
                 event_obj = events_by_id.get(target_event_id)
                 ev_markets = event_obj.get("markets", []) if event_obj else []
                 if isinstance(ev_markets, dict):
                     ev_markets = list(ev_markets.values())
                 ev_market_ids = {str(m.get("id") or m.get("market_id") or "") for m in ev_markets if isinstance(m, dict)}
 
-                if ev_market_ids and clean_mkt_id not in ev_market_ids and clean_mkt_id in ("73", "74", "62", "16"):
+                needs_fallback = False
+                if ev_market_ids and clean_mkt_id not in ev_market_ids and clean_mkt_id in ("73", "74", "62", "16", "19", "20"):
+                    needs_fallback = True
+                elif ev_markets and clean_mkt_id in ("19", "20"):
+                    req_spec = str(direct_spec or "").strip()
+                    matching_mkt = next(
+                        (m for m in ev_markets if str(m.get("id") or m.get("market_id") or "") == clean_mkt_id
+                         and (not req_spec or str(m.get("specifier") or "").strip() == req_spec or req_spec in str(m.get("specifier") or ""))),
+                        None
+                    )
+                    if matching_mkt:
+                        m_spec = matching_mkt.get("specifier")
+                        if m_spec:
+                            direct_spec = str(m_spec).strip()
+                    else:
+                        needs_fallback = True
+
+                if needs_fallback and ev_markets:
                     m_id_fb, o_id_fb, spec_fb = self._resolve_market_payload(ev_markets, mkt_text, sel_text, home_target, away_target)
                     clean_mkt_id = m_id_fb
                     clean_oc_id = o_id_fb
-                    # Specifier sanitization rules for SportyBet API
+                    direct_spec = spec_fb
+
                 clean_spec = direct_spec
                 if clean_mkt_id in ("1", "10", "29"):
                     clean_spec = None
@@ -904,9 +973,136 @@ class SportyBetAdapter(BookmakerAdapter):
                 if clean_spec:
                     item_payload["specifier"] = str(clean_spec)
 
+            # STRICT FILTER 1: Kickoff & Live/Suspended Protection
+            if event_obj:
+                ev_st = str(event_obj.get("status") or event_obj.get("matchStatus") or "").upper()
+                if ev_st in ["LIVE", "STARTED", "1H", "2H", "HT", "FINISHED", "ENDED", "CANCELLED", "POSTPONED", "ABANDONED", "CLOSED", "CONCLUDED", "SUSPENDED"]:
+                    logger.warning(f"[SportyBetAdapter] Skipping {home_target} vs {away_target}: event is '{ev_st}'.")
+                    continue
+                ev_start_ms = event_obj.get("start_time_ms") or 0
+                now_ms = time.time() * 1000.0
+                if ev_start_ms > 0 and ev_start_ms <= (now_ms + 180000):
+                    logger.warning(f"[SportyBetAdapter] Skipping {home_target} vs {away_target}: kickoff within 3-minute lock cutoff.")
+                    continue
+
+            # STRICT FILTER 2: 1.15 Minimum Odds Floor Validation on Live SportyBet Odds
+            outcome_live_odds = None
+            if ev_markets:
+                for em in ev_markets:
+                    if str(em.get("id") or em.get("market_id") or "") == str(item_payload["marketId"]):
+                        if item_payload.get("specifier"):
+                            em_sp = str(em.get("specifier") or "").strip()
+                            if em_sp and em_sp != item_payload.get("specifier"):
+                                continue
+                        for eo in (em.get("outcomes") or []):
+                            if str(eo.get("id") or eo.get("outcome_id") or "") == str(item_payload["outcomeId"]):
+                                try:
+                                    outcome_live_odds = float(eo.get("odds") or eo.get("oddsValue") or 0.0)
+                                except Exception:
+                                    pass
+                                break
+
+            if outcome_live_odds is not None and outcome_live_odds < 1.15:
+                # If selection is already a Handicap pick (14 or 16), DO NOT corrupt it into Double Chance!
+                if str(item_payload.get("marketId")) in ("14", "16"):
+                    logger.warning(f"[SportyBetAdapter] Handicap pick {home_target} vs {away_target} odds {outcome_live_odds:.2f} are retained as Handicap.")
+                else:
+                    logger.warning(f"[SportyBetAdapter] Outcome {item_payload['marketId']}:{item_payload['outcomeId']} on {home_target} vs {away_target} live odds {outcome_live_odds:.2f} are below 1.15 floor.")
+                    repaired = False
+                    for em in ev_markets:
+                        em_id = str(em.get("id") or em.get("market_id") or "")
+                        if em_id in ("10", "18"):
+                            for eo in (em.get("outcomes") or []):
+                                eo_id = str(eo.get("id") or eo.get("outcome_id") or "")
+                                try:
+                                    eo_odds = float(eo.get("odds") or eo.get("oddsValue") or 0.0)
+                                except Exception:
+                                    eo_odds = 0.0
+                                if eo_odds >= 1.15 and eo_odds <= 1.45:
+                                    is_away_intent = "away" in sel_text or "2" in sel_text or (away_target and away_target in sel_text)
+                                    if em_id == "10" and ((is_away_intent and eo_id == "11") or (not is_away_intent and eo_id == "9")):
+                                        item_payload["marketId"] = "10"
+                                        item_payload["outcomeId"] = eo_id
+                                        item_payload.pop("specifier", None)
+                                        repaired = True
+                                        break
+                                    elif em_id == "18" and eo_id == "12" and "total=1.5" in str(em.get("specifier") or ""):
+                                        item_payload["marketId"] = "18"
+                                        item_payload["outcomeId"] = "12"
+                                        item_payload["specifier"] = "total=1.5"
+                                        repaired = True
+                                        break
+                            if repaired:
+                                break
+                    if not repaired and outcome_live_odds < 1.15:
+                        logger.warning(f"[SportyBetAdapter] Purged sub-1.15 pick ({outcome_live_odds:.2f}) from booking payload.")
+                        continue
+
+            # Update selection copy with repaired/verified market details
+            s_copy = dict(s)
+            if outcome_live_odds is not None:
+                s_copy["odds"] = round(outcome_live_odds, 2)
+            if item_payload["marketId"] == "10":
+                s_copy["market_name"] = "Double Chance"
+                if item_payload.get("outcomeId") == "9":
+                    s_copy["selection_name"] = f"{s.get('home_team')} or Draw (1X)"
+                elif item_payload.get("outcomeId") == "11":
+                    s_copy["selection_name"] = f"Draw or {s.get('away_team')} (X2)"
+            elif item_payload["marketId"] in ("14", "16"):
+                s_copy["market_name"] = "Asian Handicap" if item_payload["marketId"] == "16" else "Handicap"
+                is_away_hcp = item_payload.get("outcomeId") in ("1713", "1715", "3")
+                hcp_label = item_payload.get("specifier") or ""
+                s_copy["selection_name"] = s.get("selection_name") or f"{s.get('away_team') if is_away_hcp else s.get('home_team')} ({hcp_label or '+1.5'})"
+            elif item_payload["marketId"] == "18":
+                s_copy["market_name"] = "Over/Under Goals"
+                sp_str = str(item_payload.get("specifier") or "")
+                if item_payload.get("outcomeId") == "12" and "total=1.5" in sp_str:
+                    s_copy["selection_name"] = "Over 1.5 Goals"
+                elif item_payload.get("outcomeId") == "13" and "total=3.5" in sp_str:
+                    s_copy["selection_name"] = "Under 3.5 Goals"
+                elif item_payload.get("outcomeId") == "13" and "total=4.5" in sp_str:
+                    s_copy["selection_name"] = "Under 4.5 Goals"
+            s_copy["provider_market_id"] = item_payload["marketId"]
+            s_copy["provider_outcome_id"] = item_payload["outcomeId"]
+            s_copy["provider_specifier"] = item_payload.get("specifier")
+
             selections_payload.append(item_payload)
+            if not hasattr(self, '_temp_processed'):
+                self._temp_processed = []
 
-
+        # Track processed selections alongside payload
+        processed_selections = []
+        for idx_p, itm in enumerate(selections_payload):
+            orig_match = None
+            for s in selections:
+                ev_id_s = str(s.get("event_id") or s.get("provider_event_id") or s.get("eventId") or s.get("fixture_id") or "").strip()
+                if ev_id_s and (ev_id_s == itm.get("eventId") or itm.get("eventId").endswith(ev_id_s) or ev_id_s.endswith(itm.get("eventId"))):
+                    orig_match = dict(s)
+                    break
+            if not orig_match and idx_p < len(selections):
+                orig_match = dict(selections[idx_p])
+            if orig_match:
+                if itm["marketId"] == "10":
+                    orig_match["market_name"] = "Double Chance"
+                    if itm.get("outcomeId") == "9": orig_match["selection_name"] = f"{orig_match.get('home_team')} or Draw (1X)"
+                    elif itm.get("outcomeId") == "11": orig_match["selection_name"] = f"Draw or {orig_match.get('away_team')} (X2)"
+                elif itm["marketId"] in ("14", "16"):
+                    orig_match["market_name"] = "Asian Handicap" if itm["marketId"] == "16" else "Handicap"
+                    is_away_hcp = itm.get("outcomeId") in ("1713", "1715", "3")
+                    hcp_label = itm.get("specifier") or ""
+                    orig_match["selection_name"] = orig_match.get("selection_name") or f"{orig_match.get('away_team') if is_away_hcp else orig_match.get('home_team')} ({hcp_label or '+1.5'})"
+                elif itm["marketId"] == "18":
+                    orig_match["market_name"] = "Over/Under Goals"
+                    sp_str = str(itm.get("specifier") or "")
+                    if itm.get("outcomeId") == "12" and "total=1.5" in sp_str: orig_match["selection_name"] = "Over 1.5 Goals"
+                    elif itm.get("outcomeId") == "13" and "total=3.5" in sp_str: orig_match["selection_name"] = "Under 3.5 Goals"
+                    elif itm.get("outcomeId") == "13" and "total=4.5" in sp_str: orig_match["selection_name"] = "Under 4.5 Goals"
+                orig_match["provider_market_id"] = itm["marketId"]
+                orig_match["provider_outcome_id"] = itm["outcomeId"]
+                orig_match["provider_specifier"] = itm.get("specifier")
+                processed_selections.append(orig_match)
+            else:
+                processed_selections.append(dict(itm))
 
         if not selections_payload:
             return {
@@ -918,7 +1114,7 @@ class SportyBetAdapter(BookmakerAdapter):
 
         # Request shareCode from SportyBet API
         try:
-            with httpx.Client(timeout=8.0, headers=self.HEADERS) as client:
+            with httpx.Client(timeout=5.0, headers=self.HEADERS) as client:
                 resp = client.post(url_share, json={"selections": selections_payload})
                 if resp.status_code == 200:
                     data = resp.json()
@@ -934,14 +1130,18 @@ class SportyBetAdapter(BookmakerAdapter):
                                 "country": country_code.upper(),
                                 "load_url": share_url or f"https://www.sportybet.com/{country_code.lower()}/?shareCode={share_code}",
                                 "matched_count": len(selections_payload),
+                                "booked_selections": processed_selections,
                                 "verified": True
                             }
 
-                # Resilient Directional Self-Healing Fallback: Repair any unsupported boutique market
-                # preserving Home vs Away intent (NEVER flip an Away favourite pick to 1X!)
+                # Resilient Directional Self-Healing Fallback (Parallel Verification)
+                import concurrent.futures
                 valid_items = []
-                for idx, item in enumerate(selections_payload):
-                    orig_s = selections[idx] if idx < len(selections) else {}
+                booked_selections = []
+
+                def _verify_single(idx_item):
+                    idx, item = idx_item
+                    orig_s = processed_selections[idx] if idx < len(processed_selections) else {}
                     s_name = str(orig_s.get("selection_name") or orig_s.get("selection") or "").lower()
                     m_name = str(orig_s.get("market_name") or orig_s.get("market") or "").lower()
                     h_team = str(orig_s.get("home_team") or "").lower()
@@ -955,50 +1155,51 @@ class SportyBetAdapter(BookmakerAdapter):
                     is_goals_pick = "over" in s_name or "under" in s_name or "goals" in m_name or item.get("marketId") in ("18", "19", "20")
 
                     try:
-                        r_single = client.post(url_share, json={"selections": [item]})
-                        if r_single.status_code == 200 and r_single.json().get("bizCode") == 10000:
-                            valid_items.append(item)
-                        else:
-                            # 1. If it was an Away pick: repair to Draw or Away (X2 - outcome 11) or Over 1.5 Goals
+                        with httpx.Client(timeout=2.0, headers=self.HEADERS) as sc:
+                            r_single = sc.post(url_share, json={"selections": [item]})
+                            if r_single.status_code == 200 and r_single.json().get("bizCode") == 10000:
+                                return (idx, item, "ORIG")
                             if is_away_pick:
-                                repaired_x2 = {"eventId": item["eventId"], "marketId": "10", "outcomeId": "11"}
-                                r_x2 = client.post(url_share, json={"selections": [repaired_x2]})
-                                if r_x2.status_code == 200 and r_x2.json().get("bizCode") == 10000:
-                                    valid_items.append(repaired_x2)
-                                    continue
-                                repaired_o15 = {"eventId": item["eventId"], "marketId": "18", "outcomeId": "12", "specifier": "total=1.5"}
-                                r_o15 = client.post(url_share, json={"selections": [repaired_o15]})
-                                if r_o15.status_code == 200 and r_o15.json().get("bizCode") == 10000:
-                                    valid_items.append(repaired_o15)
-                                    continue
-
-                            # 2. If it was a Goals pick: repair to Over 1.5 Goals
+                                rep_x2 = {"eventId": item["eventId"], "marketId": "10", "outcomeId": "11"}
+                                if sc.post(url_share, json={"selections": [rep_x2]}).status_code == 200:
+                                    return (idx, rep_x2, "X2")
                             elif is_goals_pick:
-                                repaired_o15 = {"eventId": item["eventId"], "marketId": "18", "outcomeId": "12", "specifier": "total=1.5"}
-                                r_o15 = client.post(url_share, json={"selections": [repaired_o15]})
-                                if r_o15.status_code == 200 and r_o15.json().get("bizCode") == 10000:
-                                    valid_items.append(repaired_o15)
-                                    continue
-                                repaired_dc = {"eventId": item["eventId"], "marketId": "10", "outcomeId": "9"}
-                                r_dc = client.post(url_share, json={"selections": [repaired_dc]})
-                                if r_dc.status_code == 200 and r_dc.json().get("bizCode") == 10000:
-                                    valid_items.append(repaired_dc)
-                                    continue
-
-                            # 3. Default Home pick: repair to Home or Draw (1X - outcome 9)
+                                rep_o15 = {"eventId": item["eventId"], "marketId": "18", "outcomeId": "12", "specifier": "total=1.5"}
+                                if sc.post(url_share, json={"selections": [rep_o15]}).status_code == 200:
+                                    return (idx, rep_o15, "O15")
                             else:
-                                repaired_dc = {"eventId": item["eventId"], "marketId": "10", "outcomeId": "9"}
-                                r_dc = client.post(url_share, json={"selections": [repaired_dc]})
-                                if r_dc.status_code == 200 and r_dc.json().get("bizCode") == 10000:
-                                    valid_items.append(repaired_dc)
-                                    continue
-                                repaired_o15 = {"eventId": item["eventId"], "marketId": "18", "outcomeId": "12", "specifier": "total=1.5"}
-                                r_o15 = client.post(url_share, json={"selections": [repaired_o15]})
-                                if r_o15.status_code == 200 and r_o15.json().get("bizCode") == 10000:
-                                    valid_items.append(repaired_o15)
-                                    continue
+                                rep_1x = {"eventId": item["eventId"], "marketId": "10", "outcomeId": "9"}
+                                if sc.post(url_share, json={"selections": [rep_1x]}).status_code == 200:
+                                    return (idx, rep_1x, "1X")
                     except Exception:
                         pass
+                    return None
+
+                with concurrent.futures.ThreadPoolExecutor(max_workers=12) as tpool:
+                    for res_it in tpool.map(_verify_single, enumerate(selections_payload)):
+                        if res_it:
+                            it_idx, it_obj, it_kind = res_it
+                            valid_items.append(it_obj)
+                            b_copy = dict(processed_selections[it_idx])
+                            if it_kind == "X2":
+                                b_copy["market_name"] = "Double Chance"
+                                b_copy["selection_name"] = f"Draw or {b_copy.get('away_team')} (X2)"
+                                b_copy["provider_market_id"] = "10"
+                                b_copy["provider_outcome_id"] = "11"
+                                b_copy.pop("provider_specifier", None)
+                            elif it_kind == "1X":
+                                b_copy["market_name"] = "Double Chance"
+                                b_copy["selection_name"] = f"{b_copy.get('home_team')} or Draw (1X)"
+                                b_copy["provider_market_id"] = "10"
+                                b_copy["provider_outcome_id"] = "9"
+                                b_copy.pop("provider_specifier", None)
+                            elif it_kind == "O15":
+                                b_copy["market_name"] = "Over/Under Goals"
+                                b_copy["selection_name"] = "Over 1.5 Goals"
+                                b_copy["provider_market_id"] = "18"
+                                b_copy["provider_outcome_id"] = "12"
+                                b_copy["provider_specifier"] = "total=1.5"
+                            booked_selections.append(b_copy)
 
                 if valid_items and len(valid_items) >= 1:
                     resp2 = client.post(url_share, json={"selections": valid_items})
@@ -1013,9 +1214,11 @@ class SportyBetAdapter(BookmakerAdapter):
                                 "country": country_code.upper(),
                                 "load_url": f"https://www.sportybet.com/{country_code.lower()}/?shareCode={share_code}",
                                 "matched_count": len(valid_items),
+                                "booked_selections": booked_selections,
                                 "verified": True
                             }
         except Exception as e:
+            logger.warning(f"SportyBet booking code generation error: {e}")
             logger.warning(f"SportyBet booking code generation error: {e}")
 
 

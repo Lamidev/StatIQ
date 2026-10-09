@@ -308,17 +308,29 @@ class SportyBetVerificationEngine(SportsbookProvider):
                         elif is_12 and ("12" in oc_desc or "HOME/AWAY" in oc_desc or "1 OR 2" in oc_desc or oc_desc == "12"):
                             return mkt, oc, "MATCHED_2H_DC_12"
 
-                # ── 2. Asian Handicap (Must precede Over/Under to prevent line hijacking) ──
+                # ── 2. Asian Handicap & 3-Way Handicap (Must precede Over/Under to prevent line hijacking) ──
                 if "HANDICAP" in t_mkt_upper or "HANDICAP" in t_sel_upper:
                     if is_handicap or "HANDICAP" in m_desc:
+                        m_id_str = str(mkt.get("id") or "")
                         line_match = True
                         if target_line:
-                            line_match = (target_line in m_spec) or (target_line in m_desc) or (target_line in oc_desc)
+                            clean_tl = target_line.replace("+", "").replace("-", "")
+                            line_match = (clean_tl in m_spec) or (clean_tl in m_desc) or (clean_tl in oc_desc) or (target_line in m_spec) or (":" in m_spec)
                         if line_match:
-                            if favors_home and ("1" in oc_desc or "HOME" in oc_desc or (h_norm and h_norm in self.normalize_team_name(oc_desc))):
-                                return mkt, oc, "MATCHED_HANDICAP_HOME"
-                            elif favors_away and ("2" in oc_desc or "AWAY" in oc_desc or (a_norm and a_norm in self.normalize_team_name(oc_desc))):
-                                return mkt, oc, "MATCHED_HANDICAP_AWAY"
+                            if favors_home:
+                                if m_id_str == "14" and (str(oc.get("id")) == "1711" or "HOME" in oc_desc or "1" in oc_desc):
+                                    return mkt, oc, "MATCHED_HANDICAP_HOME"
+                                elif m_id_str == "16" and (str(oc.get("id")) == "1714" or "HOME" in oc_desc or "1" in oc_desc):
+                                    return mkt, oc, "MATCHED_HANDICAP_HOME"
+                                elif "1" in oc_desc or "HOME" in oc_desc or (h_norm and h_norm in self.normalize_team_name(oc_desc)):
+                                    return mkt, oc, "MATCHED_HANDICAP_HOME"
+                            elif favors_away:
+                                if m_id_str == "14" and (str(oc.get("id")) == "1713" or "AWAY" in oc_desc or "2" in oc_desc):
+                                    return mkt, oc, "MATCHED_HANDICAP_AWAY"
+                                elif m_id_str == "16" and (str(oc.get("id")) == "1715" or "AWAY" in oc_desc or "2" in oc_desc):
+                                    return mkt, oc, "MATCHED_HANDICAP_AWAY"
+                                elif "2" in oc_desc or "AWAY" in oc_desc or (a_norm and a_norm in self.normalize_team_name(oc_desc)):
+                                    return mkt, oc, "MATCHED_HANDICAP_AWAY"
 
                 # ── 3. Full-Time Double Chance ──────────────────────────────────
                 if ("DOUBLE_CHANCE" in t_mkt_upper or "DC" in t_mkt_upper or "DOUBLE CHANCE" in t_mkt_upper) and not any(h in t_mkt_upper for h in ["1ST", "2ND", "HALF"]):
@@ -611,7 +623,13 @@ class SportyBetVerificationEngine(SportsbookProvider):
                 # Canonical SportyBet mapping fallback
                 st_lower = sel_name.lower()
                 m_id, o_id, spec = "18", "12", "total=1.5"
-                if "over 1.5" in st_lower:
+                if "handicap" in st_lower or "handicap" in mkt_name.lower() or "(+" in st_lower:
+                    is_away = "away" in st_lower or "(2)" in st_lower or (away and away.lower() in st_lower)
+                    hcp_m = re.search(r"([+-]?\d+\.?\d*)", st_lower)
+                    h_val = hcp_m.group(1) if hcp_m else "1.5"
+                    h_val_clean = h_val.replace("+", "")
+                    m_id, spec, o_id = "16", f"hcp={h_val_clean}", "1715" if is_away else "1714"
+                elif "over 1.5" in st_lower:
                     m_id, spec, o_id = "18", "total=1.5", "12"
                 elif "under 1.5" in st_lower:
                     m_id, spec, o_id = "18", "total=1.5", "13"

@@ -1123,24 +1123,33 @@ export default function BetSlipAuditorTab({ onNavigateHistory, onTicketLocked })
                           >
                             All {ticketData?.selections?.length || ""} Games
                           </button>
-                          {[1.5, 2.0, 3.0, 5.0, 10.0, 20.0, 50.0, 100.0, 200.0, 500.0].map((val) => (
-                            <button
-                              key={val}
-                              onClick={() => { setTargetOdds(val); setUseCustomOdds(false); setReEditResult(null); }}
-                              className={`px-3.5 py-2 rounded-xl text-xs font-extrabold transition-all border ${
-                                !useCustomOdds && targetOdds === val
-                                  ? "bg-slate-900 border-slate-900 text-white shadow-sm"
-                                  : "bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100"
-                              }`}
-                            >
-                              ~{val.toFixed(1)}x
-                            </button>
-                          ))}
+                          {[1.5, 2.0, 3.0, 5.0, 10.0, 20.0, 22.0, 25.0, 40.0, 50.0, 100.0, 200.0].map((val) => {
+                            const isSelected = !useCustomOdds && targetOdds === val;
+                            const isRecommended = (numTickets === 2 && val === 22.0) || (numTickets >= 3 && val === 40.0);
+                            return (
+                              <button
+                                key={val}
+                                onClick={() => { setTargetOdds(val); setUseCustomOdds(false); setReEditResult(null); }}
+                                className={`px-3 sm:px-3.5 py-2 rounded-xl text-xs font-extrabold transition-all border ${
+                                  isSelected
+                                    ? "bg-slate-900 border-slate-900 text-white shadow-sm ring-1 ring-slate-900"
+                                    : isRecommended
+                                    ? "bg-amber-100 border-amber-300 text-amber-900 hover:bg-amber-200"
+                                    : "bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100"
+                                }`}
+                              >
+                                ~{val.toFixed(val === 22 || val === 40 || val === 25 ? 0 : 1)}x
+                                {isRecommended && !isSelected && (
+                                  <span className="ml-1 text-[9px] font-black uppercase text-amber-700">★</span>
+                                )}
+                              </button>
+                            );
+                          })}
                         </div>
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-2 pt-1 flex-wrap sm:flex-nowrap">
                           <input
                             type="number"
-                            placeholder="Custom odds..."
+                            placeholder={numTickets === 2 ? "Custom (e.g. 22.0)" : "Custom odds..."}
                             value={customOddsInput}
                             onChange={(e) => {
                               const valStr = e.target.value;
@@ -1149,9 +1158,9 @@ export default function BetSlipAuditorTab({ onNavigateHistory, onTicketLocked })
                               const parsed = parseFloat(valStr);
                               if (!isNaN(parsed) && parsed > 1.0) setTargetOdds(parsed);
                             }}
-                            className="w-36 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-900"
+                            className="w-full sm:w-36 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-900"
                           />
-                          <span className="text-xs text-slate-400">odds multiplier</span>
+                          <span className="text-xs text-slate-400 whitespace-nowrap">odds multiplier</span>
                         </div>
                         <div className="bg-slate-50 rounded-xl px-4 py-2.5 text-xs text-slate-600 font-medium">
                           Current target: <strong className="text-slate-900">{targetOdds === 0 ? "Full ticket (all games)" : useCustomOdds ? `~${parseFloat(customOddsInput).toFixed(1)}x` : `~${targetOdds.toFixed(1)}x odds`}</strong>
@@ -1164,9 +1173,9 @@ export default function BetSlipAuditorTab({ onNavigateHistory, onTicketLocked })
                             <button
                               key={num}
                               onClick={() => { setTargetGames(num); setCustomGamesInput(""); setReEditResult(null); }}
-                              className={`px-4 py-2 rounded-xl text-xs font-extrabold transition-all border ${
+                              className={`px-3.5 sm:px-4 py-2 rounded-xl text-xs font-extrabold transition-all border ${
                                 !customGamesInput && targetGames === num
-                                  ? "bg-slate-900 border-slate-900 text-white shadow-sm"
+                                  ? "bg-slate-900 border-slate-900 text-white shadow-sm ring-1 ring-slate-900"
                                   : "bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100"
                               }`}
                             >
@@ -1174,7 +1183,7 @@ export default function BetSlipAuditorTab({ onNavigateHistory, onTicketLocked })
                             </button>
                           ))}
                         </div>
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-2 pt-1 flex-wrap sm:flex-nowrap">
                           <input
                             type="number"
                             placeholder="Custom (1–50)"
@@ -1188,9 +1197,9 @@ export default function BetSlipAuditorTab({ onNavigateHistory, onTicketLocked })
                               if (!isNaN(parsed) && parsed >= 1) setTargetGames(Math.min(50, parsed));
                               setReEditResult(null);
                             }}
-                            className="w-36 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-900"
+                            className="w-full sm:w-36 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-900"
                           />
-                          <span className="text-xs text-slate-400">games in ticket</span>
+                          <span className="text-xs text-slate-400 whitespace-nowrap">games in ticket</span>
                         </div>
                         <div className="bg-slate-50 rounded-xl px-4 py-2.5 text-xs text-slate-600 font-medium">
                           Current target: <strong className="text-slate-900">{targetGames} games</strong>
@@ -1238,21 +1247,37 @@ export default function BetSlipAuditorTab({ onNavigateHistory, onTicketLocked })
                         </button>
                       ))}
                     </div>
+
+                    {/* Master Ticket Option Banner when > 1 variant selected */}
+                    {numTickets >= 2 && (
+                      <div className="mt-2.5 p-3 rounded-xl bg-amber-50 border border-amber-200/90 flex items-start gap-2.5 text-xs text-amber-900 shadow-sm animate-fadeIn">
+                        <Zap className="w-4 h-4 text-amber-600 fill-amber-500 flex-shrink-0 mt-0.5" />
+                        <div className="space-y-1">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className="font-black text-amber-950">⚡ Master Ticket Option Active:</span>
+                            <span className="text-[9px] px-2 py-0.5 rounded-full bg-amber-200/80 text-amber-950 font-bold uppercase tracking-wider">Zero Overlap</span>
+                          </div>
+                          <p className="text-[11px] text-amber-800 leading-snug">
+                            Re-edits into <strong>{numTickets} independent slips</strong>. You will also have the option to merge all variants into 1 prioritized <strong>Master Ticket</strong> (5–15 games) on mobile & desktop.
+                          </p>
+                        </div>
+                      </div>
+                    )}
                   </div>
 
                   {/* Flex Cut — compact select */}
                   <div>
                     <label className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider block mb-2">Flex Cut Strategy</label>
-                    <div className="grid grid-cols-4 sm:grid-cols-8 gap-2">
+                    <div className="grid grid-cols-4 sm:grid-cols-8 gap-1.5 sm:gap-2">
                       {[
                         { id: "OFF", label: "Off", sub: "Straight" },
-                        { id: "1", label: "Cut 1", sub: "1 Loss Safe" },
-                        { id: "2", label: "Cut 2", sub: "2 Losses Safe" },
-                        { id: "3", label: "Cut 3", sub: "3 Losses Safe" },
-                        { id: "4", label: "Cut 4", sub: "4 Losses Safe" },
-                        { id: "5", label: "Cut 5", sub: "5 Losses Safe" },
-                        { id: "6", label: "Cut 6", sub: "6 Losses Safe" },
-                        { id: "7", label: "Cut 7", sub: "7 Losses Safe" },
+                        { id: "1", label: "Cut 1", sub: "1 Loss" },
+                        { id: "2", label: "Cut 2", sub: "2 Losses" },
+                        { id: "3", label: "Cut 3", sub: "3 Losses" },
+                        { id: "4", label: "Cut 4", sub: "4 Losses" },
+                        { id: "5", label: "Cut 5", sub: "5 Losses" },
+                        { id: "6", label: "Cut 6", sub: "6 Losses" },
+                        { id: "7", label: "Cut 7", sub: "7 Losses" },
                       ].map((item) => (
                         <button
                           key={item.id}
@@ -1438,13 +1463,8 @@ export default function BetSlipAuditorTab({ onNavigateHistory, onTicketLocked })
                               <button
                                 key={sIdx}
                                 type="button"
-                                onClick={() => {
-                                  setActivePortfolioIndex(sIdx);
-                                  setTimeout(() => {
-                                    document.getElementById("active-reedit-slip-container")?.scrollIntoView({ behavior: "smooth", block: "start" });
-                                  }, 50);
-                                }}
-                                className={`p-3 rounded-xl border text-left transition-all flex flex-col justify-between gap-2 cursor-pointer ${
+                                onClick={() => setActivePortfolioIndex(sIdx)}
+                                className={`p-2.5 sm:p-3 rounded-xl border text-left transition-all flex flex-col justify-between gap-1.5 sm:gap-2 cursor-pointer ${
                                   isMaster
                                     ? (isCurrent
                                       ? "bg-amber-950/70 border-amber-400 ring-2 ring-amber-400/50 text-white shadow-lg"
@@ -1461,9 +1481,9 @@ export default function BetSlipAuditorTab({ onNavigateHistory, onTicketLocked })
                                     ) : (
                                       <Ticket className="w-3.5 h-3.5 text-emerald-400" />
                                     )}
-                                    <span>{isMaster ? "Master Ticket" : `Slip #${sIdx + 1}`}</span>
+                                    <span className="truncate">{isMaster ? "Master Ticket" : `Slip #${sIdx + 1}`}</span>
                                   </span>
-                                  <span className={`text-[10px] px-2 py-0.5 rounded font-black ${
+                                  <span className={`text-[10px] px-1.5 sm:px-2 py-0.5 rounded font-black flex-shrink-0 ${
                                     isMaster
                                       ? "bg-amber-400 text-slate-950"
                                       : (isCurrent ? "bg-emerald-500 text-slate-950" : "bg-slate-800 text-slate-300")
@@ -1492,67 +1512,30 @@ export default function BetSlipAuditorTab({ onNavigateHistory, onTicketLocked })
                           })}
                         </div>
 
-                        {/* Mobile Quick Prev / Next Navigator */}
-                        <div className="flex items-center justify-between pt-2 border-t border-slate-800 text-xs sm:hidden">
-                          <button
-                            type="button"
-                            disabled={activePortfolioIndex === 0}
-                            onClick={() => {
-                              setActivePortfolioIndex(prev => Math.max(0, prev - 1));
-                              setTimeout(() => {
-                                document.getElementById("active-reedit-slip-container")?.scrollIntoView({ behavior: "smooth", block: "start" });
-                              }, 50);
-                            }}
-                            className={`px-3 py-1.5 rounded-lg font-bold flex items-center gap-1 ${
-                              activePortfolioIndex === 0 ? "text-slate-600 cursor-not-allowed" : "bg-slate-800 text-white hover:bg-slate-700"
-                            }`}
-                          >
-                            <ChevronLeft className="w-4 h-4" />
-                            <span>Prev Slip</span>
-                          </button>
-                          <span className="font-extrabold text-amber-400 text-[11px]">
-                            Viewing {portfolioSlips[activePortfolioIndex]?.is_master ? "⚡ Master Ticket" : `Slip #${activePortfolioIndex + 1}`} of {portfolioSlips.length}
-                          </span>
-                          <button
-                            type="button"
-                            disabled={activePortfolioIndex === portfolioSlips.length - 1}
-                            onClick={() => {
-                              setActivePortfolioIndex(prev => Math.min(portfolioSlips.length - 1, prev + 1));
-                              setTimeout(() => {
-                                document.getElementById("active-reedit-slip-container")?.scrollIntoView({ behavior: "smooth", block: "start" });
-                              }, 50);
-                            }}
-                            className={`px-3 py-1.5 rounded-lg font-bold flex items-center gap-1 ${
-                              activePortfolioIndex === portfolioSlips.length - 1 ? "text-slate-600 cursor-not-allowed" : "bg-slate-800 text-white hover:bg-slate-700"
-                            }`}
-                          >
-                            <span>Next Slip</span>
-                            <ChevronRight className="w-4 h-4" />
-                          </button>
-                        </div>
-
-                        {/* Merge into Master Ticket Action Panel */}
-                        <div className="bg-gradient-to-r from-amber-950/40 via-slate-900 to-amber-950/30 border border-amber-500/30 rounded-xl p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-inner">
-                          <div className="flex items-center gap-2.5">
-                            <div className="w-8 h-8 rounded-lg bg-amber-500/20 border border-amber-400/40 flex items-center justify-center flex-shrink-0">
-                              <Zap className="w-4 h-4 text-amber-400" />
-                            </div>
-                            <div>
-                              <h4 className="text-xs font-black text-amber-300 flex items-center gap-1.5">
-                                <span>Merge into Master Ticket</span>
-                                <span className="text-[9px] px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-200 border border-amber-400/30 font-bold uppercase">
-                                  Auto-Deduplicated
-                                </span>
-                              </h4>
-                              <p className="text-[11px] text-slate-400">
-                                Combines all slips, selects highest win probability for shared fixtures, and builds 1 prioritized slip.
-                              </p>
+                        {/* Merge into Master Ticket Action Panel (100% Mobile & Desktop Prominent) */}
+                        <div className="bg-gradient-to-r from-amber-950/60 via-slate-900 to-amber-950/40 border border-amber-500/40 rounded-2xl p-3.5 sm:p-4 space-y-3 shadow-lg">
+                          <div className="flex items-start sm:items-center justify-between gap-2">
+                            <div className="flex items-center gap-2.5">
+                              <div className="w-8 h-8 rounded-xl bg-amber-500/20 border border-amber-400/40 flex items-center justify-center flex-shrink-0">
+                                <Zap className="w-4 h-4 text-amber-400 fill-amber-400" />
+                              </div>
+                              <div>
+                                <h4 className="text-xs sm:text-sm font-black text-amber-300 flex items-center gap-1.5">
+                                  <span>Merge into Master Ticket</span>
+                                  <span className="text-[9px] px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-200 border border-amber-400/30 font-bold uppercase">
+                                    Auto-Deduplicated
+                                  </span>
+                                </h4>
+                                <p className="text-[11px] text-slate-400 leading-snug">
+                                  Combines all slips, selects highest win probability for shared fixtures, and builds 1 prioritized slip.
+                                </p>
+                              </div>
                             </div>
                           </div>
 
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <div className="flex items-center gap-1.5 bg-slate-950/80 p-1 rounded-lg border border-slate-800">
-                              <span className="text-[10px] text-slate-400 font-extrabold px-1.5">Games:</span>
+                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 pt-1 border-t border-amber-500/20">
+                            <div className="flex items-center justify-between sm:justify-start gap-1 sm:gap-1.5 bg-slate-950/90 p-1.5 rounded-xl border border-slate-800 w-full sm:w-auto">
+                              <span className="text-[10px] text-slate-400 font-extrabold px-1">Games:</span>
                               {[5, 8, 10, 12, 15].map((cnt) => (
                                 <button
                                   key={cnt}
@@ -1561,7 +1544,7 @@ export default function BetSlipAuditorTab({ onNavigateHistory, onTicketLocked })
                                     setMasterPrioritizedGames(cnt);
                                     setCustomMasterGamesInput(String(cnt));
                                   }}
-                                  className={`px-2.5 py-1 rounded text-xs font-black transition-all ${
+                                  className={`flex-1 sm:flex-initial px-2 sm:px-2.5 py-1 rounded-lg text-xs font-black transition-all ${
                                     masterPrioritizedGames === cnt
                                       ? "bg-amber-400 text-slate-950 shadow-sm"
                                       : "text-slate-400 hover:text-white"
@@ -1570,7 +1553,7 @@ export default function BetSlipAuditorTab({ onNavigateHistory, onTicketLocked })
                                   {cnt}
                                 </button>
                               ))}
-                              <div className="flex items-center gap-1 pl-1.5 border-l border-slate-800">
+                              <div className="flex items-center gap-1 pl-1 border-l border-slate-800">
                                 <input
                                   type="number"
                                   min="2"
@@ -1585,8 +1568,8 @@ export default function BetSlipAuditorTab({ onNavigateHistory, onTicketLocked })
                                       setMasterPrioritizedGames(Math.min(15, parsed));
                                     }
                                   }}
-                                  className="w-12 bg-slate-900 border border-slate-700 text-amber-300 placeholder-slate-500 rounded px-1.5 py-0.5 text-xs font-black text-center focus:outline-none focus:border-amber-400"
-                                  title="Type any number of games (e.g. 13 or 14, max 15)"
+                                  className="w-10 sm:w-12 bg-slate-900 border border-slate-700 text-amber-300 placeholder-slate-500 rounded px-1 py-0.5 text-xs font-black text-center focus:outline-none focus:border-amber-400"
+                                  title="Type any number of games (2 to 15)"
                                 />
                               </div>
                             </div>
@@ -1595,7 +1578,7 @@ export default function BetSlipAuditorTab({ onNavigateHistory, onTicketLocked })
                               type="button"
                               onClick={() => handleMergeToMaster(masterPrioritizedGames)}
                               disabled={mergingMaster}
-                              className="px-4 py-2 rounded-xl bg-gradient-to-r from-amber-400 to-amber-500 hover:from-amber-300 hover:to-amber-400 text-slate-950 text-xs font-black flex items-center gap-1.5 shadow-md hover:shadow-amber-500/20 transition-all cursor-pointer disabled:opacity-50"
+                              className="w-full sm:w-auto px-5 py-2.5 rounded-xl bg-gradient-to-r from-amber-400 via-amber-500 to-amber-400 text-slate-950 text-xs font-black flex items-center justify-center gap-2 shadow-lg hover:shadow-amber-500/20 active:scale-[0.99] transition-all cursor-pointer disabled:opacity-50"
                             >
                               {mergingMaster ? (
                                 <RefreshCw className="w-3.5 h-3.5 animate-spin" />
@@ -1605,6 +1588,35 @@ export default function BetSlipAuditorTab({ onNavigateHistory, onTicketLocked })
                               <span>{mergingMaster ? "Merging Slips..." : `Generate ${masterPrioritizedGames}-Game Master Slip`}</span>
                             </button>
                           </div>
+                        </div>
+
+                        {/* Mobile Quick Prev / Next Navigator */}
+                        <div className="flex items-center justify-between pt-2 border-t border-slate-800 text-xs sm:hidden">
+                          <button
+                            type="button"
+                            disabled={activePortfolioIndex === 0}
+                            onClick={() => setActivePortfolioIndex(prev => Math.max(0, prev - 1))}
+                            className={`px-3 py-1.5 rounded-lg font-bold flex items-center gap-1 ${
+                              activePortfolioIndex === 0 ? "text-slate-600 cursor-not-allowed" : "bg-slate-800 text-white hover:bg-slate-700"
+                            }`}
+                          >
+                            <ChevronLeft className="w-4 h-4" />
+                            <span>Prev Slip</span>
+                          </button>
+                          <span className="font-extrabold text-amber-400 text-[11px]">
+                            Viewing {portfolioSlips[activePortfolioIndex]?.is_master ? "⚡ Master Ticket" : `Slip #${activePortfolioIndex + 1}`} of {portfolioSlips.length}
+                          </span>
+                          <button
+                            type="button"
+                            disabled={activePortfolioIndex === portfolioSlips.length - 1}
+                            onClick={() => setActivePortfolioIndex(prev => Math.min(portfolioSlips.length - 1, prev + 1))}
+                            className={`px-3 py-1.5 rounded-lg font-bold flex items-center gap-1 ${
+                              activePortfolioIndex === portfolioSlips.length - 1 ? "text-slate-600 cursor-not-allowed" : "bg-slate-800 text-white hover:bg-slate-700"
+                            }`}
+                          >
+                            <span>Next Slip</span>
+                            <ChevronRight className="w-4 h-4" />
+                          </button>
                         </div>
                       </div>
                     )}

@@ -61,22 +61,22 @@ def _is_tier3_comp(comp_name: str) -> bool:
 def _is_expired_or_live(sel: Dict[str, Any]) -> Tuple[bool, str]:
     """
     Detects if a match has already kicked off, is live in-progress, concluded, ended,
-    or begins in less than 3 minutes (SportyBet locks markets pre-match).
+    suspended, or begins in less than 5 minutes (SportyBet locks markets pre-match).
     """
     status = str(sel.get("match_status") or sel.get("status") or "").upper().strip()
     if status in [
         "LIVE", "STARTED", "1H", "2H", "HT", "FINISHED", "FT", "ENDED",
         "CANCELLED", "POSTPONED", "ABANDONED", "CLOSED", "CONCLUDED",
-        "NULLED_EXPIRED", "IN_PROGRESS", "ONGOING"
+        "NULLED_EXPIRED", "IN_PROGRESS", "ONGOING", "SUSPENDED"
     ]:
-        return True, f"Match status is '{status}' (live or concluded)"
+        return True, f"Match status is '{status}' (live, suspended, or concluded)"
 
     start_ms = sel.get("start_time_ms") or sel.get("startTime") or 0
     if isinstance(start_ms, (int, float)) and start_ms > 0:
         now_ms = time.time() * 1000.0
-        # If match kickoff was in the past or is within the next 3 minutes (180,000 ms)
-        if (now_ms - start_ms) > -180000:
-            return True, "Match kickoff has already passed or begins in < 3 minutes"
+        # If match kickoff was in the past or begins within the next 5 minutes (300,000 ms)
+        if (now_ms - start_ms) > -300000:
+            return True, "Match kickoff has already passed or begins in < 5 minutes"
 
     return False, ""
 
@@ -487,7 +487,8 @@ async def re_edit_ticket(
             # ── RULE 1: HIGH-QUALITY SAFE ORIGINAL PICK PRESERVATION ─────────
             is_already_safe_tier1 = (
                 (any(k in m_lower or k in p_lower for k in ["team over", "team goals", "pure", "over 0.5", "over 1.5", "under 3.5", "under 4.5"]) and not any(x in p_lower for x in ["over 2.5", "over 3.5", "under 1.5", "under 0.5"])) or
-                (("double chance" in m_lower or "1x" in p_lower or "x2" in p_lower) and not ("12" in p_lower or "home or away" in p_lower))
+                (("double chance" in m_lower or "1x" in p_lower or "x2" in p_lower) and not ("12" in p_lower or "home or away" in p_lower)) or
+                (("handicap" in m_lower or "handicap" in p_lower or "(+" in p_lower) and any(x in p_lower for x in ["+1.5", "+2.0", "+1.0", "+2.5", "+0.5", "(+1", "(+2", "(+0"]))
             )
 
             if is_already_safe_tier1 and 1.15 <= orig_odds <= 1.55 and orig_m_id and orig_o_id:
@@ -652,10 +653,23 @@ async def re_edit_ticket(
                 continue
 
             prob = sel.get("estimated_prob", 0.0)
-            is_safe = prob >= SAFE_THRESHOLD
+            sel_odds = float(sel.get("odds") or sel.get("estimated_odds") or 0.0)
+            is_safe = prob >= SAFE_THRESHOLD and sel_odds >= 1.15
 
             if is_safe:
                 sel_clean = dict(sel)
+                orig_m_id = sel.get("provider_market_id") or sel.get("_sportybet_market_id")
+                orig_o_id = sel.get("provider_outcome_id") or sel.get("_sportybet_outcome_id")
+                orig_spec = sel.get("provider_specifier") or sel.get("_sportybet_specifier")
+                if orig_m_id:
+                    sel_clean["provider_market_id"] = orig_m_id
+                    sel_clean["_sportybet_market_id"] = orig_m_id
+                if orig_o_id:
+                    sel_clean["provider_outcome_id"] = orig_o_id
+                    sel_clean["_sportybet_outcome_id"] = orig_o_id
+                if orig_spec:
+                    sel_clean["provider_specifier"] = orig_spec
+                    sel_clean["_sportybet_specifier"] = orig_spec
                 sel_clean["action"] = "KEEP"
                 sel_clean["reason"] = f"Vetted & passed 5-Gate safety threshold ({prob*100:.1f}% win probability)"
                 final_selections.append(sel_clean)

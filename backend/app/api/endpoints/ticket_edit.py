@@ -124,6 +124,11 @@ async def run_re_edit(req: ReEditRequest, db: Session = Depends(get_db)):
                     timeout=1.2
                 )
                 if b_res.get("status") == "SUCCESS" and b_res.get("booking_code"):
+                    if b_res.get("booked_selections"):
+                        primary["final_selections"] = b_res.get("booked_selections")
+                        res["final_selections"] = b_res.get("booked_selections")
+                        res["final_count"] = len(b_res.get("booked_selections"))
+                        primary["final_count"] = len(b_res.get("booked_selections"))
                     primary["booking_code"] = b_res.get("booking_code")
                     primary["share_url"] = b_res.get("load_url")
                     primary["verification_status"] = b_res.get("verification_status", "BOOKING_VERIFIED")

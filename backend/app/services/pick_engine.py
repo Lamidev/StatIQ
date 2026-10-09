@@ -782,7 +782,7 @@ class MatchIQPickEngine:
                             if ("1x" in s_kw and ("1x" in o_desc or o_id == "9")) or ("x2" in s_kw and ("x2" in o_desc or o_id == "11")) or ("12" in s_kw and ("12" in o_desc or o_id == "10")):
                                 try:
                                     real_o = float(o.get("odds"))
-                                    if real_o >= 1.05:
+                                    if real_o >= 1.15:
                                         cand["odds"] = real_o
                                         cand["market_id"] = m_id or "10"
                                         cand["outcome_id"] = o_id
@@ -807,7 +807,7 @@ class MatchIQPickEngine:
                                 if (is_over and ("over" in o_desc or o_id == "12")) or (not is_over and ("under" in o_desc or o_id == "13")):
                                     try:
                                         real_o = float(o.get("odds"))
-                                        if real_o >= 1.05:
+                                        if real_o >= 1.15:
                                             cand["odds"] = real_o
                                             cand["market_id"] = m_id or "18"
                                             cand["outcome_id"] = o_id
@@ -827,7 +827,7 @@ class MatchIQPickEngine:
                             if ("(1)" in s_kw and (o_id == "1" or "home" in o_desc or "1" == o_desc)) or ("(2)" in s_kw and (o_id == "3" or "away" in o_desc or "2" == o_desc)):
                                 try:
                                     real_o = float(o.get("odds"))
-                                    if real_o >= 1.05:
+                                    if real_o >= 1.15:
                                         cand["odds"] = real_o
                                         cand["market_id"] = m_id or "1"
                                         cand["outcome_id"] = o_id
@@ -848,7 +848,7 @@ class MatchIQPickEngine:
                                 o_id = str(o.get("outcome_id") or o.get("id") or "75")
                                 try:
                                     real_o = float(o.get("odds"))
-                                    if real_o >= 1.05:
+                                    if real_o >= 1.15:
                                         cand["odds"] = real_o
                                         cand["market_id"] = target_m_id
                                         cand["outcome_id"] = o_id
@@ -941,7 +941,7 @@ class MatchIQPickEngine:
         # GATE 4: Dynamic Odds Alignment Check
         # -------------------------------------------------------------
         pick_odds = best_cand["odds"]
-        lower_bound = max(1.05, per_leg_target_odds * 0.70)
+        lower_bound = max(1.15, per_leg_target_odds * 0.70)
         upper_bound = per_leg_target_odds * 1.45
 
         if not (lower_bound <= pick_odds <= upper_bound):
@@ -1112,14 +1112,15 @@ class MatchIQPickEngine:
         # 1. Double Chance Lines (Draw-Protected 1X & X2 ONLY - "12" is permanently banned)
         if _cat_allowed("DOUBLE_CHANCE"):
             dc_work = dict(dc_odds)
-            if "1X" not in dc_work and r_home > 1.0 and r_draw > 1.0:
-                dc_work["1X"] = round(1.0 / max(0.01, (ph + pd) * 1.04), 2)
-            if "X2" not in dc_work and r_away > 1.0 and r_draw > 1.0:
-                dc_work["X2"] = round(1.0 / max(0.01, (pa + pd) * 1.04), 2)
+            if not raw_market_ids:
+                if "1X" not in dc_work and r_home > 1.0 and r_draw > 1.0:
+                    dc_work["1X"] = round(1.0 / max(0.01, (ph + pd) * 1.04), 2)
+                if "X2" not in dc_work and r_away > 1.0 and r_draw > 1.0:
+                    dc_work["X2"] = round(1.0 / max(0.01, (pa + pd) * 1.04), 2)
 
             for dc_key in ["1X", "X2"]:
                 dc_val = dc_work.get(dc_key)
-                if not dc_val:
+                if not dc_val or float(dc_val) < 1.15:
                     continue
 
                 # TACTICAL RULE: Away Powerhouse Protection - Never give 1X to a home underdog vs an away powerhouse
@@ -1160,11 +1161,10 @@ class MatchIQPickEngine:
                         ))
 
         def _mkt_available(mid: str) -> bool:
-            if str(mid) in ("1", "10", "18", "19", "20"):
-                return True
-            if not raw_market_ids:
-                return True
-            return str(mid) in raw_market_ids
+            s_mid = str(mid)
+            if raw_market_ids:
+                return s_mid in raw_market_ids
+            return s_mid in ("1", "10", "18", "29")
 
         # 2. Asian Handicaps (+1.5 for 50/50 games)
         if _cat_allowed("HANDICAP") and _mkt_available("16"):
@@ -1205,7 +1205,8 @@ class MatchIQPickEngine:
                         tactical_reason=f"🎯 Equal-Strength +1.5 Cushion (Wins on Win/Draw/1-Goal Loss)"
                     ))
 
-        # 3. Over/Under Lines (Universal SportyBet Half-Point Lines: 1.5, 2.5, 3.5, 4.5)
+        # 3. Over/Under Lines (Universal SportyBet Half-Point Lines: Over 0.5/1.5 ONLY, Under 3.5/4.5 ONLY)
+        # STRICT GUARDRAIL: Over 2.5 is permanently banned across accumulator tickets.
         if _cat_allowed("OVER_UNDER") and len(ou_lines) > 0 and _mkt_available("18"):
             is_high_scoring_league = any(k in comp.upper() or k in country.upper() for k in HIGH_SCORING_LEAGUES)
             for ou in ou_lines:
@@ -1214,23 +1215,24 @@ class MatchIQPickEngine:
                 except Exception:
                     continue
 
-                if raw_line_num not in (0.5, 1.5, 2.5, 3.5, 4.5):
-                    continue
-
                 line_str = f"{raw_line_num:.1f}"
                 o_odd = ou.get("over")
                 u_odd = ou.get("under")
-                if o_odd and min_odds_floor <= float(o_odd) <= max_odds_cap:
+
+                # OVER LINES: Strictly Over 1.5 ONLY (Over 0.5 is micro-odds < 1.15; Over 2.5+ is volatile)
+                if raw_line_num in (1.5,) and o_odd and min_odds_floor <= float(o_odd) <= max_odds_cap:
+                    if float(o_odd) < 1.15:
+                        continue
                     # Do not pick Over 1.5 blindly if H2H proves defensive grinder (avg <= 1.5 goals)
-                    if raw_line_num <= 1.5 and h2h_total >= 2 and h2h_avg_goals <= 1.5 and h2h_avg_goals > 0:
+                    if h2h_total >= 2 and h2h_avg_goals <= 1.5 and h2h_avg_goals > 0:
                         pass
                     else:
                         sel = f"Over {line_str} Goals"
                         prob = round(min(0.96, 1.0 / (float(o_odd) * 1.04)), 3)
                         if prob >= prob_floor and sel not in seen_selections:
                             seen_selections.add(sel)
-                            t_boost = 25.0 if archetype_type == "HIGH_GOAL_EXPECTANCY" else (15.0 if raw_line_num <= 1.5 else 0.0)
-                            if is_high_scoring_league and raw_line_num <= 1.5:
+                            t_boost = 25.0 if archetype_type == "HIGH_GOAL_EXPECTANCY" else 15.0
+                            if is_high_scoring_league:
                                 t_boost += 20.0
                                 t_reason = f"⚡ High Goal Expectancy (88%+ Over {line_str} Rate)"
                             else:
@@ -1248,7 +1250,11 @@ class MatchIQPickEngine:
                                 tactical_archetype=archetype_type, tactical_score=t_boost,
                                 tactical_reason=t_reason
                             ))
-                if u_odd and min_odds_floor <= float(u_odd) <= max_odds_cap and raw_line_num >= 3.5:
+
+                # UNDER LINES: Strictly Under 3.5 and Under 4.5 ONLY (Under 2.5 is volatile and banned)
+                if raw_line_num in (3.5, 4.5) and u_odd and min_odds_floor <= float(u_odd) <= max_odds_cap:
+                    if float(u_odd) < 1.15:
+                        continue
                     if raw_line_num <= 3.5 and (is_high_scoring_league or archetype_type == "HEAVY_FAVORITE" or (h2h_total >= 2 and h2h_avg_goals >= 3.5)):
                         continue
                     sel = f"Under {line_str} Goals"
@@ -1271,11 +1277,10 @@ class MatchIQPickEngine:
                             tactical_reason=t_reason
                         ))
 
-        # 4. Team Goals (Team Over 1.5 Goals with Empirical H2H & Poisson Verification)
+        # 4. Team Goals (Team Over 1.5 Goals with Empirical H2H & Genuine Live Odds Verification)
         if _cat_allowed("TEAM_GOALS"):
             # Home Team Goals
-            if ph >= 0.52 and r_home <= 2.10 and _mkt_available("19"):
-                # Home Over 1.5 Goals: STRICT EMPIRICAL H2H & FORM SCORING CHECK
+            if ph >= 0.52 and r_home <= 2.10:
                 h2h_meetings = h2h_data.get("last_5", [])
                 h2h_home_scored_2plus = any(int(m.get("home_score", 0) or 0) >= 2 for m in h2h_meetings)
                 home_h2h_avg = float(h2h_data.get("home_avg_goals_scored", 0.0) or 0.0)
@@ -1284,26 +1289,49 @@ class MatchIQPickEngine:
                     (h2h_total == 0 and exp_h >= 1.85)
                 )
                 if has_home_scoring_proof and ph >= 0.60 and r_home <= 1.65:
-                    prob_h_o15 = round(1.0 - math.exp(-exp_h) * (1.0 + exp_h), 3)
-                    odd_h_o15 = round(max(1.18, min(1.65, 1.0 / (prob_h_o15 * 1.04))), 2)
-                    sel_h15 = f"{home} Over 1.5 Team Goals"
-                    if prob_h_o15 >= prob_floor and min_odds_floor <= odd_h_o15 <= max_odds_cap and sel_h15 not in seen_selections:
-                        seen_selections.add(sel_h15)
-                        candidates.append(PickDecision(
-                            fixture_id=fix_id, home_team=home, away_team=away, competition=comp,
-                            kickoff_datetime=kickoff, market_name="Team Goals", selection_name=sel_h15,
-                            model_probability=prob_h_o15, estimated_odds=odd_h_o15,
-                            elo_gap=elo_gap, tier_context=tier_context,
-                            approved=True, confidence_tier="HIGH", gate_results={"gate1": "PASS", "gate2": "PASS"},
-                            rejection_reason=None, decision_audit_log=[], kelly_quarter_stake_pct=2.5,
-                            raw_match_data=fixture, market_id="19", outcome_id="12", specifier="total=1.5",
-                            league_tier=tier_label, league_tier_score=tier_score, tactical_archetype=archetype_type, tactical_score=25.0,
-                            tactical_reason=f"🔥 {home} 2+ Team Goals Attack Strength"
-                        ))
+                    # Look up genuine SportyBet Market 19 with total=1.5
+                    real_h_odd = None
+                    for gl in (fixture.get("home_team_goals") or []):
+                        if str(gl.get("line") or "").strip() in ("1.5", "1.50"):
+                            try:
+                                ov_val = float(gl.get("over") or 0.0)
+                                if ov_val >= 1.15:
+                                    real_h_odd = ov_val
+                                    break
+                            except Exception:
+                                pass
+                    if not real_h_odd and raw_markets:
+                        for rm in raw_markets:
+                            if str(rm.get("id") or rm.get("market_id") or "") == "19" and "total=1.5" in str(rm.get("specifier") or ""):
+                                for ro in (rm.get("outcomes") or []):
+                                    if str(ro.get("id") or ro.get("outcome_id") or "") == "12":
+                                        try:
+                                            ov_val = float(ro.get("odds") or ro.get("oddsValue") or 0.0)
+                                            if ov_val >= 1.15:
+                                                real_h_odd = ov_val
+                                                break
+                                        except Exception:
+                                            pass
+
+                    if real_h_odd is not None and min_odds_floor <= real_h_odd <= max_odds_cap:
+                        prob_h_o15 = round(1.0 - math.exp(-exp_h) * (1.0 + exp_h), 3)
+                        sel_h15 = f"{home} Over 1.5 Team Goals"
+                        if prob_h_o15 >= prob_floor and sel_h15 not in seen_selections:
+                            seen_selections.add(sel_h15)
+                            candidates.append(PickDecision(
+                                fixture_id=fix_id, home_team=home, away_team=away, competition=comp,
+                                kickoff_datetime=kickoff, market_name="Team Goals", selection_name=sel_h15,
+                                model_probability=prob_h_o15, estimated_odds=real_h_odd,
+                                elo_gap=elo_gap, tier_context=tier_context,
+                                approved=True, confidence_tier="HIGH", gate_results={"gate1": "PASS", "gate2": "PASS"},
+                                rejection_reason=None, decision_audit_log=[], kelly_quarter_stake_pct=2.5,
+                                raw_match_data=fixture, market_id="19", outcome_id="12", specifier="total=1.5",
+                                league_tier=tier_label, league_tier_score=tier_score, tactical_archetype=archetype_type, tactical_score=25.0,
+                                tactical_reason=f"🔥 {home} 2+ Team Goals Attack Strength"
+                            ))
 
             # Away Team Goals
-            if pa >= 0.52 and r_away <= 2.10 and _mkt_available("20"):
-                # Away Over 1.5 Goals: STRICT EMPIRICAL H2H & FORM SCORING CHECK
+            if pa >= 0.52 and r_away <= 2.10:
                 h2h_meetings = h2h_data.get("last_5", [])
                 h2h_away_scored_2plus = any(int(m.get("away_score", 0) or 0) >= 2 for m in h2h_meetings)
                 away_h2h_avg = float(h2h_data.get("away_avg_goals_scored", 0.0) or 0.0)
@@ -1312,22 +1340,46 @@ class MatchIQPickEngine:
                     (h2h_total == 0 and exp_a >= 1.85)
                 )
                 if has_away_scoring_proof and pa >= 0.60 and r_away <= 1.65:
-                    prob_a_o15 = round(1.0 - math.exp(-exp_a) * (1.0 + exp_a), 3)
-                    odd_a_o15 = round(max(1.18, min(1.65, 1.0 / (prob_a_o15 * 1.04))), 2)
-                    sel_a15 = f"{away} Over 1.5 Team Goals"
-                    if prob_a_o15 >= prob_floor and min_odds_floor <= odd_a_o15 <= max_odds_cap and sel_a15 not in seen_selections:
-                        seen_selections.add(sel_a15)
-                        candidates.append(PickDecision(
-                            fixture_id=fix_id, home_team=home, away_team=away, competition=comp,
-                            kickoff_datetime=kickoff, market_name="Team Goals", selection_name=sel_a15,
-                            model_probability=prob_a_o15, estimated_odds=odd_a_o15,
-                            elo_gap=elo_gap, tier_context=tier_context,
-                            approved=True, confidence_tier="HIGH", gate_results={"gate1": "PASS", "gate2": "PASS"},
-                            rejection_reason=None, decision_audit_log=[], kelly_quarter_stake_pct=2.5,
-                            raw_match_data=fixture, market_id="20", outcome_id="12", specifier="total=1.5",
-                            league_tier=tier_label, league_tier_score=tier_score, tactical_archetype=archetype_type, tactical_score=25.0,
-                            tactical_reason=f"🔥 {away} 2+ Team Goals Attack Strength"
-                        ))
+                    # Look up genuine SportyBet Market 20 with total=1.5
+                    real_a_odd = None
+                    for gl in (fixture.get("away_team_goals") or []):
+                        if str(gl.get("line") or "").strip() in ("1.5", "1.50"):
+                            try:
+                                ov_val = float(gl.get("over") or 0.0)
+                                if ov_val >= 1.15:
+                                    real_a_odd = ov_val
+                                    break
+                            except Exception:
+                                pass
+                    if not real_a_odd and raw_markets:
+                        for rm in raw_markets:
+                            if str(rm.get("id") or rm.get("market_id") or "") == "20" and "total=1.5" in str(rm.get("specifier") or ""):
+                                for ro in (rm.get("outcomes") or []):
+                                    if str(ro.get("id") or ro.get("outcome_id") or "") == "12":
+                                        try:
+                                            ov_val = float(ro.get("odds") or ro.get("oddsValue") or 0.0)
+                                            if ov_val >= 1.15:
+                                                real_a_odd = ov_val
+                                                break
+                                        except Exception:
+                                            pass
+
+                    if real_a_odd is not None and min_odds_floor <= real_a_odd <= max_odds_cap:
+                        prob_a_o15 = round(1.0 - math.exp(-exp_a) * (1.0 + exp_a), 3)
+                        sel_a15 = f"{away} Over 1.5 Team Goals"
+                        if prob_a_o15 >= prob_floor and sel_a15 not in seen_selections:
+                            seen_selections.add(sel_a15)
+                            candidates.append(PickDecision(
+                                fixture_id=fix_id, home_team=home, away_team=away, competition=comp,
+                                kickoff_datetime=kickoff, market_name="Team Goals", selection_name=sel_a15,
+                                model_probability=prob_a_o15, estimated_odds=real_a_odd,
+                                elo_gap=elo_gap, tier_context=tier_context,
+                                approved=True, confidence_tier="HIGH", gate_results={"gate1": "PASS", "gate2": "PASS"},
+                                rejection_reason=None, decision_audit_log=[], kelly_quarter_stake_pct=2.5,
+                                raw_match_data=fixture, market_id="20", outcome_id="12", specifier="total=1.5",
+                                league_tier=tier_label, league_tier_score=tier_score, tactical_archetype=archetype_type, tactical_score=25.0,
+                                tactical_reason=f"🔥 {away} 2+ Team Goals Attack Strength"
+                            ))
 
         # 5. Advanced Tactical Options: Win Either Half (Draw Immune for Confirmed Favorites)
         if _cat_allowed("COMBO") or _cat_allowed("DOUBLE_CHANCE"):
@@ -1544,12 +1596,12 @@ class MatchIQPickEngine:
             import itertools
 
             # Filter candidates for Rollover with expanded multi-variant suite:
-            # Requires minimum leg odds of 1.08 to 1.65
+            # Requires strict minimum leg odds of 1.15 to 1.65 (no sub-1.15 bloat)
             def _is_safe_rollover_market(d) -> bool:
                 m_lower = (d.market_name or "").lower()
                 s_lower = (d.selection_name or "").lower()
                 o_val = float(d.estimated_odds or 1.0)
-                if o_val < 1.08 or o_val > 1.65:
+                if o_val < 1.15 or o_val > 1.65:
                     return False
 
                 # 1. Double Chance 1X / X2 (Draw Protected)
@@ -1584,10 +1636,12 @@ class MatchIQPickEngine:
                 d for d in approved_decisions
                 if _is_safe_rollover_market(d)
                 and d.model_probability >= rollover_prob_floor
+                and float(d.estimated_odds or 1.0) >= 1.15
             ]
 
-            # Use all valid candidates from the user's selected league pool
-            pool_to_use = valid_cands if len(valid_cands) >= 2 else approved_decisions
+            # Use all valid candidates from the user's selected league pool (strictly >= 1.15)
+            pool_candidates = valid_cands if len(valid_cands) >= 2 else approved_decisions
+            pool_to_use = [d for d in pool_candidates if float(d.estimated_odds or 1.0) >= 1.15]
 
             # Group candidates by distinct fixture
             fixtures_dict: Dict[str, List[PickDecision]] = {}
