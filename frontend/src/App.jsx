@@ -4,7 +4,6 @@ import GameweekFixturesTab from "./components/GameweekFixturesTab";
 import TicketBuilderTab from "./components/TicketBuilderTab";
 import BetSlipAuditorTab from "./components/BetSlipAuditorTab";
 import BetHistoryTab from "./components/BetHistoryTab";
-import BacktesterTab from "./components/BacktesterTab";
 import AccessControlTab from "./components/AccessControlTab";
 import PasskeyAuthGate from "./components/PasskeyAuthGate";
 import VirtualTraderApp from "./virtual-trader/VirtualTraderApp";
@@ -89,7 +88,6 @@ export default function App() {
             onTicketsChanged={fetchActiveTickets}
           />
         )}
-        {activeTab === "backtester" && <BacktesterTab />}
         {activeTab === "access" && <AccessControlTab currentUser={authenticatedUser} />}
         {activeTab === "virtual-trader" && <VirtualTraderApp />}
       </main>

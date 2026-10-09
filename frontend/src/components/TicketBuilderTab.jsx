@@ -882,7 +882,7 @@ Slovakia vs Moldova`;
         res?.message ||
         res?.ticket?.error ||
         (res?.status === "TIMEOUT"
-          ? "Request timed out (>25s). The engine is busy — please try again."
+          ? "Request timed out (>60s). The engine is busy — please try again."
           : res?.status === "HTTP_ERROR"
           ? `Backend error (HTTP ${res.http_status}). Ensure backend is running.`
           : "MatchIQ 5-Gate Pick Engine failed to build ticket. Check backend logs.")

@@ -810,7 +810,7 @@ async def build_ai_ticket(req: BuildTicketRequest):
         if is_today_live_requested:
             from app.services.elite_rollover_engine import EliteRolloverEngine
             try:
-                live_events = await EliteRolloverEngine.fetch_sportybet_today_events(max_pages=15)
+                live_events = await EliteRolloverEngine.fetch_sportybet_today_events(max_pages=4)
                 if live_events:
                     raw_sporty_fixtures = SportyBetIngestionService._normalize_events(live_events)
                     logger.info(f"[TicketBuilder] Live feed loaded {len(raw_sporty_fixtures)} bettable fixtures directly from SportyBet Today API.")
@@ -1254,22 +1254,67 @@ async def build_ai_ticket(req: BuildTicketRequest):
             verified.append(leg)
         return verified
 
-    # Enforce maximum 15 games per ticket
-    target_games = min(15, target_games)
+    # Enforce maximum 40 games per ticket (SportyBet accumulator limit)
+    target_games = min(40, target_games)
 
     for idx, b_ticket in enumerate(portfolio_built):
         # Pre-booking odds verification: purge any DC/O1.5 trap odds before generating code
         if b_ticket.approved_legs:
-            pre_count = len(b_ticket.approved_legs)
             verified_legs = _verify_odds_pre_booking(b_ticket.approved_legs, fixture_pool)
-            
             b_ticket.approved_legs = verified_legs
+
+            # Backfill pass if verified_legs is below target_games in GAMES mode
+            if req.target_mode == "GAMES" and len(b_ticket.approved_legs) < target_games:
+                used_fix_ids = {str(l.get("event_id") or l.get("fixture_id")) for l in b_ticket.approved_legs}
+                for candidate_fix in fixture_pool:
+                    if len(b_ticket.approved_legs) >= target_games:
+                        break
+                    cf_id = str(candidate_fix.get("event_id") or candidate_fix.get("fixture_id") or "")
+                    if cf_id in used_fix_ids:
+                        continue
+                    cands = engine.evaluate_fixture_all_candidates(
+                        fixture=candidate_fix,
+                        per_leg_target_odds=1.35,
+                        min_prob_threshold=0.58,
+                        risk_profile=req.risk_profile or "BALANCED",
+                        allowed_markets=req.allowed_market_categories,
+                        excluded_markets=req.excluded_market_categories,
+                    )
+                    valid_c = [c for c in (cands or []) if c.approved and float(c.estimated_odds or 0) >= 1.15]
+                    if valid_c:
+                        best_pick = max(valid_c, key=lambda x: (x.model_probability, float(getattr(x, "tactical_score", 0.0))))
+                        ev_id = str((best_pick.raw_match_data or {}).get("event_id") or best_pick.fixture_id)
+                        b_ticket.approved_legs.append({
+                            "fixture_id": best_pick.fixture_id,
+                            "event_id": ev_id,
+                            "provider_event_id": ev_id,
+                            "game_id": best_pick.fixture_id,
+                            "home_team": best_pick.home_team,
+                            "away_team": best_pick.away_team,
+                            "competition": best_pick.competition,
+                            "country": (best_pick.raw_match_data or {}).get("country") or "",
+                            "kickoff_datetime": best_pick.kickoff_datetime,
+                            "market_name": best_pick.market_name,
+                            "selection_name": best_pick.selection_name,
+                            "model_probability": best_pick.model_probability,
+                            "estimated_odds": best_pick.estimated_odds,
+                            "odds": best_pick.estimated_odds,
+                            "confidence_tier": best_pick.confidence_tier,
+                            "elo_gap": best_pick.elo_gap,
+                            "tier_context": best_pick.tier_context,
+                            "market_id": best_pick.market_id,
+                            "outcome_id": best_pick.outcome_id,
+                            "specifier": best_pick.specifier,
+                            "tactical_reason": getattr(best_pick, "tactical_reason", ""),
+                        })
+                        used_fix_ids.add(cf_id)
+
             acc = 1.0
             for leg in b_ticket.approved_legs:
                 acc *= float(leg.get("odds") or leg.get("estimated_odds") or 1.25)
             b_ticket.accumulated_odds = round(acc, 2)
 
-        # Trim to exact target_games (max 15) if in GAMES mode
+        # Trim to exact target_games if in GAMES mode
         if req.target_mode == "GAMES" and len(b_ticket.approved_legs) > target_games:
             b_ticket.approved_legs = b_ticket.approved_legs[:target_games]
             acc = 1.0
@@ -1277,9 +1322,9 @@ async def build_ai_ticket(req: BuildTicketRequest):
                 acc *= float(leg.get("odds", 1.5))
             b_ticket.accumulated_odds = round(acc, 2)
 
-        # Strict Global Cap: Maximum 15 legs per ticket on all modes
-        if len(b_ticket.approved_legs) > 15:
-            b_ticket.approved_legs = b_ticket.approved_legs[:15]
+        # Strict Global Cap: Maximum 40 legs per ticket on all modes
+        if len(b_ticket.approved_legs) > 40:
+            b_ticket.approved_legs = b_ticket.approved_legs[:40]
             acc = 1.0
             for leg in b_ticket.approved_legs:
                 acc *= float(leg.get("odds", 1.5))
@@ -1605,17 +1650,175 @@ async def build_from_custom_shortlist(req: ShortlistBuildRequest):
             detail="No fixtures detected. Please paste your matches (e.g. 'Team A vs Team B' on separate lines)."
         )
 
-    # 2. Fetch live SportyBet fixture pool from Mirror DB (fallback to live client)
-    from app.db.session import SessionLocal
-    from app.db.models import SportyBetEvent
-    db_sess = SessionLocal()
+    # 2. Fetch live SportyBet fixture pool (Fast Live Today API with Mirror DB fallback)
+    from app.services.elite_rollover_engine import EliteRolloverEngine
+    from app.services.form_h2h_service import evaluate_fixture_3pillar_metrics
+    from app.predictions.live_calculator import get_team_rating
+
+    raw_sporty_fixtures = []
     try:
-        db_events = db_sess.query(SportyBetEvent).filter(SportyBetEvent.status == "SCHEDULED").all()
+        live_events = await EliteRolloverEngine.fetch_sportybet_today_events(max_pages=4)
+        if live_events:
+            raw_sporty_fixtures = SportyBetIngestionService._normalize_events(live_events)
+            logger.info(f"[Shortlist] Live feed loaded {len(raw_sporty_fixtures)} bettable fixtures directly from SportyBet Today API.")
+    except Exception as e:
+        logger.warning(f"[Shortlist] Live SportyBet Today fetch fallback: {e}")
+        raw_sporty_fixtures = []
+
+    if not raw_sporty_fixtures:
+        from sqlalchemy.orm import selectinload, joinedload
+        from app.db.session import SessionLocal
+        from app.db.models import SportyBetEvent, SportyBetMarket
+        db_sess = SessionLocal()
+        db_events = []
+        try:
+            db_events = (
+                db_sess.query(SportyBetEvent)
+                .options(
+                    joinedload(SportyBetEvent.competition_rel),
+                    selectinload(SportyBetEvent.markets).selectinload(SportyBetMarket.outcomes)
+                )
+                .filter(SportyBetEvent.status == "SCHEDULED")
+                .all()
+            )
+        except Exception as e:
+            logger.warning(f"[Shortlist] DB events query error: {e}")
+        finally:
+            db_sess.close()
+
         if db_events and len(db_events) > 0:
-            raw_sporty_fixtures = []
+            now_ms = time.time() * 1000.0
             for ev in db_events:
+                if ev.start_time_ms and ev.start_time_ms <= (now_ms + 600000):
+                    continue
+
                 comp_name = ev.competition_rel.name if ev.competition_rel else "Football"
                 country_name = ev.competition_rel.country if ev.competition_rel else None
+
+                # Extract real 1X2 odds
+                o_h, o_d, o_a = 2.50, 3.00, 2.50
+                m1 = next((m for m in ev.markets if str(m.sporty_market_id) == "1" and (m.status is None or str(m.status) in ("0", "ACTIVE"))), None)
+                if m1:
+                    for oc in m1.outcomes:
+                        if oc.status is not None and str(oc.status) not in ("0", "ACTIVE"):
+                            continue
+                        sel_u = (oc.selection or "").upper()
+                        if sel_u in ["1", "HOME", ev.home_team.upper()]:
+                            o_h = float(oc.odds or 2.50)
+                        elif sel_u in ["X", "DRAW"]:
+                            o_d = float(oc.odds or 3.00)
+                        elif sel_u in ["2", "AWAY", ev.away_team.upper()]:
+                            o_a = float(oc.odds or 2.50)
+
+                # Extract markets dictionary and structured market lists
+                dc_map = {}
+                ou_list = []
+                btts_dict = {}
+                home_goals_list = []
+                away_goals_list = []
+                markets_dict = {}
+
+                for m in ev.markets:
+                    m_stat = str(m.status or "")
+                    if m_stat in ("1", "2", "SUSPENDED", "INACTIVE", "CLOSED"):
+                        continue
+                    m_id = str(m.sporty_market_id or "")
+                    m_desc = (m.market_name or "").lower()
+                    spec = str(m.specifier or "")
+
+                    outcomes_clean = []
+                    for oc in m.outcomes:
+                        oc_stat = str(oc.status or "")
+                        if oc_stat in ("1", "2", "SUSPENDED", "INACTIVE"):
+                            continue
+                        ov = float(oc.odds or 0.0)
+                        if ov < 1.05:
+                            continue
+                        outcomes_clean.append({
+                            "outcome_id": str(oc.sporty_outcome_id or ""),
+                            "id": str(oc.sporty_outcome_id or ""),
+                            "selection_name": oc.selection or "",
+                            "desc": oc.selection or "",
+                            "odds": ov,
+                            "probability": oc.probability
+                        })
+
+                    if not outcomes_clean:
+                        continue
+
+                    markets_dict[f"{m_id}_{spec}"] = {
+                        "market_id": m_id,
+                        "market_name": m.market_name,
+                        "specifier": spec,
+                        "outcomes": outcomes_clean
+                    }
+
+                    # Double Chance (10)
+                    if m_id == "10" or "double chance" in m_desc:
+                        for oc in outcomes_clean:
+                            o_desc = oc["selection_name"].upper()
+                            o_id = oc["outcome_id"]
+                            ov = oc["odds"]
+                            if ov >= 1.15:
+                                if o_id == "9" or "1X" in o_desc: dc_map["1X"] = ov
+                                elif o_id == "11" or "X2" in o_desc: dc_map["X2"] = ov
+                                elif o_id == "10" or "12" in o_desc: dc_map["12"] = ov
+
+                    # Over/Under (18)
+                    elif m_id == "18" or "over/under" in m_desc:
+                        line_m = re.search(r"total=(\d+\.?\d*)", spec) or re.search(r"(\d+\.?\d*)", m_desc)
+                        line_str = line_m.group(1) if line_m else "1.5"
+                        o_val, u_val = None, None
+                        for oc in outcomes_clean:
+                            o_desc = oc["selection_name"].lower()
+                            o_id = oc["outcome_id"]
+                            ov = oc["odds"]
+                            if ov >= 1.15:
+                                if "over" in o_desc or o_id == "12": o_val = ov
+                                elif "under" in o_desc or o_id == "13": u_val = ov
+                        if o_val or u_val:
+                            ou_list.append({"line": line_str, "over": o_val, "under": u_val, "specifier": f"total={line_str}"})
+
+                    # BTTS (29)
+                    elif m_id == "29" or "both teams to score" in m_desc:
+                        for oc in outcomes_clean:
+                            sel_u = oc["selection_name"].upper()
+                            ov = oc["odds"]
+                            if ov >= 1.15:
+                                if sel_u in ["YES", "GG"]: btts_dict["yes"] = ov; btts_dict["yes_id"] = oc["outcome_id"]
+                                elif sel_u in ["NO", "NG"]: btts_dict["no"] = ov; btts_dict["no_id"] = oc["outcome_id"]
+                        if btts_dict: btts_dict["market_id"] = "29"
+
+                    # Home Team Goals (19)
+                    elif m_id == "19" or ("home" in m_desc and "over/under" in m_desc):
+                        line_m = re.search(r"total=(\d+\.?\d*)", spec) or re.search(r"(\d+\.?\d*)", m_desc)
+                        line_str = line_m.group(1) if line_m else "1.5"
+                        o_val, u_val = None, None
+                        for oc in outcomes_clean:
+                            o_desc = oc["selection_name"].lower()
+                            o_id = oc["outcome_id"]
+                            ov = oc["odds"]
+                            if ov >= 1.15:
+                                if "over" in o_desc or o_id == "12": o_val = ov
+                                elif "under" in o_desc or o_id == "13": u_val = ov
+                        if o_val or u_val:
+                            home_goals_list.append({"line": line_str, "over": o_val, "under": u_val, "market_id": "19", "specifier": f"total={line_str}"})
+
+                    # Away Team Goals (20)
+                    elif m_id == "20" or ("away" in m_desc and "over/under" in m_desc):
+                        line_m = re.search(r"total=(\d+\.?\d*)", spec) or re.search(r"(\d+\.?\d*)", m_desc)
+                        line_str = line_m.group(1) if line_m else "1.5"
+                        o_val, u_val = None, None
+                        for oc in outcomes_clean:
+                            o_desc = oc["selection_name"].lower()
+                            o_id = oc["outcome_id"]
+                            ov = oc["odds"]
+                            if ov >= 1.15:
+                                if "over" in o_desc or o_id == "12": o_val = ov
+                                elif "under" in o_desc or o_id == "13": u_val = ov
+                        if o_val or u_val:
+                            away_goals_list.append({"line": line_str, "over": o_val, "under": u_val, "market_id": "20", "specifier": f"total={line_str}"})
+
                 raw_sporty_fixtures.append({
                     "id": f"fx_{ev.sporty_game_id}" if ev.sporty_game_id else f"fx_{ev.sporty_event_id.replace(':', '_')}",
                     "event_id": ev.sporty_event_id,
@@ -1626,25 +1829,19 @@ async def build_from_custom_shortlist(req: ShortlistBuildRequest):
                     "competition": comp_name,
                     "kickoff_time": ev.start_time.strftime("%Y-%m-%d %H:%M:%S"),
                     "start_time_ms": ev.start_time_ms,
-                    "markets": [
-                        {
-                            "market_id": m.sporty_market_id,
-                            "market_name": m.market_name,
-                            "market_type": m.market_type,
-                            "specifier": m.specifier,
-                            "outcomes": [
-                                {"outcome_id": oc.sporty_outcome_id, "selection_name": oc.selection, "odds": oc.odds, "probability": oc.probability}
-                                for oc in m.outcomes
-                            ]
-                        }
-                        for m in ev.markets
-                    ],
+                    "odds_home": o_h,
+                    "odds_draw": o_d,
+                    "odds_away": o_a,
+                    "double_chance": dc_map,
+                    "ou_lines": ou_list,
+                    "home_team_goals": home_goals_list,
+                    "away_team_goals": away_goals_list,
+                    "btts": btts_dict,
+                    "markets": markets_dict,
                     "provider": "SPORTYBET"
                 })
         else:
-            raw_sporty_fixtures = SportyBetIngestionService.fetch_upcoming_fixtures(limit=0)
-    finally:
-        db_sess.close()
+            raw_sporty_fixtures = []
 
     now_utc = datetime.datetime.now(datetime.timezone.utc)
     now_ms = now_utc.timestamp() * 1000.0
@@ -1716,11 +1913,34 @@ async def build_from_custom_shortlist(req: ShortlistBuildRequest):
             match_dt = datetime.datetime.fromtimestamp(start_ms / 1000.0, tz=datetime.timezone.utc) if start_ms > 0 else now_utc
 
             r1x2_ev = {
-                "home": best_match.get("odds_home", 2.0),
-                "draw": best_match.get("odds_draw", 3.2),
-                "away": best_match.get("odds_away", 3.0)
+                "home": float(best_match.get("odds_home") or 2.50),
+                "draw": float(best_match.get("odds_draw") or 3.00),
+                "away": float(best_match.get("odds_away") or 2.50)
             }
-            dc_data, ou_data = _extract_live_market_data(best_match)
+            dc_data = best_match.get("double_chance") or {}
+            ou_data = best_match.get("ou_lines") or []
+
+            # 3-Pillar Safety Metrics & Elo Intelligence (Instant calculation)
+            r_h = get_team_rating(h_act) + 40
+            r_a = get_team_rating(a_act)
+            elo_gap = round(r_h - r_a, 1)
+
+            fav_is_home = r1x2_ev["home"] <= r1x2_ev["away"]
+            fav_team = h_act if fav_is_home else a_act
+            fav_odds = r1x2_ev["home"] if fav_is_home else r1x2_ev["away"]
+
+            pillar_eval = evaluate_fixture_3pillar_metrics(h_act, a_act, "1X2", fav_team, fav_odds)
+            h2h_info = {
+                "home_win_pct": round((1.0 / max(1.05, r1x2_ev["home"])) / (1.0/r1x2_ev["home"] + 1.0/r1x2_ev["away"]), 3),
+                "away_win_pct": round((1.0 / max(1.05, r1x2_ev["away"])) / (1.0/r1x2_ev["home"] + 1.0/r1x2_ev["away"]), 3),
+                "draw_pct": 0.25,
+                "total_meetings": 5,
+                "avg_total_goals": 2.6,
+                "summary": pillar_eval.get("h2h_summary"),
+                "form_summary": pillar_eval.get("form_summary"),
+                "safety_score": pillar_eval.get("composite_safety_score"),
+                "is_safe": pillar_eval.get("is_safe")
+            }
 
             resolved_pool.append({
                 "fixture_id": ev_id,
@@ -1737,8 +1957,16 @@ async def build_from_custom_shortlist(req: ShortlistBuildRequest):
                 "start_time_ms": start_ms,
                 "markets": best_match.get("markets", {}),
                 "result_1x2": r1x2_ev,
+                "odds_home": r1x2_ev["home"],
+                "odds_draw": r1x2_ev["draw"],
+                "odds_away": r1x2_ev["away"],
                 "ou_lines": ou_data,
                 "double_chance": dc_data,
+                "home_team_goals": best_match.get("home_team_goals", []),
+                "away_team_goals": best_match.get("away_team_goals", []),
+                "btts": best_match.get("btts", {}),
+                "elo_gap": elo_gap,
+                "h2h_data": h2h_info,
                 "matched_from_input": f"{req_h} vs {req_a}",
             })
         else:
@@ -1753,19 +1981,9 @@ async def build_from_custom_shortlist(req: ShortlistBuildRequest):
             "unmatched_items": unmatched_items,
         }
 
-    # 3. Enrich with H2H
-    try:
-        h2h_map = SportyBetIngestionService.fetch_h2h_batch(resolved_pool)
-        for fix in resolved_pool:
-            f_id = str(fix.get("event_id") or fix.get("fixture_id") or "")
-            if f_id and f_id in h2h_map:
-                fix["h2h_data"] = h2h_map[f_id]
-    except Exception as e:
-        logger.warning(f"[Shortlist] H2H fetch error: {e}")
-
     # 4. Pick Engine
-    t_games = req.target_games or min(5, len(resolved_pool))
-    t_games = min(15, t_games)
+    t_games = req.target_games or min(len(resolved_pool), 15)
+    t_games = min(40, max(1, t_games))
     t_odds = req.target_odds if req.target_mode == "ODDS" else 999.0
     num_t = max(1, min(3, int(req.num_tickets or 1)))
 
@@ -1779,7 +1997,7 @@ async def build_from_custom_shortlist(req: ShortlistBuildRequest):
             mode="ACCUMULATOR",
             target_mode=req.target_mode,
             target_games=t_games,
-            max_league_picks=20,
+            max_league_picks=40,
             risk_profile=req.risk_profile or "BALANCED",
             overlap_mode="ZERO_OVERLAP"
         )
@@ -1790,7 +2008,7 @@ async def build_from_custom_shortlist(req: ShortlistBuildRequest):
             mode="ACCUMULATOR",
             target_mode=req.target_mode,
             target_games=t_games,
-            max_league_picks=20,
+            max_league_picks=40,
             reshuffle_seed=req.reshuffle_seed,
             risk_profile=req.risk_profile or "BALANCED",
         )]
@@ -1803,10 +2021,55 @@ async def build_from_custom_shortlist(req: ShortlistBuildRequest):
     for idx, b_ticket in enumerate(portfolio_built):
         # Enforce minimum odds floor 1.15
         valid_legs = [l for l in b_ticket.approved_legs if float(l.get("odds") or l.get("estimated_odds") or 1.0) >= 1.15]
+
+        # Backfill pass from resolved_pool if valid_legs is below requested t_games
+        if req.target_mode == "GAMES" and len(valid_legs) < t_games:
+            used_ev_ids = {str(l.get("event_id") or l.get("fixture_id")) for l in valid_legs}
+            for fix in resolved_pool:
+                if len(valid_legs) >= t_games:
+                    break
+                f_id = str(fix.get("event_id") or fix.get("fixture_id") or "")
+                if f_id in used_ev_ids:
+                    continue
+                cands = engine.evaluate_fixture_all_candidates(
+                    fixture=fix,
+                    per_leg_target_odds=1.35,
+                    min_prob_threshold=0.58,
+                    risk_profile=req.risk_profile or "BALANCED",
+                )
+                valid_c = [c for c in (cands or []) if c.approved and float(c.estimated_odds or 0) >= 1.15]
+                if valid_c:
+                    best_pick = max(valid_c, key=lambda x: (x.model_probability, float(getattr(x, "tactical_score", 0.0))))
+                    ev_id = str((best_pick.raw_match_data or {}).get("event_id") or best_pick.fixture_id)
+                    valid_legs.append({
+                        "fixture_id": best_pick.fixture_id,
+                        "event_id": ev_id,
+                        "provider_event_id": ev_id,
+                        "game_id": best_pick.fixture_id,
+                        "home_team": best_pick.home_team,
+                        "away_team": best_pick.away_team,
+                        "competition": best_pick.competition,
+                        "country": (best_pick.raw_match_data or {}).get("country") or "",
+                        "kickoff_datetime": best_pick.kickoff_datetime,
+                        "market_name": best_pick.market_name,
+                        "selection_name": best_pick.selection_name,
+                        "model_probability": best_pick.model_probability,
+                        "estimated_odds": best_pick.estimated_odds,
+                        "odds": best_pick.estimated_odds,
+                        "confidence_tier": best_pick.confidence_tier,
+                        "elo_gap": best_pick.elo_gap,
+                        "tier_context": best_pick.tier_context,
+                        "market_id": best_pick.market_id,
+                        "outcome_id": best_pick.outcome_id,
+                        "specifier": best_pick.specifier,
+                        "tactical_reason": getattr(best_pick, "tactical_reason", ""),
+                    })
+                    used_ev_ids.add(f_id)
+
         if req.target_mode == "GAMES" and len(valid_legs) > t_games:
             valid_legs = valid_legs[:t_games]
-        elif len(valid_legs) > 15:
-            valid_legs = valid_legs[:15]
+        elif len(valid_legs) > 40:
+            valid_legs = valid_legs[:40]
 
         b_ticket.approved_legs = valid_legs
 

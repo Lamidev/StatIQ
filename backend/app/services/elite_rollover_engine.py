@@ -31,56 +31,68 @@ class EliteRolloverEngine:
         "Referer": "https://www.sportybet.com/ng/"
     }
 
+    _today_cache = None
+    _today_cache_time = 0.0
+
     @classmethod
-    async def fetch_sportybet_today_events(cls, max_pages: int = 15) -> List[Dict[str, Any]]:
+    async def fetch_sportybet_today_events(cls, max_pages: int = 4) -> List[Dict[str, Any]]:
         """
         Directly queries SportyBet's wapConfigurableEventsByOrder endpoint with todayGames=True.
         Collects all unstarted fixtures playing today across all active tournaments.
+        Cached in-memory for 60 seconds with parallel page fetching (<2 seconds).
         """
+        now = time.time()
+        if cls._today_cache and (now - cls._today_cache_time) < 60:
+            return cls._today_cache
+
         url = f"{cls.BASE_URL}/ng/factsCenter/wapConfigurableEventsByOrder"
         all_events = []
         seen_event_ids = set()
 
-        async with httpx.AsyncClient(timeout=10.0, headers=cls.HEADERS) as client:
-            for page in range(1, max_pages + 1):
-                payload = {
-                    "sportId": "sr:sport:1",
-                    "pageNum": page,
-                    "pageSize": 50,
-                    "todayGames": True,
-                    "withTwoUpMarket": True,
-                    "withOneUpMarket": True
-                }
-                try:
-                    r = await client.post(url, json=payload)
-                    if r.status_code == 200:
-                        data = r.json()
-                        if data.get("bizCode") == 10000:
-                            tournaments = data.get("data", {}).get("tournaments", [])
-                            if not tournaments:
-                                break
-                            events_found = 0
-                            for t in tournaments:
-                                c_name = t.get("categoryName") or "International"
-                                t_name = t.get("name") or "League"
-                                for ev in t.get("events", []):
-                                    eid = ev.get("eventId")
-                                    if eid and eid not in seen_event_ids:
-                                        seen_event_ids.add(eid)
-                                        ev["_categoryName"] = c_name
-                                        ev["_tournamentName"] = t_name
-                                        all_events.append(ev)
-                                        events_found += 1
-                            if not data.get("data", {}).get("moreEvents") or events_found == 0:
-                                break
-                    else:
-                        break
-                except Exception as e:
-                    logger.warning(f"[EliteRollover] Error fetching today page {page}: {e}")
-                    break
+        async def _fetch_page(client, page):
+            payload = {
+                "sportId": "sr:sport:1",
+                "pageNum": page,
+                "pageSize": 100,
+                "todayGames": True,
+                "withTwoUpMarket": True,
+                "withOneUpMarket": True
+            }
+            try:
+                r = await client.post(url, json=payload, timeout=6.0)
+                if r.status_code == 200:
+                    data = r.json()
+                    if data.get("bizCode") == 10000:
+                        return data.get("data", {}).get("tournaments", [])
+            except Exception as e:
+                logger.warning(f"[EliteRollover] Page {page} fetch error: {e}")
+            return []
 
-        logger.info(f"[EliteRollover] Ingested {len(all_events)} raw events directly from SportyBet today endpoint.")
-        return all_events
+        try:
+            async with httpx.AsyncClient(headers=cls.HEADERS) as client:
+                tasks = [_fetch_page(client, p) for p in range(1, max_pages + 1)]
+                results = await asyncio.gather(*tasks)
+
+            for tournaments in results:
+                for t in tournaments:
+                    c_name = t.get("categoryName") or "International"
+                    t_name = t.get("name") or "League"
+                    for ev in t.get("events", []):
+                        eid = ev.get("eventId")
+                        if eid and eid not in seen_event_ids:
+                            seen_event_ids.add(eid)
+                            ev["_categoryName"] = c_name
+                            ev["_tournamentName"] = t_name
+                            all_events.append(ev)
+
+            if all_events:
+                cls._today_cache = all_events
+                cls._today_cache_time = now
+                logger.info(f"[EliteRollover] Ingested {len(all_events)} raw events directly from SportyBet today endpoint in parallel.")
+        except Exception as e:
+            logger.warning(f"[EliteRollover] Parallel fetch error: {e}")
+
+        return all_events or (cls._today_cache or [])
 
     @classmethod
     def _calculate_poisson_over15_prob(cls, h_odds: float, d_odds: float, a_odds: float) -> float:

@@ -765,36 +765,44 @@ class MatchIQPickEngine:
                 for m in raw_markets:
                     if not isinstance(m, dict) or cand_matched:
                         continue
+                    m_stat = str(m.get("status") or "")
+                    if m_stat in ["1", "2", "SUSPENDED", "INACTIVE", "CLOSED"]:
+                        continue
+
                     m_desc = (m.get("desc") or m.get("name") or m.get("market_name") or "").lower()
                     m_id = str(m.get("market_id") or m.get("id") or "")
-                    spec = m.get("specifier")
+                    spec = str(m.get("specifier") or "")
 
                     outcomes = m.get("outcomes", [])
                     if isinstance(outcomes, dict):
                         outcomes = list(outcomes.values())
 
-                    # Match 1: Double Chance
-                    if ("double chance" in m_kw or "dc" in m_kw) and (m_id == "10" or "double chance" in m_desc) and not any(x in m_desc for x in ["&", "over", "under", "gg"]):
+                    # Match 1: Double Chance (Market 10)
+                    if ("double chance" in m_kw or "dc" in m_kw) and (m_id == "10" or "double chance" in m_desc) and not any(x in m_desc for x in ["&", "over", "under", "gg", "corner", "booking", "half"]):
                         for o in outcomes:
                             if not isinstance(o, dict): continue
+                            o_stat = str(o.get("status") or "")
+                            if o_stat in ["1", "2", "SUSPENDED", "INACTIVE"] or o.get("isActive") in (False, 0, "0"):
+                                continue
                             o_desc = (o.get("desc") or o.get("name") or o.get("selection_name") or "").lower()
                             o_id = str(o.get("outcome_id") or o.get("id") or "")
                             if ("1x" in s_kw and ("1x" in o_desc or o_id == "9")) or ("x2" in s_kw and ("x2" in o_desc or o_id == "11")) or ("12" in s_kw and ("12" in o_desc or o_id == "10")):
                                 try:
-                                    real_o = float(o.get("odds"))
+                                    real_o = float(o.get("odds") or o.get("oddsValue") or 0.0)
                                     if real_o >= 1.15:
                                         cand["odds"] = real_o
                                         cand["market_id"] = m_id or "10"
                                         cand["outcome_id"] = o_id
                                         cand["specifier"] = None
+                                        cand["is_sportybet_verified"] = True
                                         matched_candidates.append(cand)
                                         cand_matched = True
                                         break
                                 except (ValueError, TypeError):
                                     pass
 
-                    # Match 2: Over/Under Goals (Over 1.5, Under 3.5, Over 2.5, Over 0.5)
-                    elif ("over" in m_kw or "under" in m_kw or "over" in s_kw or "under" in s_kw) and (m_id == "18" or "over/under" in m_desc) and not any(x in m_desc for x in ["&", "1x2", "dc"]):
+                    # Match 2: Over/Under Full Time Goals (Market 18)
+                    elif ("over" in m_kw or "under" in m_kw or "over" in s_kw or "under" in s_kw) and (m_id == "18" or "over/under" in m_desc) and not any(x in m_desc for x in ["&", "1x2", "dc", "corner", "booking", "half", "team"]):
                         line_match = re.search(r"(\d+\.5|\d+)", s_kw)
                         line_val = line_match.group(1) if line_match else "1.5"
                         spec_str = str(spec or m_desc)
@@ -802,65 +810,160 @@ class MatchIQPickEngine:
                             is_over = "over" in s_kw
                             for o in outcomes:
                                 if not isinstance(o, dict): continue
+                                o_stat = str(o.get("status") or "")
+                                if o_stat in ["1", "2", "SUSPENDED", "INACTIVE"] or o.get("isActive") in (False, 0, "0"):
+                                    continue
                                 o_desc = (o.get("desc") or o.get("name") or o.get("selection_name") or "").lower()
                                 o_id = str(o.get("outcome_id") or o.get("id") or "")
                                 if (is_over and ("over" in o_desc or o_id == "12")) or (not is_over and ("under" in o_desc or o_id == "13")):
                                     try:
-                                        real_o = float(o.get("odds"))
+                                        real_o = float(o.get("odds") or o.get("oddsValue") or 0.0)
                                         if real_o >= 1.15:
                                             cand["odds"] = real_o
                                             cand["market_id"] = m_id or "18"
                                             cand["outcome_id"] = o_id
                                             cand["specifier"] = f"total={line_val}"
+                                            cand["is_sportybet_verified"] = True
                                             matched_candidates.append(cand)
                                             cand_matched = True
                                             break
                                     except (ValueError, TypeError):
                                         pass
 
-                    # Match 3: 1X2 Match Result
-                    elif ("match result" in m_kw or "1x2" in m_kw) and (m_id == "1" or m_desc == "1x2" or m_desc == "match result"):
+                    # Match 3: 1X2 Match Result (Market 1)
+                    elif ("match result" in m_kw or "1x2" in m_kw) and (m_id == "1" or m_desc == "1x2" or m_desc == "match result") and not any(x in m_desc for x in ["1up", "2up", "half", "corner", "handicap"]):
                         for o in outcomes:
                             if not isinstance(o, dict): continue
+                            o_stat = str(o.get("status") or "")
+                            if o_stat in ["1", "2", "SUSPENDED", "INACTIVE"] or o.get("isActive") in (False, 0, "0"):
+                                continue
                             o_desc = (o.get("desc") or o.get("name") or o.get("selection_name") or "").lower()
                             o_id = str(o.get("outcome_id") or o.get("id") or "")
-                            if ("(1)" in s_kw and (o_id == "1" or "home" in o_desc or "1" == o_desc)) or ("(2)" in s_kw and (o_id == "3" or "away" in o_desc or "2" == o_desc)):
+                            if ("(1)" in s_kw and (o_id == "1" or "home" in o_desc or "1" == o_desc or home.lower() in o_desc)) or ("(2)" in s_kw and (o_id == "3" or "away" in o_desc or "2" == o_desc or away.lower() in o_desc)):
                                 try:
-                                    real_o = float(o.get("odds"))
+                                    real_o = float(o.get("odds") or o.get("oddsValue") or 0.0)
                                     if real_o >= 1.15:
                                         cand["odds"] = real_o
                                         cand["market_id"] = m_id or "1"
                                         cand["outcome_id"] = o_id
                                         cand["specifier"] = None
+                                        cand["is_sportybet_verified"] = True
                                         matched_candidates.append(cand)
                                         cand_matched = True
                                         break
                                 except (ValueError, TypeError):
                                     pass
 
-                    # Match 4: Win Either Half
+                    # Match 4: Win Either Half (Market 73 Home, Market 74 Away)
                     elif "either half" in m_kw or "either half" in s_kw:
                         is_away = "(2)" in s_kw or away.lower() in s_kw
                         target_m_id = "74" if is_away else "73"
                         if m_id == target_m_id:
                             for o in outcomes:
                                 if not isinstance(o, dict): continue
+                                o_stat = str(o.get("status") or "")
+                                if o_stat in ["1", "2", "SUSPENDED", "INACTIVE"] or o.get("isActive") in (False, 0, "0"):
+                                    continue
                                 o_id = str(o.get("outcome_id") or o.get("id") or "75")
                                 try:
-                                    real_o = float(o.get("odds"))
+                                    real_o = float(o.get("odds") or o.get("oddsValue") or 0.0)
                                     if real_o >= 1.15:
                                         cand["odds"] = real_o
                                         cand["market_id"] = target_m_id
                                         cand["outcome_id"] = o_id
                                         cand["specifier"] = None
+                                        cand["is_sportybet_verified"] = True
                                         matched_candidates.append(cand)
                                         cand_matched = True
                                         break
                                 except (ValueError, TypeError):
                                     pass
 
-            if matched_candidates:
-                candidate_markets = matched_candidates
+                    # Match 5: Both Teams To Score / GG (Market 29)
+                    elif ("both teams to score" in m_kw or "btts" in m_kw) and (m_id == "29" or "both teams to score" in m_desc or "gg/ng" in m_desc):
+                        is_yes = "yes" in s_kw or "gg" in s_kw
+                        for o in outcomes:
+                            if not isinstance(o, dict): continue
+                            o_stat = str(o.get("status") or "")
+                            if o_stat in ["1", "2", "SUSPENDED", "INACTIVE"] or o.get("isActive") in (False, 0, "0"):
+                                continue
+                            o_desc = (o.get("desc") or o.get("name") or o.get("selection_name") or "").lower()
+                            o_id = str(o.get("outcome_id") or o.get("id") or "")
+                            if (is_yes and ("yes" in o_desc or o_id in ["74", "1"])) or (not is_yes and ("no" in o_desc or o_id in ["76", "2"])):
+                                try:
+                                    real_o = float(o.get("odds") or o.get("oddsValue") or 0.0)
+                                    if real_o >= 1.15:
+                                        cand["odds"] = real_o
+                                        cand["market_id"] = m_id or "29"
+                                        cand["outcome_id"] = o_id
+                                        cand["specifier"] = None
+                                        cand["is_sportybet_verified"] = True
+                                        matched_candidates.append(cand)
+                                        cand_matched = True
+                                        break
+                                except (ValueError, TypeError):
+                                    pass
+
+                    # Match 6: Team Total Goals (Market 19 Home, Market 20 Away)
+                    elif "team goals" in m_kw or "team" in s_kw:
+                        is_away_team = away.lower() in s_kw
+                        target_m_id = "20" if is_away_team else "19"
+                        if m_id == target_m_id or (target_m_id == "19" and "home" in m_desc and "over/under" in m_desc) or (target_m_id == "20" and "away" in m_desc and "over/under" in m_desc):
+                            line_match = re.search(r"(\d+\.5|\d+)", s_kw)
+                            line_val = line_match.group(1) if line_match else "1.5"
+                            spec_str = str(spec or m_desc)
+                            if line_val in spec_str or f"total={line_val}" in spec_str:
+                                is_over = "over" in s_kw
+                                for o in outcomes:
+                                    if not isinstance(o, dict): continue
+                                    o_stat = str(o.get("status") or "")
+                                    if o_stat in ["1", "2", "SUSPENDED", "INACTIVE"] or o.get("isActive") in (False, 0, "0"):
+                                        continue
+                                    o_desc = (o.get("desc") or o.get("name") or o.get("selection_name") or "").lower()
+                                    o_id = str(o.get("outcome_id") or o.get("id") or "")
+                                    if (is_over and ("over" in o_desc or o_id == "12")) or (not is_over and ("under" in o_desc or o_id == "13")):
+                                        try:
+                                            real_o = float(o.get("odds") or o.get("oddsValue") or 0.0)
+                                            if real_o >= 1.15:
+                                                cand["odds"] = real_o
+                                                cand["market_id"] = target_m_id
+                                                cand["outcome_id"] = o_id
+                                                cand["specifier"] = f"total={line_val}"
+                                                cand["is_sportybet_verified"] = True
+                                                matched_candidates.append(cand)
+                                                cand_matched = True
+                                                break
+                                        except (ValueError, TypeError):
+                                            pass
+
+                    # Match 7: Draw No Bet (Market 11)
+                    elif "draw no bet" in m_kw or "dnb" in s_kw:
+                        if m_id == "11" or "draw no bet" in m_desc:
+                            is_home = home.lower() in s_kw or "(1)" in s_kw
+                            for o in outcomes:
+                                if not isinstance(o, dict): continue
+                                o_stat = str(o.get("status") or "")
+                                if o_stat in ["1", "2", "SUSPENDED", "INACTIVE"] or o.get("isActive") in (False, 0, "0"):
+                                    continue
+                                o_desc = (o.get("desc") or o.get("name") or o.get("selection_name") or "").lower()
+                                o_id = str(o.get("outcome_id") or o.get("id") or "")
+                                if (is_home and ("home" in o_desc or o_id == "1")) or (not is_home and ("away" in o_desc or o_id == "2")):
+                                    try:
+                                        real_o = float(o.get("odds") or o.get("oddsValue") or 0.0)
+                                        if real_o >= 1.15:
+                                            cand["odds"] = real_o
+                                            cand["market_id"] = m_id or "11"
+                                            cand["outcome_id"] = o_id
+                                            cand["specifier"] = None
+                                            cand["is_sportybet_verified"] = True
+                                            matched_candidates.append(cand)
+                                            cand_matched = True
+                                            break
+                                    except (ValueError, TypeError):
+                                        pass
+
+            # STRICT VERIFICATION: Every proposed candidate MUST be confirmed in SportyBet's active markets
+            candidate_markets = matched_candidates
 
 
 
@@ -1825,21 +1928,20 @@ class MatchIQPickEngine:
                 if len(selected_decisions) < target_legs_count:
                     for fix in fixture_pool:
                         f_id = str(fix.get("eventId") or fix.get("event_id") or fix.get("fixture_id") or "")
-                        h_n = str(fix.get("home_team") or "").strip().lower()
-                        a_n = str(fix.get("away_team") or "").strip().lower()
                         fix_k = str(fix.get("fixture_id") or f"{fix.get('home_team')}_{fix.get('away_team')}")
                         if fix_k in seen_fixtures:
                             continue
                         relaxed_cands = self.evaluate_fixture_all_candidates(
                             fixture=fix,
-                            per_leg_target_odds=1.28,
-                            min_prob_threshold=0.60,
+                            per_leg_target_odds=1.35,
+                            min_prob_threshold=0.58,
                             risk_profile=risk_profile,
                             allowed_markets=allowed_markets,
                             excluded_markets=excluded_markets,
                         )
-                        if relaxed_cands:
-                            best_c = max(relaxed_cands, key=lambda x: (x.model_probability, float(getattr(x, "tactical_score", 0.0))))
+                        approved_relaxed = [c for c in (relaxed_cands or []) if c.approved and float(c.estimated_odds or 0) >= 1.15]
+                        if approved_relaxed:
+                            best_c = max(approved_relaxed, key=lambda x: (x.model_probability, float(getattr(x, "tactical_score", 0.0))))
                             selected_decisions.append(best_c)
                             seen_fixtures.add(fix_k)
                             if len(selected_decisions) >= target_legs_count:

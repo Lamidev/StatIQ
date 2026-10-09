@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { Activity, Calendar, Target, Search, FlaskConical, CheckCircle2, Receipt, Key, Bot } from "lucide-react";
+import { Activity, Calendar, Target, Search, CheckCircle2, Receipt, Key, Bot } from "lucide-react";
 import NotificationDropdown from "./NotificationDropdown";
 import PasskeyAdminModal from "./PasskeyAdminModal";
 import { getUserProfileId } from "../api/client";
@@ -14,9 +14,8 @@ export default function Header({ activeTab, setActiveTab, activeTicketCount = 0,
     { id: "builder", label: "2. AI Ticket Builder", icon: Target },
     { id: "auditor", label: "3. Ticket Auditor & Re-Editor", icon: Search },
     { id: "history", label: "4. Tickets / Bet History", icon: Receipt },
-    { id: "backtester", label: "5. Backtest Simulator", icon: FlaskConical },
-    { id: "access", label: "6. Access Control & Keys", icon: Key },
-    { id: "virtual-trader", label: "7. Virtual Trader", icon: Bot },
+    { id: "access", label: "5. Access Control & Keys", icon: Key },
+    { id: "virtual-trader", label: "6. Virtual Trader", icon: Bot },
   ];
 
   return (

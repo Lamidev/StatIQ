@@ -533,7 +533,7 @@ export async function deleteTrackedTicket(ticketId) {
  */
 export async function buildAiTicket(payload) {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 25000);
+  const timer = setTimeout(() => controller.abort(), 60000);
   try {
     const fullPayload = { reshuffle_seed: Date.now(), ...payload };
     const res = await fetch(`${API_BASE_URL}/ai-ticket/build`, {
@@ -548,7 +548,7 @@ export async function buildAiTicket(payload) {
   } catch (err) {
     clearTimeout(timer);
     if (err.name === "AbortError") {
-      console.warn("AI Ticket builder timed out after 25s");
+      console.warn("AI Ticket builder timed out after 60s");
       return { status: "TIMEOUT" };
     }
     console.error("AI Ticket builder error:", err);
