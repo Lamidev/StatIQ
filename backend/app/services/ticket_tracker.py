@@ -1420,6 +1420,77 @@ def _heal_falsely_lost_tickets(tickets: list, now_ms: int) -> bool:
     return changed
 
 
+def _dispatch_telegram_settlement_notification(t: Dict[str, Any]):
+    """
+    Dispatches a comprehensive, rich Telegram settlement report whenever a ticket finishes,
+    breaking down every single game (score & WON/LOST status) and the overall ticket result.
+    """
+    try:
+        from app.services.rollover_telegram_notifier import RolloverTelegramNotifier
+        code = t.get("code") or t.get("id") or "N/A"
+        status = t.get("status", "LOST").upper()
+        total_odds = float(t.get("total_odds") or 1.0)
+        stake = float(t.get("stake") or 1000.0)
+        potential_win = round(stake * total_odds, 2)
+        settled_at = t.get("settled_at") or time.strftime("%Y-%m-%d %H:%M:%S")
+        selections = t.get("selections", [])
+        n_legs = len(selections)
+
+        is_won = (status == "WON")
+        header_emoji = "🎉🏆" if is_won else "📉❌"
+        result_title = f"{header_emoji} <b>StatIQ Ticket Settlement: {status}!</b>"
+
+        lines = [
+            result_title,
+            f"🎟️ <b>SportyBet Code:</b> <code>{code}</code>",
+            f"⚡ <b>Total Odds:</b> <b>{total_odds:.2f}x</b> | <b>Legs:</b> {n_legs}",
+        ]
+
+        if is_won:
+            lines.append(f"💰 <b>Stake:</b> ₦{int(stake):,} ➔ <b>Payout:</b> ₦{int(potential_win):,} ✅")
+        else:
+            lines.append(f"💰 <b>Stake:</b> ₦{int(stake):,} | <b>Status:</b> BUSTED ❌")
+
+        lines.append("\n📋 <b>Match-by-Match Results Breakdown:</b>")
+
+        for i, s in enumerate(selections, 1):
+            h = s.get("home_team") or "Home"
+            a = s.get("away_team") or "Away"
+            mkt = s.get("market_name") or s.get("market") or s.get("market_desc") or "Pick"
+            sel = s.get("selection_name") or s.get("selection") or s.get("selection_desc") or "Pick"
+            odd = float(s.get("odds") or 1.20)
+            score = s.get("score") or "--"
+            leg_st = str(s.get("leg_status") or s.get("leg_result") or "PENDING").upper()
+
+            if leg_st == "WON":
+                st_icon = "✅ <b>WON</b>"
+            elif leg_st == "LOST":
+                st_icon = "❌ <b>LOST</b>"
+            elif leg_st == "VOID":
+                st_icon = "⚪ <b>VOID</b>"
+            else:
+                st_icon = "⏳ <b>PENDING</b>"
+
+            lines.append(f"<b>{i}. {h} vs {a}</b> (FT: {score})")
+            lines.append(f"   ➔ Pick: <i>{sel}</i> [{mkt}] @ {odd:.2f} ➔ {st_icon}")
+
+        lines.append("")
+        if is_won:
+            flex_text = t.get("flex_status_text") or "All games passed successfully!"
+            lines.append(f"🏆 <b>Overall Ticket Outcome:</b> <b>WON!</b> ({flex_text})")
+        else:
+            lost_count = sum(1 for s in selections if str(s.get("leg_status") or "").upper() == "LOST")
+            lines.append(f"❌ <b>Overall Ticket Outcome:</b> <b>LOST</b> ({lost_count} match(es) failed)")
+
+        lines.append(f"⏱️ <b>Settled At:</b> {settled_at}")
+        lines.append("🤖 <i>StatIQ Autonomous Ticket Tracker Daemon</i>")
+
+        full_msg = "\n".join(lines)
+        RolloverTelegramNotifier.send_message(full_msg)
+    except Exception as e:
+        logger.warning(f"[TicketTracker] Error dispatching settlement Telegram notification: {e}")
+
+
 def evaluate_tracked_tickets(db: Optional[Session] = None) -> List[Dict[str, Any]]:
     """
     Evaluates all tracked tickets.
@@ -1459,7 +1530,7 @@ def evaluate_tracked_tickets(db: Optional[Session] = None) -> List[Dict[str, Any
                 except Exception:
                     pass
 
-            # Guard: If kickoff is in the future, the match is strictly UPCOMING — NEVER conclude or settle early!
+            # Guard 1: If kickoff is in the future, the match is strictly UPCOMING — NEVER conclude or settle early!
             if kickoff_ms and (now * 1000) < kickoff_ms:
                 sel["match_status"] = "UPCOMING"
                 sel["is_live"] = False
@@ -1470,45 +1541,25 @@ def evaluate_tracked_tickets(db: Optional[Session] = None) -> List[Dict[str, Any
                 sel["away_score"] = None
                 continue
 
-            # Auto-healing guard: If match has 0-0 placeholder score and was never genuinely concluded/live, reset to UPCOMING
-            if not is_conc and sel.get("score") in ("0 - 0", "0:0") and not sel.get("leg_result"):
-                sel["match_status"] = "UPCOMING"
-                sel["is_live"] = False
-                sel["leg_status"] = "PENDING"
-                sel["result"] = "--"
-                sel["score"] = "--"
-                sel["home_score"] = None
-                sel["away_score"] = None
-                continue
-
-            # If kickoff has passed by > 120 minutes and it was confirmed live or started
-            if not is_conc and kickoff_ms and kickoff_ms > 0:
-                elapsed_ms = (now * 1000) - kickoff_ms
-                if elapsed_ms > 120 * 60 * 1000 and st in ("LIVE", "ONGOING", "IN_PLAY"):
+            # Elapsed time check: if match kicked off > 115 minutes ago, football regulation + stoppage is complete
+            elapsed_ms = ((now * 1000) - kickoff_ms) if (kickoff_ms and kickoff_ms > 0) else None
+            if not is_conc:
+                if sel.get("leg_result") in ("WON", "LOST", "VOID"):
+                    is_conc = True
+                elif elapsed_ms is not None and elapsed_ms > 115 * 60 * 1000:
                     is_conc = True
                     sel["match_status"] = "CONCLUDED"
                     sel["is_live"] = False
-                elif elapsed_ms >= 0 and st in ("LIVE", "ONGOING", "IN_PLAY"):
+                elif elapsed_ms is not None and elapsed_ms >= 0:
                     sel["match_status"] = "LIVE"
                     sel["is_live"] = True
                     is_ticket_live = True
 
-            # If match is NOT concluded and NOT confirmed live, it is UPCOMING
-            if not is_conc and not sel.get("is_live") and st not in ("LIVE", "ONGOING", "IN_PLAY"):
-                sel["match_status"] = "UPCOMING"
-                sel["is_live"] = False
-                sel["leg_status"] = "PENDING"
-                sel["result"] = "--"
-                sel["score"] = "--"
-                sel["home_score"] = None
-                sel["away_score"] = None
-                continue
-
             score_str = sel.get("score", "")
             h, a, ht_h, ht_a = None, None, None, None
-            if score_str:
+            if score_str and score_str not in ("--", "-- --", "", "None"):
                 h, a, ht_h, ht_a = _parse_full_and_ht_scores(score_str)
-            else:
+            if h is None or a is None:
                 h, a = sel.get("home_score"), sel.get("away_score")
 
             if ht_h is None:
@@ -1516,8 +1567,8 @@ def evaluate_tracked_tickets(db: Optional[Session] = None) -> List[Dict[str, Any
             if ht_a is None:
                 ht_a = next((sel.get(k) for k in ("ht_away_score", "away_ht_score", "ht_away") if sel.get(k) is not None), None)
 
-            mkt_str = sel.get("market_name") or ""
-            sel_str = sel.get("selection_name") or sel.get("selection") or ""
+            mkt_str = sel.get("market_name") or sel.get("market") or sel.get("market_desc") or ""
+            sel_str = sel.get("selection_name") or sel.get("selection") or sel.get("selection_desc") or ""
             full_pick = f"{mkt_str} — {sel_str}".strip(" —") if mkt_str else sel_str
 
             authoritative_leg_res = sel.get("leg_result")
@@ -1626,8 +1677,12 @@ def evaluate_tracked_tickets(db: Optional[Session] = None) -> List[Dict[str, Any
             # Losses exceeded flex cut buffer -> INSTANT TICKET BUST (LOST)
             t["status"] = "LOST"
             t["flex_status_text"] = f"Exceeded Flex Cut-{allowed_losses} ({loss_count} losses)" if allowed_losses > 0 else "Straight Acca Lost"
-            t["settled_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+            t["settled_at"] = t.get("settled_at") or time.strftime("%Y-%m-%d %H:%M:%S")
             updated = True
+
+            if prev_status == "RUNNING":
+                _dispatch_telegram_settlement_notification(t)
+
         elif all_concluded and loss_count <= allowed_losses:
             # All matches concluded AND losses within flex cut -> Ticket WON!
             t["status"] = "WON"
@@ -1644,6 +1699,8 @@ def evaluate_tracked_tickets(db: Optional[Session] = None) -> List[Dict[str, Any
                     push_win_notification(t)
                 except Exception as e:
                     logger.warning(f"Could not push win notification for ticket {t.get('id')}: {e}")
+
+                _dispatch_telegram_settlement_notification(t)
         else:
             # Ticket remains RUNNING with completed legs settled game-by-game
             t["status"] = "RUNNING"

@@ -102,6 +102,13 @@ def start_background_ticket_sync_worker():
     # Start StatIQ 10:00 AM WAT Automated Rollover Cron Daemon
     rollover_scheduler.start()
 
+    # Start StatIQ Autonomous Telegram Bot Remote Controller
+    try:
+        from app.services.telegram_bot_service import statiq_telegram_bot
+        statiq_telegram_bot.start()
+    except Exception as e:
+        print(f"[TelegramBot] Failed to start telegram daemon: {e}")
+
     # Virtual Front-Testing Daemon disabled per user instruction
     # try:
     #     from virtual.workers.fronttest_worker import VirtualFrontTestWorker
@@ -220,3 +227,20 @@ def root():
         "version": "v1.0.0",
         "docs_url": "/docs"
     }
+
+@app.get("/api/v1/telegram-bot/status")
+def get_telegram_bot_status():
+    from app.services.telegram_bot_service import statiq_telegram_bot
+    return {
+        "status": "active" if statiq_telegram_bot._running else "stopped",
+        "bot_username": "@StatIQbot",
+        "last_update_id": statiq_telegram_bot._last_update_id
+    }
+
+@app.on_event("shutdown")
+def shutdown_background_workers():
+    try:
+        from app.services.telegram_bot_service import statiq_telegram_bot
+        statiq_telegram_bot.stop()
+    except Exception:
+        pass
