@@ -299,8 +299,18 @@ class SportyBetAdapter(BookmakerAdapter):
                 
                 # Check if match is in the future
                 is_future = bool(start_time_ms > 0 and start_time_ms > (now_ms + 60000))
-                is_match_finished = match_status_code_str in ["ENDED", "FT", "CONCLUDED", "FINISHED"] or (start_time_ms > 0 and (now_ms - start_time_ms) > 7200000)
-                is_match_live = (not is_future and not is_match_finished and (match_status_code_str in ["H1", "H2", "HT", "LIVE", "IN_PROGRESS", "ONGOING"] or (start_time_ms > 0 and (now_ms - start_time_ms) > 0)))
+                is_match_finished = (
+                    match_status_code_str in ["ENDED", "FT", "CONCLUDED", "FINISHED", "3"]
+                    or (start_time_ms > 0 and (now_ms - start_time_ms) > 6900000)  # > 115 minutes
+                )
+                is_match_live = (
+                    not is_future
+                    and not is_match_finished
+                    and (
+                        match_status_code_str in ["H1", "H2", "HT", "LIVE", "IN_PROGRESS", "ONGOING", "2"]
+                        or (start_time_ms > 0 and (now_ms - start_time_ms) >= 0)
+                    )
+                )
 
                 # Extract SportyBet authoritative dynamic settlement status & isWinning
                 raw_res = str(out.get("outcomeResult") or out.get("result") or out.get("statusDesc") or "").upper()
@@ -315,11 +325,19 @@ class SportyBetAdapter(BookmakerAdapter):
                 if is_winning is None and "isWinning" in out:
                     is_winning = out.get("isWinning")
 
+                out_status = str(out.get("status") or "")
+                if mkt_outcomes and len(mkt_outcomes) > 0:
+                    m_status_val = str(mkt_outcomes[0].get("status") or "")
+                    if m_status_val in ("1", "2", "3"):
+                        out_status = m_status_val
+
                 leg_result = None
-                if is_winning == 1 or "WON" in raw_res or raw_res in ("1", "SUCCESS"):
+                if is_winning == 1 or out_status == "1" or "WON" in raw_res or raw_res in ("1", "SUCCESS"):
                     leg_result = "WON"
-                elif is_match_finished and (is_winning == 0 or "LOST" in raw_res or raw_res in ("2", "FAIL")):
+                elif is_match_finished and (is_winning == 0 or out_status == "2" or "LOST" in raw_res or raw_res in ("2", "FAIL")):
                     leg_result = "LOST"
+                elif out_status == "3" or raw_res in ("3", "VOID", "CANCELLED"):
+                    leg_result = "VOID"
 
                 # Dynamic status resolution
                 if mkt_status == 3 or sel_active == 0:

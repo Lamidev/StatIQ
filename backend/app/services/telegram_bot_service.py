@@ -639,11 +639,8 @@ class StatIQTelegramBot:
             rest = trim_prefix.group(2).lower()
 
             target_mode = "GAMES"
-            target_val = 10.0
-            num_tickets = 2 if ("2 ticket" in rest or "2 variant" or "2 slip" in rest or "two" in rest) else 1
-
-            if "2 ticket" in rest or "2 variant" in rest or "2 slip" in rest:
-                num_tickets = 2
+            is_two = any(k in rest for k in ["2 ticket", "2 variant", "2 slip", "two ticket", "two variant", "two slip", " 2 "])
+            num_tickets = 2 if is_two else 1
 
             # Check if odds specified
             odds_m = re.search(r"(\d+\.?\d*)\s*(?:odd|odds|x)", rest)
@@ -697,6 +694,14 @@ class StatIQTelegramBot:
     def poll_updates(self):
         """Infinite polling loop for Telegram updates."""
         logger.info("[TelegramBot] Polling loop started successfully.")
+
+        # Ensure no hanging webhook conflicts with long-polling
+        try:
+            with httpx.Client(timeout=10.0) as client:
+                client.post(f"{self.base_url}/deleteWebhook", json={"drop_pending_updates": False})
+        except Exception:
+            pass
+
         while self._running:
             url = f"{self.base_url}/getUpdates"
             params = {
@@ -728,6 +733,10 @@ class StatIQTelegramBot:
                                 except Exception as ce:
                                     logger.error(f"[TelegramBot] Error handling callback: {ce}", exc_info=True)
 
+                    elif resp.status_code == 409:
+                        # Temporary conflict during PM2 restart or overlapping connection
+                        logger.info("[TelegramBot] Polling connection conflict (HTTP 409). Backing off 5s for previous session to release...")
+                        time.sleep(5.0)
                     elif resp.status_code in (401, 404):
                         logger.error(f"[TelegramBot] Invalid token or bot not found ({resp.status_code}). Polling halted.")
                         break
