@@ -18,6 +18,8 @@ import time
 import asyncio
 import logging
 import threading
+import tempfile
+import collections
 from typing import Dict, Any, List, Optional, Tuple
 
 import httpx
@@ -36,12 +38,44 @@ class StatIQTelegramBot:
     """
     Standalone long-polling Telegram Bot daemon for StatIQ.
     Requires no external telegram library; runs natively via HTTPX.
+    Includes strict multi-process deduplication and update tracking.
     """
 
     def __init__(self):
         self._running = False
         self._thread: Optional[threading.Thread] = None
         self._last_update_id = 0
+        self._processed_msg_keys = collections.deque(maxlen=2000)
+        self._processed_msg_keys_set = set()
+        self._processed_cq_ids = collections.deque(maxlen=2000)
+        self._processed_cq_ids_set = set()
+        self._lock_file = None
+
+    def _acquire_process_lock(self) -> bool:
+        """
+        Cross-worker file lock: Ensures only 1 process/worker on the server
+        runs the Telegram long-polling worker to prevent duplicate deliveries.
+        """
+        lock_path = os.path.join(tempfile.gettempdir(), "statiq_telegram_bot.lock")
+        try:
+            self._lock_file = open(lock_path, "a+")
+            if os.name == "nt":
+                import msvcrt
+                try:
+                    msvcrt.locking(self._lock_file.fileno(), msvcrt.LK_NBLCK, 1)
+                    return True
+                except (IOError, OSError):
+                    return False
+            else:
+                import fcntl
+                try:
+                    fcntl.flock(self._lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    return True
+                except (IOError, OSError):
+                    return False
+        except Exception as e:
+            logger.warning(f"[TelegramBot] Process lock check note: {e}")
+            return True
 
     @property
     def bot_token(self) -> str:
@@ -611,6 +645,16 @@ class StatIQTelegramBot:
         if not chat_id:
             return
 
+        # Deduplicate callback queries (button clicks)
+        if cq_id:
+            if cq_id in self._processed_cq_ids_set:
+                logger.info(f"[TelegramBot] Duplicate callback query ignored: {cq_id}")
+                return
+            self._processed_cq_ids.append(cq_id)
+            self._processed_cq_ids_set.add(cq_id)
+            if len(self._processed_cq_ids) >= 1800:
+                self._processed_cq_ids_set = set(self._processed_cq_ids)
+
         self.answer_callback_query(cq_id, "Processing your request...")
 
         # Case 1: Generator button (e.g. gen:odds:2.0:1 or gen:odds:2.0:2, gen:games:10:2, gen:rollover)
@@ -651,10 +695,22 @@ class StatIQTelegramBot:
     def process_message(self, message: Dict[str, Any]):
         """Parses incoming text messages and routes to the correct handler."""
         chat_id = message.get("chat", {}).get("id")
+        msg_id = message.get("message_id")
         text = (message.get("text") or "").strip()
 
         if not chat_id or not text:
             return
+
+        # Deduplication check: strictly prevent processing any message twice
+        if msg_id:
+            msg_key = f"{chat_id}:{msg_id}"
+            if msg_key in self._processed_msg_keys_set:
+                logger.info(f"[TelegramBot] Duplicate message ignored: {msg_key}")
+                return
+            self._processed_msg_keys.append(msg_key)
+            self._processed_msg_keys_set.add(msg_key)
+            if len(self._processed_msg_keys) >= 1800:
+                self._processed_msg_keys_set = set(self._processed_msg_keys)
 
         # 1. /start or /help
         if text.startswith("/start") or text.startswith("/help"):
@@ -786,10 +842,10 @@ class StatIQTelegramBot:
         """Infinite polling loop for Telegram updates."""
         logger.info("[TelegramBot] Polling loop started successfully.")
 
-        # Ensure no hanging webhook conflicts with long-polling
+        # Ensure no hanging webhook conflicts and flush any old pending backlog on startup
         try:
             with httpx.Client(timeout=10.0) as client:
-                client.post(f"{self.base_url}/deleteWebhook", json={"drop_pending_updates": False})
+                client.post(f"{self.base_url}/deleteWebhook", json={"drop_pending_updates": True})
         except Exception:
             pass
 
@@ -815,8 +871,10 @@ class StatIQTelegramBot:
                         updates = data.get("result", [])
                         for update in updates:
                             uid = update.get("update_id", 0)
-                            if uid > self._last_update_id:
-                                self._last_update_id = uid
+                            # Strictly skip any duplicate or already-processed update IDs
+                            if uid <= self._last_update_id:
+                                continue
+                            self._last_update_id = uid
 
                             if "message" in update:
                                 try:
@@ -850,9 +908,14 @@ class StatIQTelegramBot:
         logger.info("[TelegramBot] Polling loop ended.")
 
     def start(self):
-        """Starts the bot in a background thread."""
+        """Starts the bot in a background thread with cross-process lock protection."""
         if self._running:
-            logger.info("[TelegramBot] Bot is already running.")
+            logger.info("[TelegramBot] Bot is already running in this process.")
+            return
+
+        # Ensure only 1 worker process on the server runs the Telegram bot poller
+        if not self._acquire_process_lock():
+            logger.warning("[TelegramBot] Another worker process holds the polling lock. Skipping duplicate poller instance.")
             return
 
         self._running = True
@@ -861,11 +924,29 @@ class StatIQTelegramBot:
         logger.info("[TelegramBot] Background worker spawned.")
 
     def stop(self):
-        """Stops the bot background worker."""
+        """Stops the bot background worker and releases cross-process lock."""
         self._running = False
         if self._thread:
             self._thread.join(timeout=2.0)
             logger.info("[TelegramBot] Bot worker stopped.")
+        if self._lock_file:
+            try:
+                if os.name == "nt":
+                    import msvcrt
+                    try:
+                        msvcrt.locking(self._lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+                    except Exception:
+                        pass
+                else:
+                    import fcntl
+                    try:
+                        fcntl.flock(self._lock_file.fileno(), fcntl.LOCK_UN)
+                    except Exception:
+                        pass
+                self._lock_file.close()
+                self._lock_file = None
+            except Exception:
+                pass
 
 
 # Global Singleton Instance
