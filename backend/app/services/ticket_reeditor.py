@@ -577,9 +577,32 @@ async def re_edit_ticket(
                     spec = "total=3.5"
                     reason_lbl = f"Upgraded volatile goal market to safe-haven 'Under 3.5 Goals'"
 
-            # Case C: Straight 1X2 / Handicap / Win Either Half -> Upgrade to Asian Handicap (+1.5) or Double Chance
+            # Case C: Straight 1X2 / Handicap / Win Either Half -> Upgrade to Asian Handicap (+1.5), Double Chance, or Team Goals
             else:
-                if is_away_intent:
+                h_clean = home.lower()
+                a_clean = away.lower()
+                is_home_power = any(k in h_clean for k in HIGH_TEMPO_CLUBS) or get_team_rating(home) >= 1750
+                is_away_power = any(k in a_clean for k in HIGH_TEMPO_CLUBS) or get_team_rating(away) >= 1750
+
+                if is_home_power and not is_away_intent and (idx % 2 == 1):
+                    new_mkt = "Team Total Goals"
+                    new_pick = f"{home} Over 1.5 Team Goals"
+                    new_odds = round(max(1.18, min(1.38, orig_odds * 0.85)), 2)
+                    new_prob = 0.91
+                    mkt_id = "19"
+                    oc_id = "12"
+                    spec = "total=1.5"
+                    reason_lbl = f"Upgraded straight win on powerhouse {home} to '{new_pick}'"
+                elif is_away_power and is_away_intent and (idx % 2 == 1):
+                    new_mkt = "Team Total Goals"
+                    new_pick = f"{away} Over 1.5 Team Goals"
+                    new_odds = round(max(1.18, min(1.38, orig_odds * 0.85)), 2)
+                    new_prob = 0.91
+                    mkt_id = "20"
+                    oc_id = "12"
+                    spec = "total=1.5"
+                    reason_lbl = f"Upgraded straight win on away powerhouse {away} to '{new_pick}'"
+                elif is_away_intent:
                     new_mkt = "Asian Handicap"
                     new_pick = f"{away} (+1.5 Handicap)"
                     new_odds = round(max(1.15, min(1.35, orig_odds * 0.82)), 2)
@@ -689,8 +712,8 @@ async def re_edit_ticket(
                 removed_selections.append(removed_item)
                 remove_count += 1
 
-    # Cap target_games at 15 max for variant / accumulator safety
-    effective_target_games = min(15, target_games) if (target_mode == "GAMES" and target_games > 0) else (14 if target_mode == "GAMES" else 0)
+    # Cap target_games at 40 max for variant / accumulator safety (SportyBet maximum)
+    effective_target_games = min(40, target_games) if (target_mode == "GAMES" and target_games > 0) else (14 if target_mode == "GAMES" else 0)
 
     # ══════════════════════════════════════════════════════════════════════════
     # STEP 3: ANCHOR & ORBIT MULTI-TICKET PARTITIONING (Risk-Isolated Portfolio)
@@ -701,7 +724,8 @@ async def re_edit_ticket(
         o = float(s.get("estimated_odds") or s.get("odds") or 1.25)
         o_score = 0.06 if 1.15 <= o <= 1.35 else 0.02
         anchor_bonus = 0.12 if is_anchor else 0.0
-        jitter = (rng.random() * 0.04) if reshuffle_seed else 0.0
+        # Dynamic temperature jitter for true regeneration diversity across qualifying pool
+        jitter = (rng.random() * 0.35) if reshuffle_seed else (rng.random() * 0.08)
         return p + o_score + anchor_bonus + jitter
 
     def _get_f_key(c: Dict[str, Any]) -> str:
@@ -885,11 +909,20 @@ async def re_edit_ticket(
 
     # CASE D: Standard Multi-ticket with Anchor/Orbit Isolation & Alternative Market Hedging
     else:
+        # Partition sorted_candidates into distinct non-overlapping buckets
         ticket_buckets: List[List[Dict[str, Any]]] = [[] for _ in range(num_t)]
-        for idx, cand in enumerate(sorted_candidates):
-            ticket_buckets[idx % num_t].append(cand)
 
-        def _derive_alternative_market(cand: Dict[str, Any]) -> Dict[str, Any]:
+        # When target_mode == "GAMES", partition into contiguous non-overlapping chunks first
+        if target_mode == "GAMES" and effective_target_games > 0 and len(sorted_candidates) >= (effective_target_games * num_t):
+            for t_i in range(num_t):
+                start_i = t_i * effective_target_games
+                end_i = start_i + effective_target_games
+                ticket_buckets[t_i] = list(sorted_candidates[start_i:end_i])
+        else:
+            for idx, cand in enumerate(sorted_candidates):
+                ticket_buckets[idx % num_t].append(cand)
+
+        def _derive_alternative_market(cand: Dict[str, Any], variant_seed: int = 0) -> Dict[str, Any]:
             alt = dict(cand)
             m_lower = str(cand.get("market_name") or "").lower()
             s_lower = str(cand.get("selection_name") or "").lower()
@@ -898,8 +931,41 @@ async def re_edit_ticket(
             orig_odds = float(cand.get("odds") or cand.get("estimated_odds") or 1.25)
 
             is_away_intent = "away" in s_lower or "2" in s_lower or away.lower() in s_lower or "x2" in s_lower
+            h_clean = home.lower()
+            a_clean = away.lower()
+            is_home_power = any(k in h_clean for k in HIGH_TEMPO_CLUBS) or get_team_rating(home) >= 1750
+            is_away_power = any(k in a_clean for k in HIGH_TEMPO_CLUBS) or get_team_rating(away) >= 1750
 
-            if "over 1.5" in s_lower or "over 1.5" in m_lower:
+            # Dynamic 4-market rotation for rich variety
+            cycle = (variant_seed + len(home) + len(away)) % 4
+
+            if (is_home_power or is_away_power) and cycle == 0:
+                target_team = home if is_home_power else away
+                mkt_id = "19" if is_home_power else "20"
+                alt["market_name"] = "Team Total Goals"
+                alt["selection_name"] = f"{target_team} Over 1.5 Team Goals"
+                alt["odds"] = round(max(1.18, min(1.38, orig_odds * 1.05)), 2)
+                alt["estimated_odds"] = alt["odds"]
+                alt["estimated_prob"] = 0.88
+                alt["reason"] = f"Powerhouse tactical upgrade: {target_team} Over 1.5 Team Goals (attacks opponent floor)"
+                alt["provider_market_id"] = mkt_id
+                alt["provider_outcome_id"] = "12"
+                alt["provider_specifier"] = "total=1.5"
+
+            elif (is_home_power or is_away_power) and cycle == 1:
+                target_team = home if is_home_power else away
+                mkt_id = "73" if is_home_power else "74"
+                alt["market_name"] = "Win Either Half"
+                alt["selection_name"] = f"{target_team} Win Either Half"
+                alt["odds"] = round(max(1.16, min(1.32, orig_odds * 0.98)), 2)
+                alt["estimated_odds"] = alt["odds"]
+                alt["estimated_prob"] = 0.90
+                alt["reason"] = f"Draw/late-equalizer immunity: {target_team} Win Either Half"
+                alt["provider_market_id"] = mkt_id
+                alt["provider_outcome_id"] = "75"
+                alt["provider_specifier"] = None
+
+            elif "over 1.5" in s_lower or "over 1.5" in m_lower:
                 alt["market_name"] = "Double Chance"
                 if is_away_intent:
                     alt["selection_name"] = f"Draw or {away} (X2)"
@@ -912,28 +978,42 @@ async def re_edit_ticket(
                 alt["odds"] = round(max(1.15, min(1.35, orig_odds * 0.96)), 2)
                 alt["estimated_odds"] = alt["odds"]
                 alt["estimated_prob"] = 0.88
-                alt["reason"] = f"Diversified variant: Draw-protected Double Chance ({alt['selection_name']}) instead of Over 1.5"
+                alt["reason"] = f"Draw-protected Double Chance ({alt['selection_name']}) instead of Over 1.5"
                 alt["provider_specifier"] = None
+
             elif "double chance" in m_lower or "1x" in s_lower or "x2" in s_lower or "12" in s_lower:
-                alt["market_name"] = "Over/Under Goals"
-                alt["selection_name"] = "Over 1.5 Goals"
-                alt["odds"] = round(max(1.15, min(1.30, orig_odds * 0.98)), 2)
-                alt["estimated_odds"] = alt["odds"]
-                alt["estimated_prob"] = 0.87
-                alt["reason"] = f"Diversified variant: Over 1.5 Goals instead of Double Chance"
-                alt["provider_market_id"] = "18"
-                alt["provider_outcome_id"] = "12"
-                alt["provider_specifier"] = "total=1.5"
+                if cycle == 2:
+                    alt["market_name"] = "Over/Under Goals"
+                    alt["selection_name"] = "Under 3.5 Goals"
+                    alt["odds"] = round(max(1.18, min(1.35, orig_odds * 1.02)), 2)
+                    alt["estimated_odds"] = alt["odds"]
+                    alt["estimated_prob"] = 0.89
+                    alt["reason"] = f"Under 3.5 Goals defensive safety cushion"
+                    alt["provider_market_id"] = "18"
+                    alt["provider_outcome_id"] = "13"
+                    alt["provider_specifier"] = "total=3.5"
+                else:
+                    alt["market_name"] = "Over/Under Goals"
+                    alt["selection_name"] = "Over 1.5 Goals"
+                    alt["odds"] = round(max(1.15, min(1.30, orig_odds * 0.98)), 2)
+                    alt["estimated_odds"] = alt["odds"]
+                    alt["estimated_prob"] = 0.87
+                    alt["reason"] = f"Over 1.5 Goals baseline pace instead of Double Chance"
+                    alt["provider_market_id"] = "18"
+                    alt["provider_outcome_id"] = "12"
+                    alt["provider_specifier"] = "total=1.5"
+
             elif "handicap" in m_lower:
                 alt["market_name"] = "Over/Under Goals"
                 alt["selection_name"] = "Under 3.5 Goals"
                 alt["odds"] = round(max(1.18, min(1.35, orig_odds * 1.02)), 2)
                 alt["estimated_odds"] = alt["odds"]
                 alt["estimated_prob"] = 0.89
-                alt["reason"] = f"Diversified variant: Under 3.5 Goals safety cushion"
+                alt["reason"] = f"Under 3.5 Goals defensive safety cushion"
                 alt["provider_market_id"] = "18"
                 alt["provider_outcome_id"] = "13"
                 alt["provider_specifier"] = "total=3.5"
+
             else:
                 alt["market_name"] = "Double Chance"
                 if is_away_intent:
@@ -947,9 +1027,12 @@ async def re_edit_ticket(
                 alt["odds"] = round(max(1.16, min(1.35, orig_odds * 0.95)), 2)
                 alt["estimated_odds"] = alt["odds"]
                 alt["estimated_prob"] = 0.88
-                alt["reason"] = f"Diversified variant: Draw-protected coverage ({alt['selection_name']})"
+                alt["reason"] = f"Draw-protected coverage ({alt['selection_name']})"
                 alt["provider_specifier"] = None
 
+            # Enforce global 1.15 minimum odds floor strictly
+            alt["odds"] = max(1.15, float(alt.get("odds", 1.15)))
+            alt["estimated_odds"] = alt["odds"]
             return alt
 
         fixture_usage_count: Dict[str, int] = {}
@@ -987,7 +1070,7 @@ async def re_edit_ticket(
                         is_already_in_ticket = any(_get_f_key(x) == f_key for x in t_final)
                         if not is_already_in_ticket:
                             if mode == "AUDITOR" and current_count < max_allowed_for_cand:
-                                diversified_cand = _derive_alternative_market(cand)
+                                diversified_cand = _derive_alternative_market(cand, variant_seed=t_idx)
                                 t_final.append(diversified_cand)
                                 fixture_usage_count[f_key] = current_count + 1
                                 assigned_markets_per_fixture.setdefault(f_key, set()).add(str(diversified_cand.get("selection_name")).strip().lower())
@@ -1003,8 +1086,10 @@ async def re_edit_ticket(
                     if needed <= 0:
                         break
 
-            if len(t_final) > 15:
-                t_final = t_final[:15]
+            if effective_target_games > 0 and len(t_final) > effective_target_games:
+                t_final = t_final[:effective_target_games]
+            elif len(t_final) > 40:
+                t_final = t_final[:40]
 
             if target_mode == "ODDS" and target_odds > 1.05:
                 curr_acc = 1.0
