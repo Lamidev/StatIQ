@@ -116,35 +116,38 @@ class StatIQTelegramBot:
         msg = (
             "🤖 <b>Welcome to StatIQ AI Football Intelligence Engine</b>\n\n"
             "Control all StatIQ betting engines directly from Telegram without opening the web app:\n\n"
-            "🎯 <b>Generate by Target Odds:</b>\n"
-            "• <code>/odds 2.0</code> — 2.0x Safe Multiplier\n"
-            "• <code>/odds 5.0</code> — 5.0x Accumulator\n"
-            "• <code>/odds 10.0</code> — 10.0x Multiplier\n\n"
-            "⚽ <b>Generate by Match Count:</b>\n"
-            "• <code>/games 10</code> — Top 10 High-Confidence Matches\n"
-            "• <code>/games 12</code> — Top 12 High-Confidence Matches\n\n"
+            "🎯 <b>Generate by Target Odds (1 or 2 Zero-Overlap Slips):</b>\n"
+            "• <code>/odds 2.0</code> — 2.0x Safe Multiplier (1 Slip)\n"
+            "• <code>/odds 2.0 2 tickets</code> — <b>2 Variant Slips (Zero Overlap!)</b>\n"
+            "• <code>/odds 5.0 2 tickets</code> — 2 Multiplier Slips (100% Unique Fixtures)\n\n"
+            "⚽ <b>Generate by Match Count (1 or 2 Zero-Overlap Slips):</b>\n"
+            "• <code>/games 10</code> — Top 10 High-Confidence Matches (1 Slip)\n"
+            "• <code>/games 10 2 tickets</code> — <b>2 Variant Slips of 10 Matches Each</b>\n"
+            "• <code>/games 12 2 tickets</code> — 2 Variant Slips of 12 Matches Each\n\n"
             "🚀 <b>Daily Elite Rollover:</b>\n"
             "• <code>/rollover</code> — Instant 2.0x Low-Variance Day Slip\n\n"
             "✂️ <b>Ticket Trimmer & Risk Purge (REMOVE Mode):</b>\n"
             "Send or trim any SportyBet 30+ game slip into 10–12 winnable picks:\n"
-            "• <code>/trim CODE 10 games</code>\n"
-            "• <code>/trim CODE 12 games</code>\n"
             "• <code>/trim CODE 10 games 2 tickets</code> ➔ <i>Zero Overlap Guarantee!</i>\n"
-            "• <code>/trim CODE 5.0 odds</code>\n\n"
-            "💡 <i>Tip: You can also just paste any SportyBet booking code or link directly here!</i>\n\n"
-            "🛡️ <b>Strict Odds Floor:</b> Min odds ≥ <b>1.15x</b> enforced on all picks."
+            "• <code>/remove CODE 2 tickets</code> ➔ <i>Purges risky legs into 2 independent slips</i>\n"
+            "• <code>/trim CODE 10 games</code> ➔ 1 Core Slip of 10 Games\n\n"
+            "📱 <b>Command Menu Modal:</b> Tap the <b>[Menu]</b> button at the bottom-left corner of your chat to view and run all commands with one tap!\n\n"
+            "🛡️ <b>Strict Odds Floor:</b> Min odds ≥ <b>1.15x</b> strictly enforced across all picks."
         )
 
         keyboard = {
             "inline_keyboard": [
                 [
-                    {"text": "🎯 2.0x Rollover", "callback_data": "gen:odds:2.0"},
-                    {"text": "🔥 5.0x Acca", "callback_data": "gen:odds:5.0"},
-                    {"text": "⚡ 10.0x Ticket", "callback_data": "gen:odds:10.0"}
+                    {"text": "🎯 2.0x (1 Slip)", "callback_data": "gen:odds:2.0:1"},
+                    {"text": "🎯 2.0x (2 Slips · Zero Overlap)", "callback_data": "gen:odds:2.0:2"}
                 ],
                 [
-                    {"text": "⚽ 10 Games Slip", "callback_data": "gen:games:10"},
-                    {"text": "⚽ 12 Games Slip", "callback_data": "gen:games:12"}
+                    {"text": "🔥 5.0x (1 Slip)", "callback_data": "gen:odds:5.0:1"},
+                    {"text": "🔥 5.0x (2 Slips · Zero Overlap)", "callback_data": "gen:odds:5.0:2"}
+                ],
+                [
+                    {"text": "⚽ 10 Games (1 Slip)", "callback_data": "gen:games:10:1"},
+                    {"text": "⚽ 10 Games (2 Slips · Zero Overlap)", "callback_data": "gen:games:10:2"}
                 ],
                 [
                     {"text": "🚀 Daily Rollover Slip", "callback_data": "gen:rollover"}
@@ -194,10 +197,15 @@ class StatIQTelegramBot:
             logger.error(f"[TelegramBot] Rollover error: {e}", exc_info=True)
             self.send_message(chat_id, f"❌ <b>Error:</b> Rollover engine failed ({_esc(str(e))}). Please try again.")
 
-    def handle_odds_command(self, chat_id: int | str, target_odds: float):
-        """Generates an AI accumulator targeting a specific odds multiplier."""
+    def handle_odds_command(self, chat_id: int | str, target_odds: float, num_tickets: int = 1):
+        """Generates an AI accumulator targeting a specific odds multiplier (1 or more slips)."""
+        num_tickets = max(1, min(4, int(num_tickets or 1)))
         self.send_chat_action(chat_id, "typing")
-        self.send_message(chat_id, f"⏳ <b>StatIQ 7-Gate Engine:</b> Building optimal accumulator for <b>{target_odds:.2f}x</b> target odds (Min Odds ≥ 1.15x)...")
+        variant_desc = f"<b>{num_tickets} Zero-Overlap Variant Slips</b>" if num_tickets > 1 else "1 core slip"
+        self.send_message(
+            chat_id,
+            f"⏳ <b>StatIQ 7-Gate Engine:</b> Building {variant_desc} targeting <b>{target_odds:.2f}x</b> odds (Min Odds ≥ 1.15x)..."
+        )
 
         try:
             from app.api.endpoints.ticket_builder import BuildTicketRequest, build_ai_ticket
@@ -206,6 +214,8 @@ class StatIQTelegramBot:
                 target_odds=target_odds,
                 target_mode="ODDS",
                 mode="ACCUMULATOR",
+                num_tickets=num_tickets,
+                overlap_mode="ZERO_OVERLAP",
                 use_live_odds=True,
                 risk_profile="BALANCED"
             )
@@ -217,36 +227,61 @@ class StatIQTelegramBot:
             finally:
                 loop.close()
 
-            t_obj = res.get("ticket") or {}
-            approved_legs = t_obj.get("approved_legs") or []
+            portfolio = res.get("portfolio_tickets") or []
+            if not portfolio and res.get("ticket"):
+                portfolio = [res.get("ticket")]
 
-            if approved_legs:
-                booking_code = t_obj.get("booking_code") or res.get("booking_code")
-                share_url = t_obj.get("share_url") or res.get("share_url")
-                acc_odds = t_obj.get("accumulated_odds") or target_odds
-                comb_prob = (t_obj.get("combined_probability") or 0.65) * 100.0
+            dispatched = 0
+            for slip in portfolio:
+                slip_idx = slip.get("ticket_index", dispatched + 1)
+                approved_legs = slip.get("approved_legs") or []
+                if not approved_legs:
+                    continue
+
+                booking_code = slip.get("booking_code")
+                share_url = slip.get("share_url")
+                acc_odds = slip.get("accumulated_odds") or target_odds
+                comb_prob = (slip.get("combined_probability") or 0.65) * 100.0
+
+                title = (
+                    f"🎯 StatIQ AI Accumulator — Slip #{slip_idx} of {len(portfolio)} ({len(approved_legs)} Legs)"
+                    if len(portfolio) > 1
+                    else f"🎯 StatIQ AI Accumulator ({len(approved_legs)} Legs)"
+                )
+                extra_note = (
+                    f"Target: {target_odds:.2f}x · 🔒 Zero-Overlap Guarantee (100% Unique Fixtures) · Min Odds ≥ 1.15x"
+                    if len(portfolio) > 1
+                    else f"Target: {target_odds:.2f}x · Min Odds ≥ 1.15x Strictly Enforced"
+                )
 
                 self._dispatch_ticket_message(
                     chat_id=chat_id,
-                    title=f"🎯 StatIQ AI Accumulator ({len(approved_legs)} Legs)",
+                    title=title,
                     booking_code=booking_code,
                     share_url=share_url,
                     total_odds=acc_odds,
                     confidence=comb_prob,
                     picks=approved_legs,
-                    extra_note=f"Target: {target_odds:.2f}x · Min Odds ≥ 1.15x Strictly Enforced"
+                    extra_note=extra_note
                 )
-            else:
+                dispatched += 1
+
+            if dispatched == 0:
                 self.send_message(chat_id, f"⚠️ <b>Builder Notice:</b> {res.get('message', 'No suitable fixtures available right now.')}")
         except Exception as e:
             logger.error(f"[TelegramBot] Odds build error: {e}", exc_info=True)
             self.send_message(chat_id, f"❌ <b>Error:</b> Failed to generate ticket ({_esc(str(e))}).")
 
-    def handle_games_command(self, chat_id: int | str, target_games: int):
-        """Generates an AI accumulator with an exact game count."""
+    def handle_games_command(self, chat_id: int | str, target_games: int, num_tickets: int = 1):
+        """Generates an AI accumulator with an exact game count (1 or more slips)."""
         target_games = max(3, min(35, target_games))
+        num_tickets = max(1, min(4, int(num_tickets or 1)))
         self.send_chat_action(chat_id, "typing")
-        self.send_message(chat_id, f"⏳ <b>StatIQ 7-Gate Engine:</b> Selecting top <b>{target_games}</b> high-probability fixtures (Min Odds ≥ 1.15x)...")
+        variant_desc = f"<b>{num_tickets} Zero-Overlap Slips</b> of {target_games} matches each" if num_tickets > 1 else f"top <b>{target_games}</b> matches"
+        self.send_message(
+            chat_id,
+            f"⏳ <b>StatIQ 7-Gate Engine:</b> Selecting {variant_desc} (Min Odds ≥ 1.15x)..."
+        )
 
         try:
             from app.api.endpoints.ticket_builder import BuildTicketRequest, build_ai_ticket
@@ -255,6 +290,8 @@ class StatIQTelegramBot:
                 target_games=target_games,
                 target_mode="GAMES",
                 mode="ACCUMULATOR",
+                num_tickets=num_tickets,
+                overlap_mode="ZERO_OVERLAP",
                 use_live_odds=True,
                 risk_profile="BALANCED"
             )
@@ -266,26 +303,46 @@ class StatIQTelegramBot:
             finally:
                 loop.close()
 
-            t_obj = res.get("ticket") or {}
-            approved_legs = t_obj.get("approved_legs") or []
+            portfolio = res.get("portfolio_tickets") or []
+            if not portfolio and res.get("ticket"):
+                portfolio = [res.get("ticket")]
 
-            if approved_legs:
-                booking_code = t_obj.get("booking_code") or res.get("booking_code")
-                share_url = t_obj.get("share_url") or res.get("share_url")
-                acc_odds = t_obj.get("accumulated_odds") or 1.0
-                comb_prob = (t_obj.get("combined_probability") or 0.60) * 100.0
+            dispatched = 0
+            for slip in portfolio:
+                slip_idx = slip.get("ticket_index", dispatched + 1)
+                approved_legs = slip.get("approved_legs") or []
+                if not approved_legs:
+                    continue
+
+                booking_code = slip.get("booking_code")
+                share_url = slip.get("share_url")
+                acc_odds = slip.get("accumulated_odds") or 1.0
+                comb_prob = (slip.get("combined_probability") or 0.60) * 100.0
+
+                title = (
+                    f"⚽ StatIQ Elite {len(approved_legs)}-Match Slip — Slip #{slip_idx} of {len(portfolio)}"
+                    if len(portfolio) > 1
+                    else f"⚽ StatIQ Elite {len(approved_legs)}-Match Slip"
+                )
+                extra_note = (
+                    f"Picks: {len(approved_legs)} Matches · 🔒 Zero-Overlap Guarantee (100% Unique Fixtures) · Min Odds ≥ 1.15x"
+                    if len(portfolio) > 1
+                    else f"Picks: {len(approved_legs)} Top Matches · Min Odds ≥ 1.15x"
+                )
 
                 self._dispatch_ticket_message(
                     chat_id=chat_id,
-                    title=f"⚽ StatIQ Elite {len(approved_legs)}-Match Slip",
+                    title=title,
                     booking_code=booking_code,
                     share_url=share_url,
                     total_odds=acc_odds,
                     confidence=comb_prob,
                     picks=approved_legs,
-                    extra_note=f"Picks: {len(approved_legs)} Top Matches · Min Odds ≥ 1.15x"
+                    extra_note=extra_note
                 )
-            else:
+                dispatched += 1
+
+            if dispatched == 0:
                 self.send_message(chat_id, f"⚠️ <b>Builder Notice:</b> {res.get('message', 'No suitable fixtures available right now.')}")
         except Exception as e:
             logger.error(f"[TelegramBot] Games build error: {e}", exc_info=True)
@@ -438,11 +495,12 @@ class StatIQTelegramBot:
                         {"text": f"✂️ Trim to 12 Games (1 Slip)", "callback_data": f"trim:{code}:12:games:1"}
                     ],
                     [
-                        {"text": f"✂️ 2 Tickets (Zero Overlap - 10 Games)", "callback_data": f"trim:{code}:10:games:2"}
+                        {"text": f"✂️ 2 Tickets (Zero Overlap - 10 Games)", "callback_data": f"trim:{code}:10:games:2"},
+                        {"text": f"✂️ 2 Tickets (Zero Overlap - 12 Games)", "callback_data": f"trim:{code}:12:games:2"}
                     ],
                     [
-                        {"text": f"🎯 Trim to 2.0x Odds", "callback_data": f"trim:{code}:2.0:odds:1"},
-                        {"text": f"🎯 Trim to 5.0x Odds", "callback_data": f"trim:{code}:5.0:odds:1"}
+                        {"text": f"🎯 Trim to 2.0x (2 Slips)", "callback_data": f"trim:{code}:2.0:odds:2"},
+                        {"text": f"🎯 Trim to 5.0x (1 Slip)", "callback_data": f"trim:{code}:5.0:odds:1"}
                     ]
                 ]
             }
@@ -555,7 +613,7 @@ class StatIQTelegramBot:
 
         self.answer_callback_query(cq_id, "Processing your request...")
 
-        # Case 1: Generator button (e.g. gen:odds:2.0, gen:games:10, gen:rollover)
+        # Case 1: Generator button (e.g. gen:odds:2.0:1 or gen:odds:2.0:2, gen:games:10:2, gen:rollover)
         if data.startswith("gen:"):
             parts = data.split(":")
             action = parts[1]
@@ -563,10 +621,12 @@ class StatIQTelegramBot:
                 self.handle_rollover_command(chat_id)
             elif action == "odds":
                 val = float(parts[2]) if len(parts) > 2 else 2.0
-                self.handle_odds_command(chat_id, val)
+                num_t = int(parts[3]) if len(parts) > 3 else 1
+                self.handle_odds_command(chat_id, val, num_tickets=num_t)
             elif action == "games":
                 val = int(parts[2]) if len(parts) > 2 else 10
-                self.handle_games_command(chat_id, val)
+                num_t = int(parts[3]) if len(parts) > 3 else 1
+                self.handle_games_command(chat_id, val, num_tickets=num_t)
 
         # Case 2: Trimmer button (trim:<code>:<val>:<mode>:<num_tickets>)
         elif data.startswith("trim:"):
@@ -606,25 +666,34 @@ class StatIQTelegramBot:
             self.handle_rollover_command(chat_id)
             return
 
-        # 3. /odds <target_odds>
-        odds_match = re.match(r"^/(?:odds|build|target)\s*(\d+\.?\d*)", text, re.IGNORECASE)
+        # 3. /odds <target_odds> [num_tickets]
+        odds_match = re.match(r"^/(?:odds|build|target)\s*(\d+\.?\d*)(.*)", text, re.IGNORECASE)
         if odds_match:
             val = float(odds_match.group(1))
-            self.handle_odds_command(chat_id, val)
+            rest = (odds_match.group(2) or "").lower().strip()
+            is_two = any(k in rest for k in ["2 ticket", "2 variant", "2 slip", "two ticket", "two variant", "two slip", " 2 "]) or rest.startswith("2")
+            num_tickets = 2 if is_two else 1
+            self.handle_odds_command(chat_id, val, num_tickets=num_tickets)
             return
 
-        # Shortcuts: /2odds, /5odds, /10odds
-        shortcut_odds = re.match(r"^/(\d+)odds", text, re.IGNORECASE)
+        # Shortcuts: /2odds, /5odds, /10odds [num_tickets]
+        shortcut_odds = re.match(r"^/(\d+)odds(.*)", text, re.IGNORECASE)
         if shortcut_odds:
             val = float(shortcut_odds.group(1))
-            self.handle_odds_command(chat_id, val)
+            rest = (shortcut_odds.group(2) or "").lower().strip()
+            is_two = any(k in rest for k in ["2 ticket", "2 variant", "2 slip", "two ticket", "two variant", "two slip", " 2 "]) or rest.startswith("2")
+            num_tickets = 2 if is_two else 1
+            self.handle_odds_command(chat_id, val, num_tickets=num_tickets)
             return
 
-        # 4. /games <count>
-        games_match = re.match(r"^/(?:games|matches)\s*(\d+)", text, re.IGNORECASE)
+        # 4. /games <count> [num_tickets]
+        games_match = re.match(r"^/(?:games|matches)\s*(\d+)(.*)", text, re.IGNORECASE)
         if games_match:
             cnt = int(games_match.group(1))
-            self.handle_games_command(chat_id, cnt)
+            rest = (games_match.group(2) or "").lower().strip()
+            is_two = any(k in rest for k in ["2 ticket", "2 variant", "2 slip", "two ticket", "two variant", "two slip", " 2 "]) or rest.startswith("2")
+            num_tickets = 2 if is_two else 1
+            self.handle_games_command(chat_id, cnt, num_tickets=num_tickets)
             return
 
         # 5. /trim or /remove
@@ -639,7 +708,7 @@ class StatIQTelegramBot:
             rest = trim_prefix.group(2).lower()
 
             target_mode = "GAMES"
-            is_two = any(k in rest for k in ["2 ticket", "2 variant", "2 slip", "two ticket", "two variant", "two slip", " 2 "])
+            is_two = any(k in rest for k in ["2 ticket", "2 variant", "2 slip", "two ticket", "two variant", "two slip", " 2 "]) or rest.strip().startswith("2")
             num_tickets = 2 if is_two else 1
 
             # Check if odds specified
@@ -688,8 +757,30 @@ class StatIQTelegramBot:
         )
 
     # ─────────────────────────────────────────────────────────────────────────
-    # Long-Polling Daemon Loop
+    # Long-Polling Daemon Loop & Command Registration
     # ─────────────────────────────────────────────────────────────────────────
+
+    def register_bot_commands(self):
+        """
+        Registers the bot commands and persistent Chat Menu button with Telegram Bot API.
+        Enables the native command modal popup when clicking [Menu] or typing '/'.
+        """
+        commands = [
+            {"command": "start", "description": "Show main menu & 1-tap quick buttons"},
+            {"command": "rollover", "description": "Generate today's 2.0x Safe Rollover slip"},
+            {"command": "odds", "description": "Target odds (/odds 2.0 or /odds 2.0 2 tickets)"},
+            {"command": "games", "description": "Top matches (/games 10 or /games 10 2 tickets)"},
+            {"command": "trim", "description": "Trim 30+ game slip (/trim CODE 10 games 2 tickets)"},
+            {"command": "remove", "description": "Purge risky picks (/remove CODE 2 tickets)"},
+            {"command": "help", "description": "Help guide & full usage manual"},
+        ]
+        try:
+            with httpx.Client(timeout=10.0) as client:
+                client.post(f"{self.base_url}/setMyCommands", json={"commands": commands})
+                client.post(f"{self.base_url}/setChatMenuButton", json={"menu_button": {"type": "commands"}})
+            logger.info("[TelegramBot] Registered bot commands and Chat Menu Button successfully.")
+        except Exception as e:
+            logger.warning(f"[TelegramBot] Could not register bot commands: {e}")
 
     def poll_updates(self):
         """Infinite polling loop for Telegram updates."""
@@ -699,6 +790,12 @@ class StatIQTelegramBot:
         try:
             with httpx.Client(timeout=10.0) as client:
                 client.post(f"{self.base_url}/deleteWebhook", json={"drop_pending_updates": False})
+        except Exception:
+            pass
+
+        # Register bot commands and enable persistent native Menu button
+        try:
+            self.register_bot_commands()
         except Exception:
             pass
 
