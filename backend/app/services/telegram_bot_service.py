@@ -150,6 +150,10 @@ class StatIQTelegramBot:
         msg = (
             "🤖 <b>Welcome to StatIQ AI Football Intelligence Engine</b>\n\n"
             "Control all StatIQ betting engines directly from Telegram without opening the web app:\n\n"
+            "⚙️ <b>Daily VIP Automation (10:00 AM WAT Dispatch):</b>\n"
+            "• <code>/auto</code> — View automation status & 1-tap toggles (2.0x, 5.0x, 10.0x)\n"
+            "• <code>/dispatch</code> — <b>Run & dispatch today's 3 slips immediately</b>\n"
+            "• 🔒 <i>Zero-Overlap Guarantee: All 3 daily tickets share 0 common fixtures!</i>\n\n"
             "🎯 <b>Generate by Target Odds (1 or 2 Zero-Overlap Slips):</b>\n"
             "• <code>/odds 2.0</code> — 2.0x Safe Multiplier (1 Slip)\n"
             "• <code>/odds 2.0 2 tickets</code> — <b>2 Variant Slips (Zero Overlap!)</b>\n"
@@ -158,19 +162,22 @@ class StatIQTelegramBot:
             "• <code>/games 10</code> — Top 10 High-Confidence Matches (1 Slip)\n"
             "• <code>/games 10 2 tickets</code> — <b>2 Variant Slips of 10 Matches Each</b>\n"
             "• <code>/games 12 2 tickets</code> — 2 Variant Slips of 12 Matches Each\n\n"
-            "🚀 <b>Daily Elite Rollover:</b>\n"
+            "🚀 <b>On-Demand Rollover:</b>\n"
             "• <code>/rollover</code> — Instant 2.0x Low-Variance Day Slip\n\n"
             "✂️ <b>Ticket Trimmer & Risk Purge (REMOVE Mode):</b>\n"
             "Send or trim any SportyBet 30+ game slip into 10–12 winnable picks:\n"
             "• <code>/trim CODE 10 games 2 tickets</code> ➔ <i>Zero Overlap Guarantee!</i>\n"
-            "• <code>/remove CODE 2 tickets</code> ➔ <i>Purges risky legs into 2 independent slips</i>\n"
-            "• <code>/trim CODE 10 games</code> ➔ 1 Core Slip of 10 Games\n\n"
+            "• <code>/remove CODE 2 tickets</code> ➔ <i>Purges risky legs into 2 independent slips</i>\n\n"
             "📱 <b>Command Menu Modal:</b> Tap the <b>[Menu]</b> button at the bottom-left corner of your chat to view and run all commands with one tap!\n\n"
             "🛡️ <b>Strict Odds Floor:</b> Min odds ≥ <b>1.15x</b> strictly enforced across all picks."
         )
 
         keyboard = {
             "inline_keyboard": [
+                [
+                    {"text": "⚙️ Daily Automation Hub", "callback_data": "auto:menu"},
+                    {"text": "🚀 Dispatch Slips Now", "callback_data": "auto:dispatch"}
+                ],
                 [
                     {"text": "🎯 2.0x (1 Slip)", "callback_data": "gen:odds:2.0:1"},
                     {"text": "🎯 2.0x (2 Slips · Zero Overlap)", "callback_data": "gen:odds:2.0:2"}
@@ -182,13 +189,134 @@ class StatIQTelegramBot:
                 [
                     {"text": "⚽ 10 Games (1 Slip)", "callback_data": "gen:games:10:1"},
                     {"text": "⚽ 10 Games (2 Slips · Zero Overlap)", "callback_data": "gen:games:10:2"}
-                ],
-                [
-                    {"text": "🚀 Daily Rollover Slip", "callback_data": "gen:rollover"}
                 ]
             ]
         }
         return self.send_message(chat_id, msg, reply_markup=keyboard)
+
+    def handle_auto_command(self, chat_id: int | str):
+        """Displays Daily VIP Automation status with 1-tap toggles and instant run button."""
+        from app.services.rollover_cron_scheduler import rollover_scheduler
+        cfg = rollover_scheduler.get_config()
+
+        master_on = cfg.get("is_enabled", True)
+        ro_on = cfg.get("enable_rollover_2x", True)
+        acca5_on = cfg.get("enable_acca_5x", True)
+        acca10_on = cfg.get("enable_acca_10x", True)
+        disp_time = cfg.get("dispatch_time", "10:00")
+
+        ro_icon = "✅ ON" if ro_on else "❌ OFF"
+        acca5_icon = "✅ ON" if acca5_on else "❌ OFF"
+        acca10_icon = "✅ ON" if acca10_on else "❌ OFF"
+        master_icon = "🟢 ACTIVE" if master_on else "⏸️ PAUSED"
+
+        msg = (
+            "⚙️ <b>StatIQ Daily VIP Automation Controller</b>\n\n"
+            f"🤖 <b>Scheduler Status:</b> {master_icon}\n"
+            f"⏰ <b>Dispatch Schedule:</b> Every day at <b>{disp_time} AM WAT</b>\n"
+            "🔒 <b>Zero-Overlap Engine:</b> 100% Unique Fixtures across all active tickets\n\n"
+            "<b>Configured Tickets:</b>\n"
+            f"• 🎯 <b>2.0x Rollover:</b> {ro_icon} (2–4 Safe Banker Legs)\n"
+            f"• 🔥 <b>5.0x Value Acca:</b> {acca5_icon} (4–7 Vetted Picks)\n"
+            f"• ⚡ <b>10.0x Mega Multiplier:</b> {acca10_icon} (7–12 Dominance Picks)\n\n"
+            "<i>Tap any button below to toggle tickets on/off or dispatch today's slips instantly:</i>"
+        )
+
+        keyboard = {
+            "inline_keyboard": [
+                [
+                    {"text": f"🎯 2.0x Rollover ({'ON' if ro_on else 'OFF'})", "callback_data": "auto:toggle:ro"},
+                    {"text": f"🔥 5.0x Acca ({'ON' if acca5_on else 'OFF'})", "callback_data": "auto:toggle:5x"}
+                ],
+                [
+                    {"text": f"⚡ 10.0x Multiplier ({'ON' if acca10_on else 'OFF'})", "callback_data": "auto:toggle:10x"},
+                    {"text": f"🤖 Master ({'Active' if master_on else 'Paused'})", "callback_data": "auto:toggle:master"}
+                ],
+                [
+                    {"text": "🚀 Dispatch Today's Slips Now (Zero Overlap)", "callback_data": "auto:dispatch"}
+                ]
+            ]
+        }
+        return self.send_message(chat_id, msg, reply_markup=keyboard)
+
+    def handle_dispatch_command(self, chat_id: int | str):
+        """Immediately executes and delivers the Daily VIP Trio tickets to Telegram."""
+        self.send_chat_action(chat_id, "typing")
+        self.send_message(
+            chat_id,
+            "⏳ <b>StatIQ Daily VIP Automation:</b> Querying today's fixtures and generating 2.0x, 5.0x, and 10.0x slips with <b>Strict Zero Overlap</b>..."
+        )
+
+        try:
+            from app.services.rollover_cron_scheduler import rollover_scheduler
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                trio_res = loop.run_until_complete(
+                    rollover_scheduler.run_now()
+                )
+            finally:
+                loop.close()
+
+            status = trio_res.get("status")
+            if status != "SUCCESS":
+                self.send_message(chat_id, f"⚠️ <b>Notice:</b> {trio_res.get('message', 'Could not assemble tickets.')}")
+                return
+
+            dispatched_count = 0
+            # Rollover slip
+            ro_ticket = trio_res.get("rollover_ticket")
+            if ro_ticket and ro_ticket.get("picks"):
+                self._dispatch_ticket_message(
+                    chat_id=chat_id,
+                    title="🎯 StatIQ 2.0x Rollover Slip",
+                    booking_code=ro_ticket.get("booking_code"),
+                    share_url=ro_ticket.get("share_url"),
+                    total_odds=ro_ticket.get("actual_odds", 2.0),
+                    confidence=ro_ticket.get("confidence_score", 88.0),
+                    picks=ro_ticket.get("picks", []),
+                    extra_note="Daily VIP Slip 1 of 3 · 🔒 Zero-Overlap Guarantee · Min Odds ≥ 1.15x"
+                )
+                dispatched_count += 1
+
+            # 5.0x slip
+            acca5 = trio_res.get("acca_5x_ticket")
+            if acca5 and acca5.get("picks"):
+                self._dispatch_ticket_message(
+                    chat_id=chat_id,
+                    title="🔥 StatIQ 5.0x Value Acca Slip",
+                    booking_code=acca5.get("booking_code"),
+                    share_url=acca5.get("share_url"),
+                    total_odds=acca5.get("actual_odds", 5.0),
+                    confidence=acca5.get("confidence_score", 65.0),
+                    picks=acca5.get("picks", []),
+                    extra_note="Daily VIP Slip 2 of 3 · 🔒 Zero-Overlap Guarantee (Unique Fixtures) · Min Odds ≥ 1.15x"
+                )
+                dispatched_count += 1
+
+            # 10.0x slip
+            acca10 = trio_res.get("acca_10x_ticket")
+            if acca10 and acca10.get("picks"):
+                self._dispatch_ticket_message(
+                    chat_id=chat_id,
+                    title="⚡ StatIQ 10.0x Mega Multiplier Slip",
+                    booking_code=acca10.get("booking_code"),
+                    share_url=acca10.get("share_url"),
+                    total_odds=acca10.get("actual_odds", 10.0),
+                    confidence=acca10.get("confidence_score", 52.0),
+                    picks=acca10.get("picks", []),
+                    extra_note="Daily VIP Slip 3 of 3 · 🔒 Zero-Overlap Guarantee (Zero Clash) · Min Odds ≥ 1.15x"
+                )
+                dispatched_count += 1
+
+            if dispatched_count > 0:
+                self.send_message(
+                    chat_id,
+                    f"✅ <b>Daily VIP Automation Complete!</b> Dispatched {dispatched_count} slips with <b>{trio_res.get('total_unique_fixtures', 0)} total unique fixtures</b> (0 shared games)."
+                )
+        except Exception as e:
+            logger.error(f"[TelegramBot] Dispatch error: {e}", exc_info=True)
+            self.send_message(chat_id, f"❌ <b>Error:</b> Dispatch failed ({_esc(str(e))}).")
 
     def handle_rollover_command(self, chat_id: int | str):
         """Generates and delivers today's Elite Rollover ticket on demand."""
@@ -657,6 +785,33 @@ class StatIQTelegramBot:
 
         self.answer_callback_query(cq_id, "Processing your request...")
 
+        # Case 0: Automation button (auto:menu, auto:toggle:ro, auto:toggle:5x, auto:toggle:10x, auto:toggle:master, auto:dispatch)
+        if data.startswith("auto:"):
+            parts = data.split(":")
+            subaction = parts[1]
+            if subaction == "menu":
+                self.handle_auto_command(chat_id)
+            elif subaction == "dispatch":
+                self.handle_dispatch_command(chat_id)
+            elif subaction == "toggle":
+                target = parts[2]
+                from app.services.rollover_cron_scheduler import rollover_scheduler
+                cfg = rollover_scheduler.get_config()
+                if target == "ro":
+                    curr = cfg.get("enable_rollover_2x", True)
+                    rollover_scheduler.save_config({"enable_rollover_2x": not curr})
+                elif target == "5x":
+                    curr = cfg.get("enable_acca_5x", True)
+                    rollover_scheduler.save_config({"enable_acca_5x": not curr})
+                elif target == "10x":
+                    curr = cfg.get("enable_acca_10x", True)
+                    rollover_scheduler.save_config({"enable_acca_10x": not curr})
+                elif target == "master":
+                    curr = cfg.get("is_enabled", True)
+                    rollover_scheduler.save_config({"is_enabled": not curr})
+                self.handle_auto_command(chat_id)
+            return
+
         # Case 1: Generator button (e.g. gen:odds:2.0:1 or gen:odds:2.0:2, gen:games:10:2, gen:rollover)
         if data.startswith("gen:"):
             parts = data.split(":")
@@ -717,7 +872,16 @@ class StatIQTelegramBot:
             self.handle_start_or_help(chat_id)
             return
 
-        # 2. /rollover or /roll
+        # 2. Daily VIP Automation: /auto, /automation, /dispatch, /autonow
+        if any(text.startswith(cmd) for cmd in ["/auto", "/automation", "/autostatus"]):
+            self.handle_auto_command(chat_id)
+            return
+
+        if any(text.startswith(cmd) for cmd in ["/dispatch", "/autonow", "/runall", "/runnow"]):
+            self.handle_dispatch_command(chat_id)
+            return
+
+        # 3. /rollover or /roll
         if text.startswith("/rollover") or text.startswith("/roll"):
             self.handle_rollover_command(chat_id)
             return
@@ -822,7 +986,9 @@ class StatIQTelegramBot:
         Enables the native command modal popup when clicking [Menu] or typing '/'.
         """
         commands = [
-            {"command": "start", "description": "Show main menu & 1-tap quick buttons"},
+            {"command": "start", "description": "Show main menu & quick action buttons"},
+            {"command": "auto", "description": "Daily 10 AM VIP Automation status & toggles"},
+            {"command": "dispatch", "description": "Dispatch today's 3 slips (Zero Overlap!)"},
             {"command": "rollover", "description": "Generate today's 2.0x Safe Rollover slip"},
             {"command": "odds", "description": "Target odds (/odds 2.0 or /odds 2.0 2 tickets)"},
             {"command": "games", "description": "Top matches (/games 10 or /games 10 2 tickets)"},

@@ -15,7 +15,10 @@ CONFIG_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."
 
 DEFAULT_CONFIG = {
     "is_enabled": True,
-    "active_days": ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"],  # Daily rollover by default
+    "active_days": ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"],  # Daily by default
+    "enable_rollover_2x": True,            # Slip 1: 2.0x Rollover
+    "enable_acca_5x": True,                # Slip 2: 5.0x Value Acca (Zero Overlap)
+    "enable_acca_10x": True,               # Slip 3: 10.0x Mega Multiplier (Zero Overlap)
     "target_odds": 2.00,                   # 1.50 or 2.00
     "max_leg_odds": 1.45,                  # Upper safety bound per leg (1.15 to 1.45 corridor)
     "dispatch_time": "10:00",              # 10:00 AM WAT sharp
@@ -28,6 +31,7 @@ DEFAULT_CONFIG = {
     "challenge_status": "ACTIVE",          # "ACTIVE", "PAUSED", "COMPLETED"
     "last_run_date": None,
     "last_ticket": None,
+    "last_trio_result": None,
     "run_history": []
 }
 
@@ -128,9 +132,8 @@ class RolloverCronScheduler:
 
                     # Check if today is an active day and current time matches dispatch_time
                     if (current_day_code in active_days) and (current_time_str == dispatch_time) and (last_run != today_str):
-                        logger.info(f"[RolloverScheduler] Triggering scheduled 10:00 AM WAT Rollover run for {current_day_code} ({today_str})...")
+                        logger.info(f"[RolloverScheduler] Triggering scheduled 10:00 AM WAT Daily VIP Trio run for {current_day_code} ({today_str})...")
                         target_odds = float(cfg.get("target_odds", 2.00))
-                        max_leg_odds = float(cfg.get("max_leg_odds", 1.45))
 
                         challenge_info = None
                         current_stake = float(cfg.get("starting_stake", 5000))
@@ -140,34 +143,42 @@ class RolloverCronScheduler:
                             challenge_info = f"Day {curr_day} of {tot_days}"
                             current_stake = round(current_stake * (target_odds ** (curr_day - 1)))
 
+                        en_ro = bool(cfg.get("enable_rollover_2x", True))
+                        en_5x = bool(cfg.get("enable_acca_5x", True))
+                        en_10x = bool(cfg.get("enable_acca_10x", True))
+
                         # Execute async run in dedicated event loop
                         loop = asyncio.new_event_loop()
                         asyncio.set_event_loop(loop)
-                        ticket_res = loop.run_until_complete(
-                            EliteRolloverEngine.book_and_dispatch_rollover(
-                                target_odds=target_odds,
+                        trio_res = loop.run_until_complete(
+                            EliteRolloverEngine.book_and_dispatch_daily_trio(
+                                enable_rollover=en_ro,
+                                enable_5odds=en_5x,
+                                enable_10odds=en_10x,
                                 send_telegram=True,
-                                max_leg_odds=max_leg_odds,
-                                challenge_day_info=challenge_info,
-                                stake=current_stake
+                                rollover_stake=current_stake,
+                                challenge_day_info=challenge_info
                             )
                         )
                         loop.close()
 
                         # Update run history & state
                         cfg["last_run_date"] = today_str
-                        cfg["last_ticket"] = ticket_res
+                        cfg["last_trio_result"] = trio_res
+                        primary_ticket = (trio_res.get("rollover_ticket") 
+                                          or trio_res.get("acca_5x_ticket") 
+                                          or trio_res.get("acca_10x_ticket"))
+                        cfg["last_ticket"] = primary_ticket
 
                         history_entry = {
                             "date": today_str,
                             "time": current_time_str,
-                            "target_odds": target_odds,
-                            "status": ticket_res.get("status"),
-                            "booking_code": ticket_res.get("booking_code"),
-                            "actual_odds": ticket_res.get("actual_odds"),
-                            "confidence": ticket_res.get("confidence_score"),
-                            "telegram_dispatched": ticket_res.get("telegram_dispatched", False),
-                            "picks_count": ticket_res.get("leg_count", 0),
+                            "status": trio_res.get("status"),
+                            "unique_fixtures": trio_res.get("total_unique_fixtures", 0),
+                            "rollover_code": trio_res.get("rollover_ticket", {}).get("booking_code") if trio_res.get("rollover_ticket") else None,
+                            "acca_5x_code": trio_res.get("acca_5x_ticket", {}).get("booking_code") if trio_res.get("acca_5x_ticket") else None,
+                            "acca_10x_code": trio_res.get("acca_10x_ticket", {}).get("booking_code") if trio_res.get("acca_10x_ticket") else None,
+                            "zero_overlap": True,
                             "campaign_mode": cfg.get("campaign_mode", "CONTINUOUS"),
                             "stake": current_stake
                         }
@@ -190,61 +201,73 @@ class RolloverCronScheduler:
                         history.insert(0, history_entry)
                         cfg["run_history"] = history[:30]  # Retain last 30 runs
                         self.save_config(cfg)
-                        logger.info(f"[RolloverScheduler] Scheduled run completed with status: {ticket_res.get('status')}")
+                        logger.info(f"[RolloverScheduler] Scheduled run completed with status: {trio_res.get('status')}")
 
             except Exception as e:
                 logger.error(f"[RolloverScheduler] Error in cron tick: {e}")
 
             time.sleep(30)  # Check every 30 seconds
 
-    async def run_now(self, target_odds: Optional[float] = None, max_leg_odds: Optional[float] = None) -> Dict[str, Any]:
+    async def run_now(
+        self,
+        target_odds: Optional[float] = None,
+        max_leg_odds: Optional[float] = None,
+        enable_rollover: Optional[bool] = None,
+        enable_5odds: Optional[bool] = None,
+        enable_10odds: Optional[bool] = None
+    ) -> Dict[str, Any]:
         """
-        Manually triggers an immediate run of the Elite Rollover Engine (e.g. for testing or on-demand use).
+        Manually triggers an immediate run of the Daily VIP Trio (Zero-Overlap Rollover + 5.0x + 10.0x).
         """
         cfg = self.get_config()
-        odds = target_odds if target_odds is not None else float(cfg.get("target_odds", 2.00))
-        leg_cap = max_leg_odds if max_leg_odds is not None else float(cfg.get("max_leg_odds", 1.45))
+        en_ro = enable_rollover if enable_rollover is not None else bool(cfg.get("enable_rollover_2x", True))
+        en_5x = enable_5odds if enable_5odds is not None else bool(cfg.get("enable_acca_5x", True))
+        en_10x = enable_10odds if enable_10odds is not None else bool(cfg.get("enable_acca_10x", True))
 
         challenge_info = None
         current_stake = float(cfg.get("starting_stake", 5000))
+        odds = target_odds if target_odds is not None else float(cfg.get("target_odds", 2.00))
         if cfg.get("campaign_mode") == "CHALLENGE":
             curr_day = int(cfg.get("challenge_day_current", 1))
             tot_days = int(cfg.get("challenge_days", 10))
             challenge_info = f"Day {curr_day} of {tot_days}"
             current_stake = round(current_stake * (odds ** (curr_day - 1)))
 
-        logger.info(f"[RolloverScheduler] Executing manual 'Run Now' rollover for {odds}x odds (max leg odds {leg_cap}x)...")
-        ticket_res = await EliteRolloverEngine.book_and_dispatch_rollover(
-            target_odds=odds,
+        logger.info(f"[RolloverScheduler] Executing manual 'Run Now' Daily VIP Trio (2x: {en_ro}, 5x: {en_5x}, 10x: {en_10x})...")
+        trio_res = await EliteRolloverEngine.book_and_dispatch_daily_trio(
+            enable_rollover=en_ro,
+            enable_5odds=en_5x,
+            enable_10odds=en_10x,
             send_telegram=True,
-            max_leg_odds=leg_cap,
-            challenge_day_info=challenge_info,
-            stake=current_stake
+            rollover_stake=current_stake,
+            challenge_day_info=challenge_info
         )
 
         WAT_TZ = datetime.timezone(datetime.timedelta(hours=1))
         now_wat = datetime.datetime.now(WAT_TZ)
         today_str = now_wat.strftime("%Y-%m-%d")
-        cfg["last_ticket"] = ticket_res
+        cfg["last_trio_result"] = trio_res
+        primary_ticket = (trio_res.get("rollover_ticket") 
+                          or trio_res.get("acca_5x_ticket") 
+                          or trio_res.get("acca_10x_ticket"))
+        cfg["last_ticket"] = primary_ticket
+
         history = cfg.get("run_history", [])
         history.insert(0, {
             "date": today_str,
             "time": now_wat.strftime("%H:%M:%S"),
-            "target_odds": odds,
-            "status": ticket_res.get("status"),
-            "booking_code": ticket_res.get("booking_code"),
-            "actual_odds": ticket_res.get("actual_odds"),
-            "confidence": ticket_res.get("confidence_score"),
-            "telegram_dispatched": ticket_res.get("telegram_dispatched", False),
-            "picks_count": ticket_res.get("leg_count", 0),
-            "challenge_day": challenge_info,
-            "stake": current_stake,
+            "status": trio_res.get("status"),
+            "unique_fixtures": trio_res.get("total_unique_fixtures", 0),
+            "rollover_code": trio_res.get("rollover_ticket", {}).get("booking_code") if trio_res.get("rollover_ticket") else None,
+            "acca_5x_code": trio_res.get("acca_5x_ticket", {}).get("booking_code") if trio_res.get("acca_5x_ticket") else None,
+            "acca_10x_code": trio_res.get("acca_10x_ticket", {}).get("booking_code") if trio_res.get("acca_10x_ticket") else None,
+            "zero_overlap": True,
             "manual_trigger": True
         })
         cfg["run_history"] = history[:30]
         self.save_config(cfg)
 
-        return ticket_res
+        return trio_res
 
 # Global singleton
 rollover_scheduler = RolloverCronScheduler()

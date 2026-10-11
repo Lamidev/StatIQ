@@ -660,3 +660,348 @@ class EliteRolloverEngine:
             result_payload["telegram_dispatched"] = telegram_sent
 
         return result_payload
+
+    @classmethod
+    def assemble_optimal_accumulator_slip(
+        cls,
+        candidates: List[Dict[str, Any]],
+        target_odds: float = 5.00,
+        min_legs: int = 4,
+        max_legs: int = 8,
+        excluded_event_ids: Optional[set] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Deterministically selects fixtures for a multi-leg accumulator (e.g. 5.0x or 10.0x)
+        while guaranteeing zero overlap against excluded_event_ids.
+        Prioritizes top quality scores, safe markets (Double Chance, Over 1.5, Team Over 0.5),
+        and strictly enforces odds >= 1.15.
+        """
+        if not candidates:
+            return []
+
+        excluded = excluded_event_ids or set()
+
+        # Deduplicate best market per fixture and exclude already claimed fixtures
+        best_per_fixture: Dict[str, Dict[str, Any]] = {}
+        for c in candidates:
+            fid = c["event_id"]
+            if fid in excluded:
+                continue
+            if fid not in best_per_fixture:
+                best_per_fixture[fid] = c
+
+        ranked_pool = list(best_per_fixture.values())
+        if not ranked_pool:
+            return []
+
+        # Sort pool strictly by quality_score descending
+        ranked_pool.sort(key=lambda x: (x.get("quality_score", 0), x.get("model_probability", 0)), reverse=True)
+
+        target = float(target_odds)
+        best_combo: List[Dict[str, Any]] = []
+        best_objective = -float("inf")
+
+        # Top slice of candidate fixtures
+        import itertools
+        pool_slice = ranked_pool[:35]
+
+        # Search for combination within leg count range
+        target_range = range(min_legs, min(max_legs + 1, len(pool_slice) + 1))
+        for k in target_range:
+            comb_iter = itertools.combinations(pool_slice, k)
+            count = 0
+            for combo in comb_iter:
+                count += 1
+                if count > 3000:
+                    break
+                tot_odds = 1.0
+                cum_prob = 1.0
+                quality_sum = 0.0
+                for leg in combo:
+                    tot_odds *= leg["odds"]
+                    cum_prob *= leg["model_probability"]
+                    quality_sum += leg.get("quality_score", 50.0)
+
+                if tot_odds < (target * 0.88) or tot_odds > (target * 1.18):
+                    continue
+
+                avg_quality = quality_sum / k
+                odds_diff = abs(tot_odds - target)
+                leg_penalty = (k - min_legs) * 1.5
+                obj = (cum_prob * 60.0) + (avg_quality * 0.35) - (odds_diff * 25.0) - leg_penalty
+                if obj > best_objective:
+                    best_objective = obj
+                    best_combo = list(combo)
+
+        # Greedy fallback if combination search didn't hit window
+        if not best_combo:
+            curr_odds = 1.0
+            for leg in ranked_pool:
+                best_combo.append(leg)
+                curr_odds *= leg["odds"]
+                if (curr_odds >= (target * 0.92) and len(best_combo) >= min_legs) or len(best_combo) >= max_legs:
+                    break
+
+        return best_combo
+
+    @classmethod
+    async def _request_sportybet_share_code(cls, slip_legs: List[Dict[str, Any]]) -> Tuple[Optional[str], Optional[str]]:
+        """Requests SportyBet shareCode via /ng/orders/share."""
+        if not slip_legs:
+            return None, None
+
+        selections_payload = []
+        for leg in slip_legs:
+            sel_item = {
+                "eventId": leg["event_id"],
+                "marketId": str(leg["market_id"]),
+                "outcomeId": str(leg["outcome_id"])
+            }
+            if leg.get("specifier"):
+                sel_item["specifier"] = leg["specifier"]
+            selections_payload.append(sel_item)
+
+        booking_code = None
+        share_url = None
+        share_endpoint = f"{cls.BASE_URL}/ng/orders/share"
+
+        try:
+            async with httpx.AsyncClient(timeout=10.0, headers=cls.HEADERS) as client:
+                r = await client.post(share_endpoint, json={"selections": selections_payload})
+                if r.status_code == 200:
+                    res_data = r.json()
+                    if res_data.get("bizCode") == 10000:
+                        booking_code = res_data.get("data", {}).get("shareCode")
+                        share_url = res_data.get("data", {}).get("shareURL") or f"https://www.sportybet.com/ng/?shareCode={booking_code}"
+                        logger.info(f"[EliteRollover] Generated SportyBet Booking Code: {booking_code}")
+                    else:
+                        logger.warning(f"[EliteRollover] SportyBet rejected share request: {res_data}")
+        except Exception as e:
+            logger.error(f"[EliteRollover] Error requesting SportyBet booking code: {e}")
+
+        return booking_code, share_url
+
+    @classmethod
+    def _persist_ticket_record(
+        cls,
+        ticket_id: str,
+        booking_code: Optional[str],
+        mode: str,
+        target_odds: float,
+        actual_odds: float,
+        stake: float,
+        slip_legs: List[Dict[str, Any]]
+    ):
+        """Persists ticket to TrackedTicket table for record keeping."""
+        try:
+            db: Session = SessionLocal()
+            try:
+                tracked = TrackedTicket(
+                    id=ticket_id,
+                    code=booking_code or "UNBOOKED",
+                    mode=mode,
+                    target_odds=target_odds,
+                    total_odds=actual_odds,
+                    stake=stake,
+                    potential_win=round(stake * actual_odds, 2),
+                    status="RUNNING",
+                    created_at=datetime.datetime.utcnow().isoformat(),
+                    locked_at_unix=int(time.time()),
+                    selections=[
+                        {
+                            "fixture_id": leg["event_id"],
+                            "match": f"{leg['home_team']} vs {leg['away_team']}",
+                            "home_team": leg["home_team"],
+                            "away_team": leg["away_team"],
+                            "competition": leg["competition"],
+                            "market": leg["market_desc"],
+                            "selection": leg["selection_desc"],
+                            "odds": leg["odds"],
+                            "probability": leg["model_probability"],
+                            "status": "PENDING"
+                        }
+                        for leg in slip_legs
+                    ]
+                )
+                db.add(tracked)
+                db.commit()
+            finally:
+                db.close()
+        except Exception as e:
+            logger.warning(f"[EliteRollover] Error persisting {mode} ticket: {e}")
+
+    @classmethod
+    async def book_and_dispatch_daily_trio(
+        cls,
+        enable_rollover: bool = True,
+        enable_5odds: bool = True,
+        enable_10odds: bool = True,
+        send_telegram: bool = True,
+        rollover_stake: float = 5000.0,
+        challenge_day_info: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Unified 10:00 AM WAT Automation Hub:
+        Generates 2.0x Rollover, 5.0x Value Acca, and 10.0x Mega Multiplier slips
+        simultaneously with STRICT ZERO-OVERLAP GUARANTEE across all 3 tickets.
+        No fixture appears on more than one ticket.
+        """
+        logger.info(f"[EliteRollover] Executing Daily Trio Automation (2.0x: {enable_rollover}, 5.0x: {enable_5odds}, 10.0x: {enable_10odds})...")
+        raw_events = await cls.fetch_sportybet_today_events(max_pages=20)
+        if not raw_events:
+            return {
+                "status": "NO_FIXTURES",
+                "message": "SportyBet today endpoint returned 0 active fixtures."
+            }
+
+        # Evaluate candidate pool with extended max leg odds (1.65) for accumulators
+        rollover_candidates = cls.evaluate_elite_rollover_candidates(raw_events, max_leg_odds=1.45)
+        acca_candidates = cls.evaluate_elite_rollover_candidates(raw_events, max_leg_odds=1.65)
+
+        if not rollover_candidates and not acca_candidates:
+            return {
+                "status": "NO_QUALIFIED_PICKS",
+                "message": "No fixtures met the strict probability & safety cushion threshold today."
+            }
+
+        claimed_event_ids = set()
+        today_str = datetime.datetime.now(datetime.timezone.utc).strftime("%A, %b %d, %Y")
+        now_ts = int(time.time())
+
+        trio_result = {
+            "status": "SUCCESS",
+            "date_str": today_str,
+            "zero_overlap_guaranteed": True,
+            "rollover_ticket": None,
+            "acca_5x_ticket": None,
+            "acca_10x_ticket": None,
+            "total_unique_fixtures": 0
+        }
+
+        # ── 1. SLIP 1: 2.0x ROLLOVER (Highest Assurance Banker Legs) ──
+        if enable_rollover:
+            # Filter against already claimed
+            unclaimed_ro = [c for c in rollover_candidates if c["event_id"] not in claimed_event_ids]
+            ro_legs = cls.assemble_optimal_rollover_slip(unclaimed_ro, target_odds=2.00)
+            if ro_legs:
+                for leg in ro_legs:
+                    claimed_event_ids.add(leg["event_id"])
+
+                ro_odds = round(math.prod(leg["odds"] for leg in ro_legs), 2)
+                ro_prob = round(math.prod(leg["model_probability"] for leg in ro_legs) * 100.0, 1)
+                ro_code, ro_url = await cls._request_sportybet_share_code(ro_legs)
+                ro_ticket_id = f"ROLLOVER-{now_ts}"
+                current_stake = float(rollover_stake or 5000.0)
+
+                cls._persist_ticket_record(ro_ticket_id, ro_code, "ROLLOVER", 2.00, ro_odds, current_stake, ro_legs)
+
+                ro_payload = {
+                    "status": "SUCCESS",
+                    "ticket_id": ro_ticket_id,
+                    "title": "2.0x Rollover Slip",
+                    "booking_code": ro_code or "N/A",
+                    "share_url": ro_url,
+                    "target_odds": 2.00,
+                    "actual_odds": ro_odds,
+                    "confidence_score": ro_prob,
+                    "date_str": today_str,
+                    "leg_count": len(ro_legs),
+                    "picks": ro_legs,
+                    "challenge_day": challenge_day_info,
+                    "stake": current_stake,
+                    "telegram_dispatched": False
+                }
+
+                if send_telegram and ro_code:
+                    ro_payload["telegram_dispatched"] = RolloverTelegramNotifier.dispatch_rollover_slip(ro_payload)
+
+                trio_result["rollover_ticket"] = ro_payload
+
+        # ── 2. SLIP 2: 5.0x VALUE ACCA (Strict Zero Overlap with Rollover) ──
+        if enable_5odds:
+            unclaimed_5x = [c for c in acca_candidates if c["event_id"] not in claimed_event_ids]
+            acca5_legs = cls.assemble_optimal_accumulator_slip(
+                unclaimed_5x,
+                target_odds=5.00,
+                min_legs=4,
+                max_legs=7,
+                excluded_event_ids=claimed_event_ids
+            )
+            if acca5_legs:
+                for leg in acca5_legs:
+                    claimed_event_ids.add(leg["event_id"])
+
+                acca5_odds = round(math.prod(leg["odds"] for leg in acca5_legs), 2)
+                acca5_prob = round(math.prod(leg["model_probability"] for leg in acca5_legs) * 100.0, 1)
+                acca5_code, acca5_url = await cls._request_sportybet_share_code(acca5_legs)
+                acca5_ticket_id = f"ACCA5X-{now_ts}"
+
+                cls._persist_ticket_record(acca5_ticket_id, acca5_code, "VALUE_ACCA", 5.00, acca5_odds, 2000.0, acca5_legs)
+
+                acca5_payload = {
+                    "status": "SUCCESS",
+                    "ticket_id": acca5_ticket_id,
+                    "title": "5.0x Value Acca Slip",
+                    "booking_code": acca5_code or "N/A",
+                    "share_url": acca5_url,
+                    "target_odds": 5.00,
+                    "actual_odds": acca5_odds,
+                    "confidence_score": acca5_prob,
+                    "date_str": today_str,
+                    "leg_count": len(acca5_legs),
+                    "picks": acca5_legs,
+                    "stake": 2000.0,
+                    "telegram_dispatched": False
+                }
+
+                if send_telegram and acca5_code:
+                    acca5_payload["telegram_dispatched"] = RolloverTelegramNotifier.dispatch_value_acca_slip(acca5_payload)
+
+                trio_result["acca_5x_ticket"] = acca5_payload
+
+        # ── 3. SLIP 3: 10.0x MEGA MULTIPLIER (Strict Zero Overlap with Slips 1 & 2) ──
+        if enable_10odds:
+            unclaimed_10x = [c for c in acca_candidates if c["event_id"] not in claimed_event_ids]
+            acca10_legs = cls.assemble_optimal_accumulator_slip(
+                unclaimed_10x,
+                target_odds=10.00,
+                min_legs=7,
+                max_legs=12,
+                excluded_event_ids=claimed_event_ids
+            )
+            if acca10_legs:
+                for leg in acca10_legs:
+                    claimed_event_ids.add(leg["event_id"])
+
+                acca10_odds = round(math.prod(leg["odds"] for leg in acca10_legs), 2)
+                acca10_prob = round(math.prod(leg["model_probability"] for leg in acca10_legs) * 100.0, 1)
+                acca10_code, acca10_url = await cls._request_sportybet_share_code(acca10_legs)
+                acca10_ticket_id = f"ACCA10X-{now_ts}"
+
+                cls._persist_ticket_record(acca10_ticket_id, acca10_code, "MEGA_MULTIPLIER", 10.00, acca10_odds, 1000.0, acca10_legs)
+
+                acca10_payload = {
+                    "status": "SUCCESS",
+                    "ticket_id": acca10_ticket_id,
+                    "title": "10.0x Mega Multiplier Slip",
+                    "booking_code": acca10_code or "N/A",
+                    "share_url": acca10_url,
+                    "target_odds": 10.00,
+                    "actual_odds": acca10_odds,
+                    "confidence_score": acca10_prob,
+                    "date_str": today_str,
+                    "leg_count": len(acca10_legs),
+                    "picks": acca10_legs,
+                    "stake": 1000.0,
+                    "telegram_dispatched": False
+                }
+
+                if send_telegram and acca10_code:
+                    acca10_payload["telegram_dispatched"] = RolloverTelegramNotifier.dispatch_mega_multiplier_slip(acca10_payload)
+
+                trio_result["acca_10x_ticket"] = acca10_payload
+
+        trio_result["total_unique_fixtures"] = len(claimed_event_ids)
+        logger.info(f"[EliteRollover] Daily Trio completed with {len(claimed_event_ids)} 100% unique fixtures across all slips.")
+        return trio_result
+

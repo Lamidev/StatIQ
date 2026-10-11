@@ -677,16 +677,20 @@ export async function updateRolloverSchedule(payload) {
   return { status: "ERROR" };
 }
 
-export async function runRolloverNow(targetOdds = 2.00, maxLegOdds = 1.45) {
+export async function runRolloverNow(options = {}) {
   try {
+    const payload = typeof options === "object" && options !== null
+      ? options
+      : { target_odds: typeof options === "number" ? options : 2.00 };
+
     const res = await fetch(`${API_BASE_URL}/rollover-cron/run-now`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ target_odds: targetOdds, max_leg_odds: maxLegOdds })
+      body: JSON.stringify(payload)
     });
     if (res.ok) return await res.json();
     const err = await res.json().catch(() => ({}));
-    return { status: "ERROR", message: err.detail || "Failed to execute rollover run" };
+    return { status: "ERROR", message: err.detail || "Failed to execute VIP automation run" };
   } catch (err) {
     console.error("Run rollover now error:", err);
     return { status: "NETWORK_ERROR", message: "Network connection error" };

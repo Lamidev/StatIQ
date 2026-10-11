@@ -497,14 +497,17 @@ export default function TicketBuilderTab() {
     return steps;
   };
 
-  // ─── Automated 10:00 AM WAT Rollover Engine State ───────────────────────
+  // ─── Automated 10:00 AM WAT Rollover & VIP Trio Engine State ───────────────────────
   const [cronConfig, setCronConfig] = useState({
     is_enabled: true,
     active_days: ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"],
+    enable_rollover_2x: true,
+    enable_acca_5x: true,
+    enable_acca_10x: true,
     target_odds: 2.00,
     max_leg_odds: 1.45,
     dispatch_time: "10:00",
-    campaign_mode: "CHALLENGE", // "CHALLENGE" or "CONTINUOUS"
+    campaign_mode: "CONTINUOUS", // "CHALLENGE" or "CONTINUOUS"
     challenge_days: 10,
     challenge_day_current: 1,
     challenge_start_date: new Date().toISOString().split("T")[0],
@@ -512,8 +515,11 @@ export default function TicketBuilderTab() {
     starting_stake: 5000,
     challenge_status: "ACTIVE",
     last_run_date: null,
-    last_ticket: null
+    last_ticket: null,
+    last_trio_result: null
   });
+  const [trioResult, setTrioResult] = useState(null);
+  const [activeTrioTab, setActiveTrioTab] = useState("ROLLOVER"); // "ROLLOVER", "ACCA_5X", "ACCA_10X"
   const [cronLoading, setCronLoading] = useState(false);
   const [cronRunningNow, setCronRunningNow] = useState(false);
   const [cronNotice, setCronNotice] = useState(null);
@@ -532,7 +538,13 @@ export default function TicketBuilderTab() {
       const res = await fetchRolloverSchedule();
       if (res && res.config) {
         setCronConfig(prev => ({ ...prev, ...res.config }));
-        if (res.config.last_ticket && !cronTicketResult) {
+        if (res.config.last_trio_result) {
+          setTrioResult(res.config.last_trio_result);
+          const primary = res.config.last_trio_result.rollover_ticket || res.config.last_trio_result.acca_5x_ticket || res.config.last_trio_result.acca_10x_ticket;
+          if (primary && !cronTicketResult) {
+            setCronTicketResult(primary);
+          }
+        } else if (res.config.last_ticket && !cronTicketResult) {
           setCronTicketResult(res.config.last_ticket);
         }
       }
@@ -587,6 +599,9 @@ export default function TicketBuilderTab() {
       const res = await updateRolloverSchedule({
         is_enabled: cronConfig.is_enabled,
         active_days: cronConfig.active_days,
+        enable_rollover_2x: cronConfig.enable_rollover_2x,
+        enable_acca_5x: cronConfig.enable_acca_5x,
+        enable_acca_10x: cronConfig.enable_acca_10x,
         target_odds: cronConfig.target_odds,
         max_leg_odds: cronConfig.max_leg_odds || 1.45,
         dispatch_time: cronConfig.dispatch_time || "10:00",
@@ -599,7 +614,7 @@ export default function TicketBuilderTab() {
         challenge_status: cronConfig.challenge_status || "ACTIVE"
       });
       if (res && res.status === "SUCCESS") {
-        setCronNotice("Rollover campaign settings saved successfully!");
+        setCronNotice("Daily VIP Automation settings saved successfully!");
         setTimeout(() => setCronNotice(null), 4000);
       } else {
         setCronError("Failed to save schedule settings.");
@@ -616,19 +631,27 @@ export default function TicketBuilderTab() {
     setCronError(null);
     setCronNotice(null);
     try {
-      const res = await runRolloverNow(cronConfig.target_odds, cronConfig.max_leg_odds || 1.45);
+      const res = await runRolloverNow({
+        enable_rollover_2x: cronConfig.enable_rollover_2x,
+        enable_acca_5x: cronConfig.enable_acca_5x,
+        enable_acca_10x: cronConfig.enable_acca_10x,
+        target_odds: cronConfig.target_odds,
+        max_leg_odds: cronConfig.max_leg_odds || 1.45
+      });
       if (res && res.status === "SUCCESS" && res.result) {
-        setCronTicketResult(res.result);
-        setCronNotice(`Rollover slip generated! Booking code: ${res.result.booking_code || "Generated"} (${res.result.telegram_dispatched ? "Dispatched to Telegram" : "Saved"})`);
+        setTrioResult(res.result);
+        const primary = res.result.rollover_ticket || res.result.acca_5x_ticket || res.result.acca_10x_ticket;
+        if (primary) setCronTicketResult(primary);
+        setCronNotice(`Daily VIP Slips generated! Dispatched to Telegram with Zero-Overlap Guarantee! (${res.result.total_unique_fixtures || 0} unique fixtures)`);
         const histRes = await fetchRolloverHistory();
         if (histRes && histRes.history) {
           setCronHistory(histRes.history);
         }
       } else {
-        setCronError(res.message || "Failed to generate rollover ticket.");
+        setCronError(res.message || "Failed to generate daily tickets.");
       }
     } catch (e) {
-      setCronError("Error executing rollover run: " + (e.message || "Error"));
+      setCronError("Error executing daily run: " + (e.message || "Error"));
     } finally {
       setCronRunningNow(false);
     }
@@ -1606,8 +1629,11 @@ Slovakia vs Moldova`;
               : "text-slate-600 hover:text-slate-900"
           }`}
         >
-          <RefreshCw className="w-3.5 h-3.5 flex-shrink-0" />
-          <span className="truncate">Rollover</span>
+          <Zap className="w-3.5 h-3.5 flex-shrink-0 text-amber-500" />
+          <span className="truncate">Daily VIP Automation</span>
+          <span className="text-[9px] font-black px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-800 border border-amber-300">
+            3 Slips
+          </span>
         </button>
 
         <button
@@ -2621,7 +2647,7 @@ Slovakia vs Moldova`;
       {/* MODE 3: DAILY HIGH-ASSURANCE ROLLOVER ENGINE */}
       {builderMode === "ROLLOVER" && (
         <div className="space-y-6">
-          {/* AUTOMATED 10:00 AM ROLLOVER ENGINE (SLEEK LIGHT MODE & MOBILE-FIRST) */}
+          {/* AUTOMATED 10:00 AM DAILY VIP AUTOMATION HUB */}
           <div className="bg-white rounded-3xl border border-slate-200 shadow-xl shadow-slate-100/90 p-5 sm:p-7 space-y-6 relative overflow-hidden">
             {/* Ambient subtle decorative background glows */}
             <div className="absolute top-0 right-0 w-80 h-80 bg-emerald-500/5 rounded-full blur-3xl pointer-events-none" />
@@ -2630,13 +2656,13 @@ Slovakia vs Moldova`;
             {/* Header: Title, Live Status, and Enable/Pause Toggle */}
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-5 border-b border-slate-100 relative z-10">
               <div className="flex items-start sm:items-center gap-3.5">
-                <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center text-white flex-shrink-0 shadow-lg shadow-emerald-500/20">
+                <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-amber-500 to-indigo-600 flex items-center justify-center text-white flex-shrink-0 shadow-lg shadow-amber-500/20">
                   <Zap className="w-6 h-6" />
                 </div>
                 <div>
                   <div className="flex items-center gap-2 flex-wrap">
                     <h2 className="text-base sm:text-lg font-black tracking-tight text-slate-900 flex items-center gap-2">
-                      <span>Automated 10:00 AM Rollover Engine</span>
+                      <span>Daily VIP Automation Hub (10:00 AM WAT)</span>
                     </h2>
                     <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider flex items-center gap-1.5 border ${
                       cronConfig.is_enabled 
@@ -2644,14 +2670,14 @@ Slovakia vs Moldova`;
                         : "bg-slate-100 border-slate-200 text-slate-500"
                     }`}>
                       <span className={`w-1.5 h-1.5 rounded-full ${cronConfig.is_enabled ? "bg-emerald-500 animate-pulse" : "bg-slate-400"}`} />
-                      <span>{cronConfig.is_enabled ? `Active · ${cronConfig.dispatch_time || "10:00"} AM WAT Dispatch` : "Cron Paused"}</span>
+                      <span>{cronConfig.is_enabled ? `Active · ${cronConfig.dispatch_time || "10:00"} AM WAT Dispatch` : "Automation Paused"}</span>
                     </span>
-                    <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-indigo-50 border border-indigo-200 text-indigo-700">
-                      {cronConfig.campaign_mode === "CHALLENGE" ? `${cronConfig.challenge_days || 10}-Day Compounding Challenge` : "Continuous Daily"}
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-emerald-50 border border-emerald-200 text-emerald-700">
+                      🔒 Zero-Overlap Guarantee
                     </span>
                   </div>
                   <p className="text-xs text-slate-500 mt-1 font-medium leading-relaxed">
-                    Autonomous morning engine sweeps SportyBet’s live matches directly at 10:00 AM WAT. 100% deterministic (zero randomness), Head-to-Head & 5-Match form verification, strict safety corridor (1.15 to max leg odds), live SportyBet booking code generation, and instant Telegram dispatch.
+                    Autonomous morning engine sweeps SportyBet live matches directly at 10:00 AM WAT. Generates up to 3 simultaneous variant slips (2.0x Rollover, 5.0x Value Acca, and 10.0x Mega Multiplier) with <b>100% unique fixtures</b> (0 overlap across tickets).
                   </p>
                 </div>
               </div>
@@ -2668,8 +2694,112 @@ Slovakia vs Moldova`;
                   }`}
                 >
                   <span className={`w-2 h-2 rounded-full ${cronConfig.is_enabled ? "bg-white animate-pulse" : "bg-slate-400"}`} />
-                  <span>{cronConfig.is_enabled ? "Bot Enabled" : "Enable Bot"}</span>
+                  <span>{cronConfig.is_enabled ? "Master Active" : "Enable Master"}</span>
                 </button>
+              </div>
+            </div>
+
+            {/* DAILY VIP SLIPS SELECTION & ZERO-OVERLAP PIPELINE */}
+            <div className="bg-gradient-to-br from-slate-50 via-indigo-50/20 to-emerald-50/20 border border-slate-200 rounded-2xl p-4 sm:p-5 space-y-3 relative z-10">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <div>
+                  <h3 className="text-xs font-black text-slate-900 uppercase tracking-wider flex items-center gap-1.5">
+                    <Sparkles className="w-4 h-4 text-amber-500" />
+                    <span>Daily VIP Automated Tickets (Zero-Overlap Pipeline)</span>
+                  </h3>
+                  <p className="text-[11px] text-slate-500 font-medium mt-0.5">
+                    Select which tickets are automatically generated and sent to Telegram at 10:00 AM WAT:
+                  </p>
+                </div>
+                <span className="text-[10px] font-black text-emerald-800 bg-emerald-100 px-2.5 py-0.5 rounded-full border border-emerald-300 self-start sm:self-center">
+                  🔒 Unique Fixtures Guaranteed
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-1">
+                {/* 2.0x Rollover Card */}
+                <div
+                  onClick={() => setCronConfig(prev => ({ ...prev, enable_rollover_2x: !prev.enable_rollover_2x }))}
+                  className={`p-3.5 rounded-2xl border transition-all cursor-pointer flex flex-col justify-between ${
+                    cronConfig.enable_rollover_2x
+                      ? "bg-white border-emerald-500 ring-2 ring-emerald-500/20 shadow-sm"
+                      : "bg-white/60 border-slate-200 opacity-60 hover:opacity-100"
+                  }`}
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-black text-slate-900 flex items-center gap-1.5">
+                      <span>🎯 2.0x Rollover</span>
+                    </span>
+                    <span className={`w-4 h-4 rounded-full border flex items-center justify-center ${
+                      cronConfig.enable_rollover_2x ? "bg-emerald-500 border-emerald-600 text-white" : "border-slate-300 bg-white"
+                    }`}>
+                      {cronConfig.enable_rollover_2x && <Check className="w-3 h-3 text-white" />}
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-slate-500 mt-2 font-medium leading-relaxed">
+                    2–3 Ultra-safe banker legs (Double Chance, Over 1.5, Team Goals). Target ~85% joint win rate.
+                  </p>
+                  <div className="mt-2.5 pt-2 border-t border-slate-100 flex items-center justify-between text-[10px] font-bold">
+                    <span className="text-emerald-700 font-black">2.00x Target</span>
+                    <span className="text-slate-400">Slip #1</span>
+                  </div>
+                </div>
+
+                {/* 5.0x Value Acca Card */}
+                <div
+                  onClick={() => setCronConfig(prev => ({ ...prev, enable_acca_5x: !prev.enable_acca_5x }))}
+                  className={`p-3.5 rounded-2xl border transition-all cursor-pointer flex flex-col justify-between ${
+                    cronConfig.enable_acca_5x
+                      ? "bg-white border-indigo-500 ring-2 ring-indigo-500/20 shadow-sm"
+                      : "bg-white/60 border-slate-200 opacity-60 hover:opacity-100"
+                  }`}
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-black text-slate-900 flex items-center gap-1.5">
+                      <span>🔥 5.0x Value Acca</span>
+                    </span>
+                    <span className={`w-4 h-4 rounded-full border flex items-center justify-center ${
+                      cronConfig.enable_acca_5x ? "bg-indigo-600 border-indigo-700 text-white" : "border-slate-300 bg-white"
+                    }`}>
+                      {cronConfig.enable_acca_5x && <Check className="w-3 h-3 text-white" />}
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-slate-500 mt-2 font-medium leading-relaxed">
+                    4–7 Vetted picks. Zero fixture clash with Rollover. Dixon-Coles expected value edge.
+                  </p>
+                  <div className="mt-2.5 pt-2 border-t border-slate-100 flex items-center justify-between text-[10px] font-bold">
+                    <span className="text-indigo-700 font-black">5.00x Target</span>
+                    <span className="text-slate-400">Slip #2</span>
+                  </div>
+                </div>
+
+                {/* 10.0x Mega Multiplier Card */}
+                <div
+                  onClick={() => setCronConfig(prev => ({ ...prev, enable_acca_10x: !prev.enable_acca_10x }))}
+                  className={`p-3.5 rounded-2xl border transition-all cursor-pointer flex flex-col justify-between ${
+                    cronConfig.enable_acca_10x
+                      ? "bg-white border-amber-500 ring-2 ring-amber-500/20 shadow-sm"
+                      : "bg-white/60 border-slate-200 opacity-60 hover:opacity-100"
+                  }`}
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-black text-slate-900 flex items-center gap-1.5">
+                      <span>⚡ 10.0x Mega Multiplier</span>
+                    </span>
+                    <span className={`w-4 h-4 rounded-full border flex items-center justify-center ${
+                      cronConfig.enable_acca_10x ? "bg-amber-500 border-amber-600 text-white" : "border-slate-300 bg-white"
+                    }`}>
+                      {cronConfig.enable_acca_10x && <Check className="w-3 h-3 text-white" />}
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-slate-500 mt-2 font-medium leading-relaxed">
+                    7–12 Dominance picks. 100% unique fixtures across all 3 tickets. High payout potential.
+                  </p>
+                  <div className="mt-2.5 pt-2 border-t border-slate-100 flex items-center justify-between text-[10px] font-bold">
+                    <span className="text-amber-700 font-black">10.00x Target</span>
+                    <span className="text-slate-400">Slip #3</span>
+                  </div>
+                </div>
               </div>
             </div>
 
@@ -3186,10 +3316,10 @@ Slovakia vs Moldova`;
                   type="button"
                   onClick={handleRunCronNow}
                   disabled={cronRunningNow}
-                  className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white text-xs font-black shadow-lg shadow-emerald-600/20 transition-all flex items-center gap-2 cursor-pointer"
+                  className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-emerald-600 via-teal-600 to-indigo-600 hover:from-emerald-700 hover:to-indigo-700 text-white text-xs font-black shadow-lg shadow-emerald-600/20 transition-all flex items-center gap-2 cursor-pointer"
                 >
                   {cronRunningNow ? <RefreshCw className="w-4 h-4 animate-spin text-white" /> : <Play className="w-4 h-4 text-white fill-white" />}
-                  <span>{cronRunningNow ? "Sweeping & Booking SportyBet..." : "Run Now (Test Live 10:00 AM)"}</span>
+                  <span>{cronRunningNow ? "Sweeping & Booking 3 Zero-Overlap Slips..." : "🚀 Run & Dispatch Active Slips Now"}</span>
                 </button>
               </div>
             </div>
@@ -3221,64 +3351,142 @@ Slovakia vs Moldova`;
             )}
           </div>
 
-          {/* LIVE DISPATCHED ROLLOVER SLIP CARD */}
-          {cronTicketResult && cronTicketResult.picks && cronTicketResult.picks.length > 0 && (
-            <div className="bg-white rounded-3xl border border-slate-200 p-6 shadow-sm space-y-5">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-4 border-b border-slate-100 gap-3">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-2xl bg-emerald-50 border border-emerald-200 flex items-center justify-center text-emerald-600 flex-shrink-0">
-                    <Award className="w-5 h-5" />
-                  </div>
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <h3 className="text-sm font-black text-slate-900 tracking-tight">
-                        Active Rollover Slip ({cronTicketResult.date_str || "Today"})
-                      </h3>
-                      {cronTicketResult.telegram_dispatched && (
-                        <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-sky-50 text-sky-700 border border-sky-200 flex items-center gap-1">
-                          <Send className="w-2.5 h-2.5" />
-                          <span>Dispatched to Telegram</span>
-                        </span>
-                      )}
-                    </div>
-                    <p className="text-xs text-slate-500 font-medium">
-                      Total Odds: <b>{cronTicketResult.actual_odds}x</b> | Win Confidence: <b>{cronTicketResult.confidence_score}%</b> | Legs: <b>{cronTicketResult.leg_count} games</b>
-                    </p>
-                  </div>
-                </div>
+          {/* LIVE DISPATCHED VIP SLIPS (TRIO WITH ZERO-OVERLAP GUARANTEE) */}
+          {(() => {
+            const activeTrio = trioResult || cronConfig.last_trio_result;
+            const currentTicket = (activeTrioTab === "ROLLOVER" 
+              ? (activeTrio?.rollover_ticket || cronTicketResult)
+              : activeTrioTab === "ACCA_5X"
+              ? activeTrio?.acca_5x_ticket
+              : activeTrio?.acca_10x_ticket) || cronTicketResult;
 
-                {/* SportyBet Booking Code Badge */}
-                {cronTicketResult.booking_code && cronTicketResult.booking_code !== "N/A" && (
-                  <div className="flex items-center gap-2">
-                    <div className="bg-slate-900 text-white px-3.5 py-1.5 rounded-xl flex items-center gap-2 font-mono text-xs font-black shadow-sm">
-                      <span className="text-[10px] text-slate-400 font-sans uppercase">SportyBet:</span>
-                      <span className="tracking-widest text-emerald-400 text-sm">{cronTicketResult.booking_code}</span>
+            if (!currentTicket && !activeTrio) return null;
+
+            return (
+              <div className="bg-white rounded-3xl border border-slate-200 p-6 shadow-sm space-y-5">
+                {/* 3-Ticket Tab Switcher */}
+                {activeTrio && (
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100">
+                    <div className="flex items-center gap-1.5 p-1 bg-slate-100 rounded-2xl border border-slate-200 overflow-x-auto">
                       <button
                         type="button"
-                        onClick={() => {
-                          navigator.clipboard.writeText(cronTicketResult.booking_code);
-                          setCopiedCronCode(true);
-                          setTimeout(() => setCopiedCronCode(false), 2000);
-                        }}
-                        className="text-slate-400 hover:text-white transition-all cursor-pointer"
-                        title="Copy Code"
+                        onClick={() => setActiveTrioTab("ROLLOVER")}
+                        className={`px-3.5 py-2 rounded-xl text-xs font-black transition-all flex items-center gap-1.5 cursor-pointer whitespace-nowrap ${
+                          activeTrioTab === "ROLLOVER"
+                            ? "bg-white text-emerald-800 shadow-sm border border-slate-200/80"
+                            : "text-slate-600 hover:text-slate-900"
+                        }`}
                       >
-                        {copiedCronCode ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                        <span>🎯 2.0x Rollover</span>
+                        {activeTrio.rollover_ticket && (
+                          <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-emerald-100 text-emerald-800 font-extrabold">
+                            {activeTrio.rollover_ticket.actual_odds}x
+                          </span>
+                        )}
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setActiveTrioTab("ACCA_5X")}
+                        className={`px-3.5 py-2 rounded-xl text-xs font-black transition-all flex items-center gap-1.5 cursor-pointer whitespace-nowrap ${
+                          activeTrioTab === "ACCA_5X"
+                            ? "bg-white text-indigo-800 shadow-sm border border-slate-200/80"
+                            : "text-slate-600 hover:text-slate-900"
+                        }`}
+                      >
+                        <span>🔥 5.0x Value Acca</span>
+                        {activeTrio.acca_5x_ticket && (
+                          <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-indigo-100 text-indigo-800 font-extrabold">
+                            {activeTrio.acca_5x_ticket.actual_odds}x
+                          </span>
+                        )}
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setActiveTrioTab("ACCA_10X")}
+                        className={`px-3.5 py-2 rounded-xl text-xs font-black transition-all flex items-center gap-1.5 cursor-pointer whitespace-nowrap ${
+                          activeTrioTab === "ACCA_10X"
+                            ? "bg-white text-amber-800 shadow-sm border border-slate-200/80"
+                            : "text-slate-600 hover:text-slate-900"
+                        }`}
+                      >
+                        <span>⚡ 10.0x Mega Multiplier</span>
+                        {activeTrio.acca_10x_ticket && (
+                          <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-amber-100 text-amber-800 font-extrabold">
+                            {activeTrio.acca_10x_ticket.actual_odds}x
+                          </span>
+                        )}
                       </button>
                     </div>
 
-                    <a
-                      href={cronTicketResult.share_url || `https://www.sportybet.com/ng/?shareCode=${cronTicketResult.booking_code}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="px-3 py-1.5 rounded-xl bg-red-600 hover:bg-red-700 text-white text-xs font-black transition-all flex items-center gap-1 shadow-sm"
-                    >
-                      <span>Load on SportyBet</span>
-                      <ExternalLink className="w-3 h-3" />
-                    </a>
+                    <div className="flex items-center gap-2 self-start sm:self-center">
+                      <span className="px-3 py-1 rounded-full text-[10px] font-black bg-emerald-50 text-emerald-800 border border-emerald-200 flex items-center gap-1.5">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                        <span>Zero Overlap Active ({activeTrio.total_unique_fixtures || 0} Unique Fixtures)</span>
+                      </span>
+                    </div>
                   </div>
                 )}
-              </div>
+
+                {/* Ticket Details & SportyBet Booking Code */}
+                {currentTicket && currentTicket.picks && currentTicket.picks.length > 0 ? (
+                  <>
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-4 border-b border-slate-100 gap-3">
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 rounded-2xl bg-emerald-50 border border-emerald-200 flex items-center justify-center text-emerald-600 flex-shrink-0">
+                          <Award className="w-5 h-5" />
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <h3 className="text-sm font-black text-slate-900 tracking-tight">
+                              {currentTicket.title || "Daily VIP Slip"} ({currentTicket.date_str || "Today"})
+                            </h3>
+                            {currentTicket.telegram_dispatched && (
+                              <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-sky-50 text-sky-700 border border-sky-200 flex items-center gap-1">
+                                <Send className="w-2.5 h-2.5" />
+                                <span>Dispatched to Telegram</span>
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-xs text-slate-500 font-medium">
+                            Total Odds: <b>{currentTicket.actual_odds}x</b> | Win Confidence: <b>{currentTicket.confidence_score}%</b> | Legs: <b>{currentTicket.leg_count || currentTicket.picks.length} matches</b>
+                          </p>
+                        </div>
+                      </div>
+
+                      {/* SportyBet Booking Code Badge */}
+                      {currentTicket.booking_code && currentTicket.booking_code !== "N/A" && (
+                        <div className="flex items-center gap-2">
+                          <div className="bg-slate-900 text-white px-3.5 py-1.5 rounded-xl flex items-center gap-2 font-mono text-xs font-black shadow-sm">
+                            <span className="text-[10px] text-slate-400 font-sans uppercase">SportyBet:</span>
+                            <span className="tracking-widest text-emerald-400 text-sm">{currentTicket.booking_code}</span>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                navigator.clipboard.writeText(currentTicket.booking_code);
+                                setCopiedCronCode(true);
+                                setTimeout(() => setCopiedCronCode(false), 2000);
+                              }}
+                              className="text-slate-400 hover:text-white transition-all cursor-pointer"
+                              title="Copy Code"
+                            >
+                              {copiedCronCode ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                            </button>
+                          </div>
+
+                          <a
+                            href={currentTicket.share_url || `https://www.sportybet.com/ng/?shareCode=${currentTicket.booking_code}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="px-3 py-1.5 rounded-xl bg-red-600 hover:bg-red-700 text-white text-xs font-black transition-all flex items-center gap-1 shadow-sm"
+                          >
+                            <span>Load on SportyBet</span>
+                            <ExternalLink className="w-3 h-3" />
+                          </a>
+                        </div>
+                      )}
+                    </div>
 
               {/* Legs Grid */}
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
@@ -3337,8 +3545,15 @@ Slovakia vs Moldova`;
                   </div>
                 ))}
               </div>
-            </div>
-          )}
+            </>
+          ) : (
+                  <div className="p-8 text-center bg-slate-50 rounded-2xl border border-dashed border-slate-200">
+                    <p className="text-xs text-slate-500 font-bold">This ticket variant is either disabled or waiting to be dispatched for today.</p>
+                  </div>
+                )}
+              </div>
+            );
+          })()}
 
           {/* Run History Toggle & Drawer */}
           {cronHistory && cronHistory.length > 0 && (

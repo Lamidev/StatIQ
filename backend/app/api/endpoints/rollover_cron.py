@@ -10,6 +10,9 @@ router = APIRouter(prefix="/rollover-cron", tags=["StatIQ Automated Rollover Cro
 class ScheduleUpdateRequest(BaseModel):
     is_enabled: Optional[bool] = None
     active_days: Optional[List[str]] = None
+    enable_rollover_2x: Optional[bool] = None
+    enable_acca_5x: Optional[bool] = None
+    enable_acca_10x: Optional[bool] = None
     target_odds: Optional[float] = None
     max_leg_odds: Optional[float] = None      # e.g. 1.35, 1.40, 1.45, 1.50
     dispatch_time: Optional[str] = None
@@ -24,6 +27,9 @@ class ScheduleUpdateRequest(BaseModel):
 class RunNowRequest(BaseModel):
     target_odds: Optional[float] = None
     max_leg_odds: Optional[float] = None
+    enable_rollover_2x: Optional[bool] = None
+    enable_acca_5x: Optional[bool] = None
+    enable_acca_10x: Optional[bool] = None
 
 class ChallengeResetRequest(BaseModel):
     challenge_days: int = 10
@@ -40,12 +46,18 @@ def get_schedule():
 
 @router.post("/schedule")
 def update_schedule(req: ScheduleUpdateRequest):
-    """Updates the Rollover Cron schedule (active days, target odds, dispatch time, campaign mode, challenge duration)."""
+    """Updates the Rollover Cron schedule (active days, ticket toggles, target odds, dispatch time, campaign mode, challenge duration)."""
     current = rollover_scheduler.get_config()
     update_data = {}
 
     if req.is_enabled is not None:
         update_data["is_enabled"] = req.is_enabled
+    if req.enable_rollover_2x is not None:
+        update_data["enable_rollover_2x"] = req.enable_rollover_2x
+    if req.enable_acca_5x is not None:
+        update_data["enable_acca_5x"] = req.enable_acca_5x
+    if req.enable_acca_10x is not None:
+        update_data["enable_acca_10x"] = req.enable_acca_10x
     if req.active_days is not None:
         valid_days = {"MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"}
         cleaned = [d.upper() for d in req.active_days if d.upper() in valid_days]
@@ -104,12 +116,19 @@ def reset_challenge(req: ChallengeResetRequest = Body(default=ChallengeResetRequ
 @router.post("/run-now")
 async def run_now(req: RunNowRequest = Body(default=RunNowRequest())):
     """
-    Manually triggers an immediate run of the Elite Rollover Engine:
+    Manually triggers an immediate run of the Daily VIP Trio:
     Pulls SportyBet today's endpoint directly, evaluates fixtures with Dixon-Coles/Poisson models,
-    generates a genuine SportyBet booking code, dispatches to Telegram, and records to history.
+    generates genuine SportyBet booking codes for Rollover, 5.0x, and 10.0x with zero overlap,
+    dispatches to Telegram, and records to history.
     """
     try:
-        res = await rollover_scheduler.run_now(target_odds=req.target_odds, max_leg_odds=req.max_leg_odds)
+        res = await rollover_scheduler.run_now(
+            target_odds=req.target_odds,
+            max_leg_odds=req.max_leg_odds,
+            enable_rollover=req.enable_rollover_2x,
+            enable_5odds=req.enable_acca_5x,
+            enable_10odds=req.enable_acca_10x
+        )
         return {
             "status": "SUCCESS",
             "result": res
@@ -124,7 +143,8 @@ def get_history():
     return {
         "status": "SUCCESS",
         "history": cfg.get("run_history", []),
-        "last_ticket": cfg.get("last_ticket")
+        "last_ticket": cfg.get("last_ticket"),
+        "last_trio_result": cfg.get("last_trio_result")
     }
 
 @router.post("/telegram-test")
