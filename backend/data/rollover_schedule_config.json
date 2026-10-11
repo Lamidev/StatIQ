@@ -16,7 +16,7 @@
   "challenge_day_current": 3,
   "challenge_start_date": "2026-10-09",
   "challenge_end_date": "2026-10-11",
-  "starting_stake": 5000.0,
+  "starting_stake": 515.0,
   "challenge_status": "ACTIVE",
   "last_run_date": null,
   "last_ticket": {
@@ -124,36 +124,115 @@
       "day": 1,
       "date": "2026-10-09",
       "weekday": "Friday",
-      "target_odds": 2.0,
-      "actual_odds": 2.02,
-      "stake": 5000.0,
-      "payout": 10100.0,
+      "ticket_id": "600651",
+      "booking_code": "600651",
+      "stake": 515.0,
+      "target_odds": 1.95,
+      "actual_odds": 1.95,
+      "payout": 1006.64,
       "status": "WON",
-      "rollover_code": "RO-DAY1",
-      "summary": "Day 1 Banker Legs Won"
+      "summary": "Day 1 Double Chance 4-Fold Won",
+      "legs": [
+        {
+          "game_id": "36709",
+          "home_team": "Montpellier",
+          "away_team": "Grenoble Foot",
+          "score": "2 - 0",
+          "pick": "Home or Draw",
+          "odds": 1.16,
+          "status": "WON"
+        },
+        {
+          "game_id": "36720",
+          "home_team": "Nancy-Lorraine",
+          "away_team": "EA Guingamp",
+          "score": "1 - 0",
+          "pick": "Home or Draw",
+          "odds": 1.19,
+          "status": "WON"
+        },
+        {
+          "game_id": "27913",
+          "home_team": "De Graafschap",
+          "away_team": "Jong FC Utrecht",
+          "score": "2 - 1",
+          "pick": "Home or Draw",
+          "odds": 1.2,
+          "status": "WON"
+        },
+        {
+          "game_id": "48491",
+          "home_team": "Heidenheim",
+          "away_team": "1 FC Kaiserslautern",
+          "score": "0 - 0",
+          "pick": "Home or Draw",
+          "odds": 1.18,
+          "status": "WON"
+        }
+      ]
     },
     {
       "day": 2,
       "date": "2026-10-10",
       "weekday": "Saturday",
-      "target_odds": 2.0,
-      "actual_odds": 2.0,
-      "stake": 10000.0,
-      "payout": 20000.0,
+      "ticket_id": "976904",
+      "booking_code": "976904",
+      "stake": 1000.0,
+      "target_odds": 2.02,
+      "actual_odds": 2.02,
+      "payout": 2047.39,
       "status": "WON",
-      "rollover_code": "RO-DAY2",
-      "summary": "Day 2 Banker Legs Won"
+      "summary": "Day 2 Double Chance 4-Fold Won",
+      "legs": [
+        {
+          "game_id": "31220",
+          "home_team": "Man Utd",
+          "away_team": "Tottenham",
+          "score": "1 - 1",
+          "pick": "Home or Draw",
+          "odds": 1.16,
+          "status": "WON"
+        },
+        {
+          "game_id": "44980",
+          "home_team": "Monaco",
+          "away_team": "Toulouse",
+          "score": "2 - 2",
+          "pick": "Home or Draw",
+          "odds": 1.19,
+          "status": "WON"
+        },
+        {
+          "game_id": "41630",
+          "home_team": "RB Leipzig",
+          "away_team": "Eintracht Frankfurt",
+          "score": "6 - 0",
+          "pick": "Home or Draw",
+          "odds": 1.21,
+          "status": "WON"
+        },
+        {
+          "game_id": "33420",
+          "home_team": "Feyenoord",
+          "away_team": "Alkmaar",
+          "score": "2 - 0",
+          "pick": "Home or Draw",
+          "odds": 1.21,
+          "status": "WON"
+        }
+      ]
     },
     {
       "day": 3,
       "date": "2026-10-11",
       "weekday": "Sunday",
+      "ticket_id": "ROLLOVER-DAY3",
+      "booking_code": "PZPZ80",
+      "stake": 2000.0,
       "target_odds": 2.0,
       "actual_odds": 2.0,
-      "stake": 20000.0,
-      "payout": 40000.0,
+      "payout": 4000.0,
       "status": "RUNNING",
-      "rollover_code": "PZPZ80",
       "summary": "Day 3 (Final Leg) In Play"
     }
   ]

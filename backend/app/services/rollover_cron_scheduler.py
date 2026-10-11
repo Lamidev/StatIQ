@@ -346,15 +346,21 @@ class RolloverCronScheduler:
             elif d == current_day:
                 current_stake = day_stake
 
+            real_stake = float(matched_hist.get("stake")) if matched_hist and matched_hist.get("stake") else day_stake
+            real_payout = float(matched_hist.get("payout")) if matched_hist and matched_hist.get("payout") else day_potential
+            real_odds = float(matched_hist.get("actual_odds") or matched_hist.get("target_odds") or target_odds)
+
             days.append({
                 "day": d,
                 "date": day_str,
                 "weekday": weekday_name,
-                "stake": day_stake,
-                "odds": target_odds,
-                "potential_payout": day_potential,
+                "stake": real_stake,
+                "odds": real_odds,
+                "potential_payout": real_payout,
                 "status": d_status,
+                "ticket_id": matched_hist.get("ticket_id") if matched_hist else None,
                 "booking_code": d_code,
+                "legs": matched_hist.get("legs") if matched_hist else None,
                 "is_today": (day_str == today.isoformat() or d == current_day),
                 "summary": matched_hist.get("summary") if matched_hist else None
             })

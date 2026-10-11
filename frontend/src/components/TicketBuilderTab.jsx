@@ -2859,7 +2859,15 @@ Slovakia vs Moldova`;
                                 ₦{d.potential_payout?.toLocaleString()}
                               </span>
                             </div>
-                            {d.booking_code && (
+                            {d.ticket_id && (
+                              <div className="flex items-center justify-between text-xs pt-1.5 border-t border-white/10">
+                                <span className="text-slate-400 font-medium">SportyBet Ticket ID:</span>
+                                <span className="font-mono font-black text-amber-300 bg-black/40 px-2 py-0.5 rounded-md border border-white/10">
+                                  #{d.ticket_id}
+                                </span>
+                              </div>
+                            )}
+                            {d.booking_code && !d.ticket_id && (
                               <div className="flex items-center justify-between text-xs pt-1.5 border-t border-white/10">
                                 <span className="text-slate-400 font-medium">SportyBet Code:</span>
                                 <span className="font-mono font-black text-amber-300 bg-black/40 px-2 py-0.5 rounded-md border border-white/10">
@@ -2868,6 +2876,28 @@ Slovakia vs Moldova`;
                               </div>
                             )}
                           </div>
+
+                          {/* Historical legs & final score breakdown */}
+                          {d.legs && d.legs.length > 0 && (
+                            <div className="mt-3 pt-2.5 border-t border-white/10 space-y-1.5">
+                              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
+                                Won Selections & Final Scores:
+                              </span>
+                              <div className="space-y-1">
+                                {d.legs.map((leg, lIdx) => (
+                                  <div key={lIdx} className="bg-black/30 rounded-lg px-2 py-1 flex items-center justify-between text-[10px] border border-white/5">
+                                    <span className="text-slate-200 truncate font-semibold">
+                                      {leg.home_team} vs {leg.away_team}
+                                      {leg.score && <span className="text-emerald-400 font-bold ml-1">({leg.score})</span>}
+                                    </span>
+                                    <span className="text-amber-300 font-mono ml-1 font-bold">
+                                      @{parseFloat(leg.odds).toFixed(2)}
+                                    </span>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
                         </div>
 
                         {/* Interactive Status Marker for Today or running day */}
