@@ -35,6 +35,54 @@ class ChallengeResetRequest(BaseModel):
     challenge_days: int = 10
     starting_stake: float = 5000.0
 
+class UpdateDayRequest(BaseModel):
+    day: int
+    status: str  # "WON" or "LOST"
+    notes: Optional[str] = None
+
+class StartCampaignRequest(BaseModel):
+    challenge_days: int = 3
+    starting_stake: float = 5000.0
+    target_odds: float = 2.0
+
+@router.get("/active-campaign")
+def get_active_campaign():
+    """Returns the currently active running campaign/challenge, days progress, stake compounding ladder, and today's leg."""
+    campaign = rollover_scheduler.get_active_campaign()
+    return {
+        "status": "SUCCESS",
+        "campaign": campaign
+    }
+
+@router.post("/campaign/update-day")
+def update_campaign_day(req: UpdateDayRequest = Body(...)):
+    """Marks a challenge day as WON or LOST, advances current day counter, or completes challenge."""
+    res = rollover_scheduler.update_challenge_day(day_num=req.day, status=req.status.upper(), notes=req.notes)
+    return {
+        "status": "SUCCESS",
+        "campaign": res
+    }
+
+@router.post("/campaign/dismiss")
+def dismiss_campaign():
+    """Dismisses and clears the active or finished challenge from the running card."""
+    res = rollover_scheduler.dismiss_campaign()
+    return res
+
+@router.post("/campaign/start")
+def start_campaign(req: StartCampaignRequest = Body(...)):
+    """Starts a new custom compounding challenge."""
+    res = rollover_scheduler.start_challenge(
+        days=req.challenge_days,
+        starting_stake=req.starting_stake,
+        target_odds=req.target_odds
+    )
+    return {
+        "status": "SUCCESS",
+        "message": f"Started {req.challenge_days}-Day Compounding Challenge.",
+        "campaign": res
+    }
+
 @router.get("/schedule")
 def get_schedule():
     """Returns the current Rollover Cron schedule configuration and runtime status."""

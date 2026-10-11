@@ -719,6 +719,60 @@ export async function fetchRolloverHistory() {
   return { status: "ERROR", history: [] };
 }
 
+export async function fetchActiveCampaign() {
+  try {
+    const res = await fetch(`${API_BASE_URL}/rollover-cron/active-campaign`);
+    if (res.ok) return await res.json();
+  } catch (err) {
+    console.error("Fetch active campaign error:", err);
+  }
+  return { status: "ERROR", campaign: null };
+}
+
+export async function updateCampaignDay(day, status, notes = null) {
+  try {
+    const res = await fetch(`${API_BASE_URL}/rollover-cron/campaign/update-day`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ day, status, notes })
+    });
+    if (res.ok) return await res.json();
+  } catch (err) {
+    console.error("Update campaign day error:", err);
+  }
+  return { status: "ERROR", message: "Failed to update day" };
+}
+
+export async function dismissCampaign() {
+  try {
+    const res = await fetch(`${API_BASE_URL}/rollover-cron/campaign/dismiss`, {
+      method: "POST"
+    });
+    if (res.ok) return await res.json();
+  } catch (err) {
+    console.error("Dismiss campaign error:", err);
+  }
+  return { status: "ERROR", message: "Failed to dismiss campaign" };
+}
+
+export async function startCampaign(challengeDays = 3, startingStake = 5000, targetOdds = 2.0) {
+  try {
+    const res = await fetch(`${API_BASE_URL}/rollover-cron/campaign/start`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        challenge_days: challengeDays,
+        starting_stake: startingStake,
+        target_odds: targetOdds
+      })
+    });
+    if (res.ok) return await res.json();
+  } catch (err) {
+    console.error("Start campaign error:", err);
+  }
+  return { status: "ERROR", message: "Failed to start campaign" };
+}
+
 export async function resetRolloverChallenge(challengeDays = 10, startingStake = 5000) {
   try {
     const res = await fetch(`${API_BASE_URL}/rollover-cron/challenge/reset`, {
@@ -735,4 +789,6 @@ export async function resetRolloverChallenge(challengeDays = 10, startingStake =
   }
   return { status: "ERROR", message: "Failed to reset challenge" };
 }
+
+
 

@@ -13,7 +13,11 @@ import {
   runRolloverNow,
   testRolloverTelegram,
   fetchRolloverHistory,
-  resetRolloverChallenge
+  resetRolloverChallenge,
+  fetchActiveCampaign,
+  updateCampaignDay,
+  dismissCampaign,
+  startCampaign
 } from "../api/client";
 import { Copy, Info, Calendar, Send, ShieldCheck, RefreshCw, CheckCircle2, ExternalLink, X, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, AlertCircle, Award, Trash2, Lock, ShieldAlert, Sliders, Sparkles, Search, Filter, BarChart2, Target, RotateCcw, Ticket, Layers, Zap, FileText, Upload, ListFilter, Clipboard, Check, Clock, Bell, Play, CheckCircle, TrendingUp, DollarSign, ArrowRight, Shield, Flame, Activity } from "lucide-react";
 
@@ -532,6 +536,7 @@ export default function TicketBuilderTab() {
   const [copiedCronCode, setCopiedCronCode] = useState(false);
   const [showCompoundingLadder, setShowCompoundingLadder] = useState(false);
   const [showQualityGates, setShowQualityGates] = useState(false);
+  const [activeCampaign, setActiveCampaign] = useState(null);
 
   const loadCronData = async () => {
     try {
@@ -541,13 +546,22 @@ export default function TicketBuilderTab() {
         if (res.config.last_trio_result) {
           setTrioResult(res.config.last_trio_result);
           const primary = res.config.last_trio_result.rollover_ticket || res.config.last_trio_result.acca_5x_ticket || res.config.last_trio_result.acca_10x_ticket;
-          if (primary && !cronTicketResult) {
+          if (primary) {
             setCronTicketResult(primary);
           }
-        } else if (res.config.last_ticket && !cronTicketResult) {
+        } else if (res.config.last_ticket) {
           setCronTicketResult(res.config.last_ticket);
         }
       }
+
+      const campRes = await fetchActiveCampaign();
+      if (campRes && campRes.campaign) {
+        setActiveCampaign(campRes.campaign);
+        if (campRes.campaign.active_ticket) {
+          setCronTicketResult(campRes.campaign.active_ticket);
+        }
+      }
+
       const histRes = await fetchRolloverHistory();
       if (histRes && histRes.history) {
         setCronHistory(histRes.history);
@@ -557,8 +571,46 @@ export default function TicketBuilderTab() {
     }
   };
 
+  const handleMarkDayStatus = async (dayNum, status) => {
+    setCronLoading(true);
+    try {
+      const res = await updateCampaignDay(dayNum, status);
+      if (res && res.status === "SUCCESS") {
+        setActiveCampaign(res.campaign);
+        setCronNotice(`Marked Day ${dayNum} as ${status}!`);
+        setTimeout(() => setCronNotice(null), 4000);
+        await loadCronData();
+      }
+    } catch (e) {
+      console.error("Error updating day status:", e);
+    } finally {
+      setCronLoading(false);
+    }
+  };
+
+  const handleDismissActiveCampaign = async () => {
+    setCronLoading(true);
+    try {
+      const res = await dismissCampaign();
+      if (res && res.status === "SUCCESS") {
+        setActiveCampaign(null);
+        setCronNotice("Active campaign concluded and removed from page!");
+        setTimeout(() => setCronNotice(null), 4000);
+        await loadCronData();
+      }
+    } catch (e) {
+      console.error("Error dismissing campaign:", e);
+    } finally {
+      setCronLoading(false);
+    }
+  };
+
   useEffect(() => {
     loadCronData();
+    const interval = setInterval(() => {
+      loadCronData();
+    }, 20000); // Polling every 20s to keep running card status in sync
+    return () => clearInterval(interval);
   }, []);
 
   const handleToggleCronDay = (dayCode) => {
@@ -2647,6 +2699,292 @@ Slovakia vs Moldova`;
       {/* MODE 3: DAILY HIGH-ASSURANCE ROLLOVER ENGINE */}
       {builderMode === "ROLLOVER" && (
         <div className="space-y-6">
+          {/* ACTIVE RUNNING AUTOMATION / COMPOUNDING CHALLENGE CARD */}
+          {activeCampaign && activeCampaign.has_active && (
+            <div className="bg-gradient-to-br from-slate-900 via-slate-950 to-emerald-950 text-white rounded-3xl border border-emerald-500/40 p-5 sm:p-7 shadow-2xl shadow-emerald-950/60 space-y-6 relative overflow-hidden">
+              {/* Glowing decorative ambient background */}
+              <div className="absolute -top-24 -right-24 w-96 h-96 bg-emerald-500/15 rounded-full blur-3xl pointer-events-none" />
+              <div className="absolute -bottom-24 -left-24 w-96 h-96 bg-teal-500/10 rounded-full blur-3xl pointer-events-none" />
+
+              {/* Top Banner: Status, Days Counting, and Conclude/Remove button */}
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-5 border-b border-emerald-500/20 relative z-10">
+                <div className="flex items-start sm:items-center gap-3.5">
+                  <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-amber-400 via-amber-500 to-emerald-500 flex items-center justify-center text-slate-950 flex-shrink-0 shadow-lg shadow-amber-500/30">
+                    <Award className="w-6 h-6 stroke-[2.5]" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider flex items-center gap-1.5 border ${
+                        activeCampaign.is_completed
+                          ? "bg-amber-400/20 border-amber-400/40 text-amber-300"
+                          : "bg-emerald-400/15 border-emerald-400/30 text-emerald-300"
+                      }`}>
+                        <span className={`w-1.5 h-1.5 rounded-full ${activeCampaign.is_completed ? "bg-amber-400" : "bg-emerald-400 animate-pulse"}`} />
+                        <span>{activeCampaign.is_completed ? "🏆 Challenge Completed & Won!" : "🟢 Live Running Automation"}</span>
+                      </span>
+                      <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black bg-white/10 border border-white/15 text-slate-200">
+                        Day {activeCampaign.current_day} of {activeCampaign.total_days} {activeCampaign.current_day === activeCampaign.total_days ? "(Final Leg — Today!)" : ""}
+                      </span>
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-emerald-500/20 border border-emerald-500/30 text-emerald-300">
+                        🔒 Zero Overlap
+                      </span>
+                    </div>
+                    <h2 className="text-base sm:text-xl font-black tracking-tight text-white mt-1 flex items-center gap-2">
+                      <span>🎯 {activeCampaign.total_days}-Day Compounding Challenge (~{activeCampaign.target_odds?.toFixed(2)}x Odds)</span>
+                    </h2>
+                    <p className="text-xs text-slate-300 font-medium leading-relaxed mt-0.5">
+                      Started {activeCampaign.start_date} · Running Day {activeCampaign.current_day} of {activeCampaign.total_days} · {activeCampaign.won_count} of {activeCampaign.total_days} Days Won ({activeCampaign.progress_pct}% Completed)
+                    </p>
+                  </div>
+                </div>
+
+                {/* Top Action Buttons: Remove/Conclude & Refresh */}
+                <div className="flex items-center gap-2 self-start sm:self-center">
+                  <button
+                    type="button"
+                    onClick={loadCronData}
+                    className="p-2 rounded-xl bg-white/10 hover:bg-white/20 border border-white/10 text-slate-300 hover:text-white transition-all cursor-pointer"
+                    title="Refresh Status"
+                  >
+                    <RefreshCw className="w-4 h-4" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleDismissActiveCampaign}
+                    className="px-3.5 py-2 rounded-xl text-xs font-black bg-rose-500/20 hover:bg-rose-500/30 border border-rose-500/40 text-rose-300 hover:text-rose-200 transition-all flex items-center gap-1.5 cursor-pointer shadow-sm"
+                    title="Remove and conclude this running automation"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>{activeCampaign.is_completed ? "Remove Finished Challenge" : "Conclude & Remove"}</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* KPI Metrics Ribbon */}
+              <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 relative z-10">
+                <div className="bg-white/5 border border-white/10 rounded-2xl p-3.5 backdrop-blur-sm">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">Progress</span>
+                  <div className="text-lg font-black text-white mt-0.5">Day {activeCampaign.current_day}/{activeCampaign.total_days}</div>
+                  <div className="w-full bg-white/10 h-1.5 rounded-full mt-2 overflow-hidden">
+                    <div className="bg-emerald-400 h-full rounded-full transition-all" style={{ width: `${activeCampaign.progress_pct}%` }} />
+                  </div>
+                </div>
+
+                <div className="bg-white/5 border border-white/10 rounded-2xl p-3.5 backdrop-blur-sm">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">Starting Stake</span>
+                  <div className="text-lg font-black text-slate-200 mt-0.5">₦{activeCampaign.starting_stake?.toLocaleString()}</div>
+                  <span className="text-[10px] text-slate-400 mt-1 block">Day 1 Initial</span>
+                </div>
+
+                <div className="bg-white/5 border border-white/10 rounded-2xl p-3.5 backdrop-blur-sm">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-400 block">Today's Stake</span>
+                  <div className="text-lg font-black text-emerald-300 mt-0.5">₦{activeCampaign.current_stake?.toLocaleString()}</div>
+                  <span className="text-[10px] text-emerald-400/80 mt-1 block">Compounded Bankroll</span>
+                </div>
+
+                <div className="bg-white/5 border border-white/10 rounded-2xl p-3.5 backdrop-blur-sm">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-amber-400 block">Today's Payout Goal</span>
+                  <div className="text-lg font-black text-amber-300 mt-0.5">
+                    ₦{Math.round((activeCampaign.current_stake || 0) * (activeCampaign.target_odds || 2.0))?.toLocaleString()}
+                  </div>
+                  <span className="text-[10px] text-amber-400/80 mt-1 block">@{activeCampaign.target_odds?.toFixed(2)}x Target Odds</span>
+                </div>
+
+                <div className="bg-white/5 border border-white/10 rounded-2xl p-3.5 backdrop-blur-sm col-span-2 sm:col-span-1">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-amber-300 block">Final Campaign Goal</span>
+                  <div className="text-lg font-black text-amber-200 mt-0.5">₦{activeCampaign.final_goal?.toLocaleString()}</div>
+                  <span className="text-[10px] text-amber-400/80 mt-1 block">+{Math.round(((activeCampaign.final_goal - activeCampaign.starting_stake) / activeCampaign.starting_stake) * 100)}% Compounded</span>
+                </div>
+              </div>
+
+              {/* Days Counting Compounding Ladder */}
+              <div className="space-y-3 relative z-10">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-xs font-black uppercase tracking-wider text-slate-300 flex items-center gap-1.5">
+                    <Layers className="w-3.5 h-3.5 text-emerald-400" />
+                    <span>Compounding Ladder & Days Progress</span>
+                  </h3>
+                  <span className="text-[11px] font-bold text-slate-400">
+                    {activeCampaign.won_count} of {activeCampaign.total_days} Days Hit
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  {(activeCampaign.days || []).map((d) => {
+                    const isWon = d.status === "WON";
+                    const isRunning = d.status === "RUNNING";
+                    const isLost = d.status === "LOST";
+                    const isPending = d.status === "PENDING";
+
+                    return (
+                      <div
+                        key={d.day}
+                        className={`p-4 rounded-2xl border transition-all relative overflow-hidden flex flex-col justify-between ${
+                          isWon
+                            ? "bg-emerald-950/60 border-emerald-500/50 shadow-md shadow-emerald-950/40"
+                            : isRunning
+                            ? "bg-amber-950/40 border-amber-500/60 ring-2 ring-amber-500/30 shadow-lg shadow-amber-950/40"
+                            : isLost
+                            ? "bg-rose-950/40 border-rose-500/40"
+                            : "bg-white/5 border-white/10 opacity-70"
+                        }`}
+                      >
+                        <div>
+                          <div className="flex items-center justify-between pb-2 border-b border-white/10">
+                            <span className="text-xs font-black text-white flex items-center gap-1.5">
+                              <span>Day {d.day}</span>
+                              <span className="text-[10px] font-medium text-slate-400">({d.weekday})</span>
+                            </span>
+                            <span className={`px-2 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider border ${
+                              isWon
+                                ? "bg-emerald-500/20 border-emerald-500/40 text-emerald-300"
+                                : isRunning
+                                ? "bg-amber-400/20 border-amber-400/50 text-amber-300 animate-pulse"
+                                : isLost
+                                ? "bg-rose-500/20 border-rose-500/40 text-rose-300"
+                                : "bg-white/10 border-white/20 text-slate-400"
+                            }`}>
+                              {isWon ? "✅ WON" : isRunning ? "⏳ IN PLAY (TODAY)" : isLost ? "❌ LOST" : "⚪ UPCOMING"}
+                            </span>
+                          </div>
+
+                          <div className="mt-3 space-y-1.5">
+                            <div className="flex items-center justify-between text-xs">
+                              <span className="text-slate-400 font-medium">Stake:</span>
+                              <span className="font-bold text-white">₦{d.stake?.toLocaleString()}</span>
+                            </div>
+                            <div className="flex items-center justify-between text-xs">
+                              <span className="text-slate-400 font-medium">Potential Win:</span>
+                              <span className={`font-black ${isWon ? "text-emerald-300" : isRunning ? "text-amber-300" : "text-slate-300"}`}>
+                                ₦{d.potential_payout?.toLocaleString()}
+                              </span>
+                            </div>
+                            {d.booking_code && (
+                              <div className="flex items-center justify-between text-xs pt-1.5 border-t border-white/10">
+                                <span className="text-slate-400 font-medium">SportyBet Code:</span>
+                                <span className="font-mono font-black text-amber-300 bg-black/40 px-2 py-0.5 rounded-md border border-white/10">
+                                  {d.booking_code}
+                                </span>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Interactive Status Marker for Today or running day */}
+                        {isRunning && (
+                          <div className="mt-3.5 pt-2.5 border-t border-white/10 flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => handleMarkDayStatus(d.day, "WON")}
+                              className="flex-1 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-black text-[11px] transition-all flex items-center justify-center gap-1 shadow-sm cursor-pointer"
+                            >
+                              <Check className="w-3.5 h-3.5 stroke-[3]" />
+                              <span>Mark Day {d.day} Won</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleMarkDayStatus(d.day, "LOST")}
+                              className="px-2.5 py-1.5 rounded-xl bg-rose-500/20 hover:bg-rose-500/30 border border-rose-500/40 text-rose-300 font-bold text-[11px] transition-all cursor-pointer"
+                            >
+                              Lost
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Today's Active Running Slip & Banker Legs */}
+              {cronTicketResult && (
+                <div className="bg-black/40 border border-white/15 rounded-2xl p-5 space-y-4 relative z-10 backdrop-blur-md">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-white/10">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-xl bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center text-emerald-400">
+                        <Flame className="w-5 h-5" />
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <h4 className="text-sm font-black text-white">
+                            Today's Day {activeCampaign.current_day} Running Slip ({cronTicketResult.actual_odds || cronTicketResult.total_odds || "2.00"}x Odds)
+                          </h4>
+                          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-400/20 text-emerald-300 border border-emerald-400/30">
+                            Strict Floor ≥ 1.15x
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-slate-400 mt-0.5">
+                          {cronTicketResult.picks?.length || 4} Banker selections targeting ₦{Math.round((activeCampaign.current_stake || 0) * (activeCampaign.target_odds || 2.0))?.toLocaleString()} return
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* Booking Code Callout */}
+                    {cronTicketResult.booking_code && (
+                      <div className="flex items-center gap-2 self-start sm:self-center">
+                        <div className="px-3.5 py-1.5 rounded-xl bg-emerald-500/20 border border-emerald-500/40 flex items-center gap-2">
+                          <span className="text-[10px] font-bold text-slate-400 uppercase">Code:</span>
+                          <span className="font-mono text-base font-black text-amber-300 tracking-wider">
+                            {cronTicketResult.booking_code}
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            navigator.clipboard.writeText(cronTicketResult.booking_code);
+                            setCopiedCronCode(true);
+                            setTimeout(() => setCopiedCronCode(false), 2500);
+                          }}
+                          className="px-3 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-slate-950 text-xs font-black transition-all flex items-center gap-1.5 cursor-pointer shadow-sm"
+                        >
+                          {copiedCronCode ? <Check className="w-3.5 h-3.5 stroke-[3]" /> : <Copy className="w-3.5 h-3.5" />}
+                          <span>{copiedCronCode ? "Copied!" : "Copy"}</span>
+                        </button>
+                        <a
+                          href={cronTicketResult.share_url || `https://www.sportybet.com/ng/?shareCode=${cronTicketResult.booking_code}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="p-2 rounded-xl bg-white/10 hover:bg-white/20 border border-white/10 text-white transition-all"
+                          title="Pre-Load in SportyBet"
+                        >
+                          <ExternalLink className="w-4 h-4" />
+                        </a>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Legs Breakdown */}
+                  {cronTicketResult.picks && cronTicketResult.picks.length > 0 && (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
+                      {cronTicketResult.picks.map((p, idx) => (
+                        <div key={idx} className="bg-white/5 border border-white/10 rounded-xl p-3 flex items-center justify-between gap-3">
+                          <div className="min-w-0 flex-1">
+                            <div className="text-xs font-black text-white truncate">
+                              {p.home_team} vs {p.away_team}
+                            </div>
+                            <div className="text-[11px] text-slate-400 flex items-center gap-1.5 mt-0.5 truncate">
+                              <span className="text-emerald-400 font-bold">{p.selection_desc || p.selection_name || "Pick"}</span>
+                              <span>·</span>
+                              <span className="truncate">{p.market_desc || p.market_name || "Market"}</span>
+                            </div>
+                          </div>
+                          <div className="text-right flex-shrink-0">
+                            <span className="text-xs font-black text-amber-300 font-mono bg-black/40 px-2 py-0.5 rounded border border-white/10">
+                              {(parseFloat(p.odds || p.estimated_odds || 1.25)).toFixed(2)}
+                            </span>
+                            <span className="text-[10px] text-emerald-400 font-bold block mt-0.5">
+                              {p.model_probability ? `${Math.round(p.model_probability * 100)}% Win` : "80%+ Banker"}
+                            </span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
           {/* AUTOMATED 10:00 AM DAILY VIP AUTOMATION HUB */}
           <div className="bg-white rounded-3xl border border-slate-200 shadow-xl shadow-slate-100/90 p-5 sm:p-7 space-y-6 relative overflow-hidden">
             {/* Ambient subtle decorative background glows */}

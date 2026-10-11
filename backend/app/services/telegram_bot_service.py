@@ -239,6 +239,65 @@ class StatIQTelegramBot:
         }
         return self.send_message(chat_id, msg, reply_markup=keyboard)
 
+    def handle_challenge_command(self, chat_id: int | str):
+        """Displays Compounding Challenge ladder status with current day, stake, and picks."""
+        from app.services.rollover_cron_scheduler import rollover_scheduler
+        camp = rollover_scheduler.get_active_campaign()
+        
+        curr_day = camp.get("current_day", 1)
+        tot_days = camp.get("total_days", 3)
+        curr_stake = camp.get("current_stake", 5000)
+        target_odds = camp.get("target_odds", 2.0)
+        pot_win = round(curr_stake * target_odds)
+        won_cnt = camp.get("won_count", 0)
+        final_goal = camp.get("final_goal", round(camp.get("starting_stake", 5000) * (target_odds ** tot_days)))
+        
+        lines = [
+            f"🏆 <b>StatIQ {tot_days}-Day Compounding Challenge</b>",
+            f"📅 <b>Progress:</b> Day <b>{curr_day} of {tot_days}</b> ({won_cnt}/{tot_days} Days Won)",
+            f"💰 <b>Current Day Stake:</b> ₦{curr_stake:,.0f} ➔ Target: <b>₦{pot_win:,.0f}</b>",
+            f"🎯 <b>Final Campaign Goal:</b> <b>₦{final_goal:,.0f}</b>",
+            ""
+        ]
+        
+        for d in camp.get("days", []):
+            d_num = d.get("day")
+            d_stk = d.get("stake")
+            d_payout = d.get("potential_payout")
+            status = d.get("status")
+            wday = d.get("weekday")
+            if status == "WON":
+                icon = "✅ WON"
+            elif status == "LOST":
+                icon = "❌ LOST"
+            elif status == "RUNNING":
+                icon = "⏳ IN PLAY (TODAY)"
+            else:
+                icon = "⚪ PENDING"
+            lines.append(f"• <b>Day {d_num} ({wday}):</b> {icon} — ₦{d_stk:,.0f} ➔ ₦{d_payout:,.0f}")
+            
+        active_t = camp.get("active_ticket")
+        if active_t and active_t.get("booking_code"):
+            code = active_t.get("booking_code")
+            act_odds = active_t.get("actual_odds") or target_odds
+            lines.append("")
+            lines.append(f"🎟️ <b>Today's Day {curr_day} SportyBet Code:</b> <code>{code}</code> (@ <b>{act_odds:.2f}x</b>)")
+            lines.append(f"🔗 <a href=\"https://www.sportybet.com/ng/?shareCode={code}\"><b>Open Directly in SportyBet</b></a>")
+
+        keyboard = {
+            "inline_keyboard": [
+                [
+                    {"text": "🚀 Dispatch Slips Now", "callback_data": "auto:dispatch"},
+                    {"text": f"✅ Mark Day {curr_day} Won", "callback_data": f"camp:won:{curr_day}"}
+                ],
+                [
+                    {"text": "🔄 Start Fresh 3-Day Challenge", "callback_data": "camp:start:3"},
+                    {"text": "🗑️ Conclude / Remove Campaign", "callback_data": "camp:dismiss"}
+                ]
+            ]
+        }
+        return self.send_message(chat_id, "\n".join(lines), reply_markup=keyboard)
+
     def handle_dispatch_command(self, chat_id: int | str):
         """Immediately executes and delivers the Daily VIP Trio tickets to Telegram."""
         self.send_chat_action(chat_id, "typing")
@@ -812,6 +871,36 @@ class StatIQTelegramBot:
                 self.handle_auto_command(chat_id)
             return
 
+        if data == "auto:dispatch":
+            self.handle_dispatch_command(chat_id)
+            return
+
+        if data == "auto:menu":
+            self.handle_auto_command(chat_id)
+            return
+
+        if data.startswith("camp:won:"):
+            day_num = int(data.split(":")[2])
+            from app.services.rollover_cron_scheduler import rollover_scheduler
+            rollover_scheduler.update_challenge_day(day_num, "WON")
+            self.send_message(chat_id, f"✅ <b>Marked Day {day_num} as WON!</b> Compounding ladder advanced.")
+            self.handle_challenge_command(chat_id)
+            return
+
+        if data.startswith("camp:dismiss"):
+            from app.services.rollover_cron_scheduler import rollover_scheduler
+            rollover_scheduler.dismiss_campaign()
+            self.send_message(chat_id, "🗑️ <b>Compounding Challenge Removed.</b> You can start a fresh challenge anytime with <code>/challenge</code>.")
+            return
+
+        if data.startswith("camp:start:"):
+            days = int(data.split(":")[2])
+            from app.services.rollover_cron_scheduler import rollover_scheduler
+            rollover_scheduler.start_challenge(days=days, starting_stake=5000, target_odds=2.0)
+            self.send_message(chat_id, f"🚀 <b>Started Fresh {days}-Day Compounding Challenge!</b>")
+            self.handle_challenge_command(chat_id)
+            return
+
         # Case 1: Generator button (e.g. gen:odds:2.0:1 or gen:odds:2.0:2, gen:games:10:2, gen:rollover)
         if data.startswith("gen:"):
             parts = data.split(":")
@@ -872,7 +961,12 @@ class StatIQTelegramBot:
             self.handle_start_or_help(chat_id)
             return
 
-        # 2. Daily VIP Automation: /auto, /automation, /dispatch, /autonow
+        # 2. Compounding Challenge: /challenge, /ladder, /campaign
+        if any(text.startswith(cmd) for cmd in ["/challenge", "/ladder", "/campaign"]):
+            self.handle_challenge_command(chat_id)
+            return
+
+        # 3. Daily VIP Automation: /auto, /automation, /dispatch, /autonow
         if any(text.startswith(cmd) for cmd in ["/auto", "/automation", "/autostatus"]):
             self.handle_auto_command(chat_id)
             return
@@ -881,7 +975,7 @@ class StatIQTelegramBot:
             self.handle_dispatch_command(chat_id)
             return
 
-        # 3. /rollover or /roll
+        # 4. /rollover or /roll
         if text.startswith("/rollover") or text.startswith("/roll"):
             self.handle_rollover_command(chat_id)
             return

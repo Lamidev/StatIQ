@@ -269,5 +269,184 @@ class RolloverCronScheduler:
 
         return trio_res
 
+    def get_active_campaign(self) -> Dict[str, Any]:
+        """
+        Returns a rich representation of the active running campaign (Compounding Challenge or Continuous Daily VIP).
+        Calculates ladder days, progress, stake compounding, won/loss statuses, and today's active leg.
+        """
+        cfg = self.get_config()
+        is_enabled = bool(cfg.get("is_enabled", True))
+        campaign_mode = cfg.get("campaign_mode", "CHALLENGE")
+        challenge_status = cfg.get("challenge_status", "ACTIVE")
+        
+        # If challenge status is DISMISSED or removed
+        if challenge_status in ("DISMISSED", "REMOVED") and campaign_mode == "CHALLENGE":
+            return {
+                "has_active": False,
+                "campaign_mode": "CHALLENGE",
+                "challenge_status": challenge_status,
+                "is_enabled": is_enabled
+            }
+
+        target_odds = float(cfg.get("target_odds", 2.00))
+        starting_stake = float(cfg.get("starting_stake", 5000))
+        total_days = int(cfg.get("challenge_days", 3 if campaign_mode == "CHALLENGE" else 1))
+        current_day = int(cfg.get("challenge_day_current", 1))
+        start_date_str = cfg.get("challenge_start_date") or datetime.date.today().isoformat()
+        
+        try:
+            start_date = datetime.date.fromisoformat(start_date_str)
+        except Exception:
+            start_date = datetime.date.today()
+
+        today = datetime.date.today()
+        # Compute days elapsed
+        days_diff = (today - start_date).days
+        calculated_day = max(1, min(total_days, days_diff + 1))
+        if calculated_day > current_day and challenge_status == "ACTIVE":
+            current_day = calculated_day
+
+        run_history = cfg.get("run_history", [])
+        
+        # Build day ladder
+        days = []
+        won_count = 0
+        current_stake = starting_stake
+        for d in range(1, total_days + 1):
+            day_date = start_date + datetime.timedelta(days=d - 1)
+            day_str = day_date.isoformat()
+            weekday_name = day_date.strftime("%A")
+            day_stake = round(starting_stake * (target_odds ** (d - 1)))
+            day_potential = round(day_stake * target_odds)
+            
+            # Determine status of this day
+            matched_hist = None
+            for h in run_history:
+                if h.get("date") == day_str or h.get("day") == d:
+                    matched_hist = h
+                    break
+            
+            if matched_hist and matched_hist.get("status") in ("WON", "LOST"):
+                d_status = matched_hist.get("status")
+                d_code = matched_hist.get("rollover_code") or matched_hist.get("booking_code")
+            elif d < current_day:
+                d_status = "WON"
+                d_code = f"RO-DAY{d}"
+            elif d == current_day:
+                d_status = "RUNNING"
+                d_code = (cfg.get("last_ticket") or {}).get("booking_code") if cfg.get("last_ticket") else None
+            else:
+                d_status = "PENDING"
+                d_code = None
+
+            if d_status == "WON":
+                won_count += 1
+                if d == current_day - 1:
+                    current_stake = day_potential
+            elif d == current_day:
+                current_stake = day_stake
+
+            days.append({
+                "day": d,
+                "date": day_str,
+                "weekday": weekday_name,
+                "stake": day_stake,
+                "odds": target_odds,
+                "potential_payout": day_potential,
+                "status": d_status,
+                "booking_code": d_code,
+                "is_today": (day_str == today.isoformat() or d == current_day),
+                "summary": matched_hist.get("summary") if matched_hist else None
+            })
+
+        final_goal = round(starting_stake * (target_odds ** total_days))
+        progress_pct = round((won_count / max(1, total_days)) * 100, 1)
+        is_completed = (challenge_status == "COMPLETED") or (won_count >= total_days)
+
+        active_ticket = cfg.get("last_ticket")
+
+        return {
+            "has_active": is_enabled and (campaign_mode == "CHALLENGE" or campaign_mode == "CONTINUOUS"),
+            "campaign_mode": campaign_mode,
+            "challenge_status": "COMPLETED" if is_completed else challenge_status,
+            "is_completed": is_completed,
+            "is_enabled": is_enabled,
+            "target_odds": target_odds,
+            "starting_stake": starting_stake,
+            "current_stake": current_stake,
+            "final_goal": final_goal,
+            "total_days": total_days,
+            "current_day": current_day,
+            "start_date": start_date_str,
+            "end_date": (start_date + datetime.timedelta(days=total_days - 1)).isoformat(),
+            "won_count": won_count,
+            "progress_pct": progress_pct,
+            "days": days,
+            "active_ticket": active_ticket,
+            "last_trio_result": cfg.get("last_trio_result"),
+            "dispatch_time": cfg.get("dispatch_time", "10:00")
+        }
+
+    def update_challenge_day(self, day_num: int, status: str, notes: Optional[str] = None) -> Dict[str, Any]:
+        """Updates a specific challenge day result (WON or LOST)."""
+        cfg = self.get_config()
+        run_history = cfg.get("run_history", [])
+        
+        found = False
+        for h in run_history:
+            if h.get("day") == day_num:
+                h["status"] = status
+                if notes:
+                    h["summary"] = notes
+                found = True
+                break
+        if not found:
+            run_history.append({
+                "day": day_num,
+                "status": status,
+                "summary": notes
+            })
+        cfg["run_history"] = run_history
+
+        total_days = int(cfg.get("challenge_days", 3))
+        if status == "WON":
+            if day_num < total_days:
+                cfg["challenge_day_current"] = day_num + 1
+            else:
+                cfg["challenge_status"] = "COMPLETED"
+                cfg["challenge_day_current"] = total_days
+        elif status == "LOST":
+            cfg["challenge_status"] = "LOST"
+
+        self.save_config(cfg)
+        return self.get_active_campaign()
+
+    def dismiss_campaign(self) -> Dict[str, Any]:
+        """Dismisses and clears the completed or active challenge, removing it from the running card."""
+        cfg = self.get_config()
+        cfg["challenge_status"] = "DISMISSED"
+        cfg["campaign_mode"] = "CONTINUOUS"
+        self.save_config(cfg)
+        return {"status": "SUCCESS", "message": "Campaign concluded and removed."}
+
+    def start_challenge(self, days: int = 3, starting_stake: float = 5000.0, target_odds: float = 2.0) -> Dict[str, Any]:
+        """Starts a fresh compounding challenge ladder."""
+        today_str = datetime.date.today().isoformat()
+        end_date = (datetime.date.today() + datetime.timedelta(days=days - 1)).isoformat()
+        cfg = {
+            "campaign_mode": "CHALLENGE",
+            "challenge_days": int(days),
+            "challenge_day_current": 1,
+            "challenge_start_date": today_str,
+            "challenge_end_date": end_date,
+            "starting_stake": float(starting_stake),
+            "target_odds": float(target_odds),
+            "challenge_status": "ACTIVE",
+            "is_enabled": True,
+            "run_history": []
+        }
+        self.save_config(cfg)
+        return self.get_active_campaign()
+
 # Global singleton
 rollover_scheduler = RolloverCronScheduler()
