@@ -413,7 +413,7 @@ export default function BetHistoryTab({ externalSelectedTicketId, onClearExterna
 
             const featureItems = [
               { key: "AI_BUILDER", label: "AI Builder", desc: "5-Gate target odds" },
-              { key: "ROLLOVER",   label: "Rollover",   desc: "Compound bankers" },
+              { key: "ROLLOVER",   label: "Daily VIP Automation", desc: "2x, 5x & 10x Slips" },
               { key: "AUDITOR",    label: "Auditor",    desc: "Code upgrades" },
               { key: "REMOVE",     label: "Remove",     desc: "Risk reduction" },
             ];

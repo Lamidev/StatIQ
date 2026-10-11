@@ -1560,10 +1560,10 @@ Slovakia vs Moldova`;
       <div className="bg-white p-4 sm:p-6 rounded-xl sm:rounded-2xl border border-slate-200 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h2 className="text-base sm:text-xl font-extrabold text-slate-900">
-            AI Ticket & Rollover Builder
+            AI Ticket & Daily VIP Automation
           </h2>
           <p className="text-[11px] sm:text-xs text-slate-500 mt-1">
-            Build target odds accumulators or generate <strong>Multi-Day Daily Rollover Strategies</strong> with StatIQ live 2026/27 prediction models.
+            Build target odds accumulators or generate <strong>Daily VIP Automated Slips (2.0x, 5.0x, 10.0x)</strong> with StatIQ live 2026/27 prediction models.
           </p>
         </div>
 
