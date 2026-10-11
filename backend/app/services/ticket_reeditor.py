@@ -25,6 +25,7 @@ import random
 import time
 from typing import List, Dict, Any, Optional, Tuple
 
+import httpx
 from app.predictions.leg_odds_calculator import calculate_dynamic_leg_config
 from app.predictions.live_calculator import calculate_matchiq_probabilities, get_team_rating
 from app.services.pick_engine import pick_engine, PickDecision
@@ -40,6 +41,188 @@ HIGH_TEMPO_CLUBS = {
     "benfica", "sporting", "porto", "psv", "ajax", "feyenoord", "young boys", "celtic", "rangers",
     "stuttgart", "frankfurt", "hoffenheim", "brighton", "leeds", "brentford"
 }
+
+SPORTYBET_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    "Accept": "application/json, text/plain, */*",
+    "Referer": "https://www.sportybet.com/ng/",
+    "Origin": "https://www.sportybet.com",
+}
+
+
+async def _fetch_live_event_elite_markets(
+    event_id: str,
+    home_team: str,
+    away_team: str,
+    is_away_intent: bool = False,
+    client: Optional[httpx.AsyncClient] = None
+) -> Optional[Dict[str, Any]]:
+    """
+    Queries SportyBet FactsCenter to verify REAL active, bettable markets for a fixture.
+    Selects the optimal low-variance elite market (Double Chance, Over 1.5, Win Either Half, Team Goals)
+    with strictly real odds >= 1.15. Zero synthetic IDs or guesswork.
+    """
+    if not event_id:
+        return None
+
+    clean_id = event_id
+    urls = [
+        f"https://www.sportybet.com/api/ng/factsCenter/pcEventDetails?eventId={clean_id}",
+        f"https://www.sportybet.com/api/ng/factsCenter/eventDetail?eventId={clean_id}"
+    ]
+
+    markets = None
+    try:
+        if client is not None:
+            for url in urls:
+                try:
+                    r = await client.get(url)
+                    if r.status_code == 200:
+                        data = r.json().get("data")
+                        if isinstance(data, dict):
+                            markets = data.get("markets") or data.get("market") or []
+                            if markets:
+                                break
+                        elif isinstance(data, list) and data:
+                            markets = data[0].get("markets", [])
+                            if markets:
+                                break
+                except Exception:
+                    continue
+        else:
+            async with httpx.AsyncClient(timeout=6.0, headers=SPORTYBET_HEADERS) as c:
+                for url in urls:
+                    try:
+                        r = await c.get(url)
+                        if r.status_code == 200:
+                            data = r.json().get("data")
+                            if isinstance(data, dict):
+                                markets = data.get("markets") or data.get("market") or []
+                                if markets:
+                                    break
+                            elif isinstance(data, list) and data:
+                                markets = data[0].get("markets", [])
+                                if markets:
+                                    break
+                    except Exception:
+                        continue
+    except Exception as e:
+        logger.warning(f"[TicketReeditor] Error fetching live markets for {event_id}: {e}")
+        return None
+
+    if not markets:
+        return None
+
+    found_candidates = []
+
+    for m in markets:
+        m_st = m.get("status")
+        if m_st is not None and str(m_st) != "0":
+            continue
+
+        m_id = str(m.get("id"))
+        m_desc = (m.get("desc") or "").lower()
+        spec = m.get("specifier") or None
+
+        # 1. Double Chance (1X or X2)
+        if m_id == "10" or "double chance" in m_desc:
+            for oc in m.get("outcomes", []):
+                if str(oc.get("isActive", "1")) not in ("1", "True", "true") or str(oc.get("status", "0")) != "0":
+                    continue
+                oc_id = str(oc.get("id"))
+                oc_desc = (oc.get("desc") or "").lower()
+                odds = float(oc.get("odds") or 0)
+                if odds < 1.15:
+                    continue
+
+                if (not is_away_intent) and (oc_id == "9" or "home or draw" in oc_desc or "1x" in oc_desc):
+                    found_candidates.append({
+                        "market_name": "Double Chance",
+                        "selection_name": f"{home_team} or Draw (1X)",
+                        "odds": odds,
+                        "probability": round(min(0.92, (1.0 / odds) * 0.96), 3),
+                        "market_id": m_id,
+                        "outcome_id": oc_id,
+                        "specifier": spec,
+                        "reason": f"Verified live SportyBet Double Chance ({home_team} 1X @ {odds:.2f}x)"
+                    })
+                elif is_away_intent and (oc_id == "11" or "draw or away" in oc_desc or "x2" in oc_desc):
+                    found_candidates.append({
+                        "market_name": "Double Chance",
+                        "selection_name": f"Draw or {away_team} (X2)",
+                        "odds": odds,
+                        "probability": round(min(0.90, (1.0 / odds) * 0.96), 3),
+                        "market_id": m_id,
+                        "outcome_id": oc_id,
+                        "specifier": spec,
+                        "reason": f"Verified live SportyBet Double Chance (X2 {away_team} @ {odds:.2f}x)"
+                    })
+
+        # 2. Over 1.5 Total Goals
+        elif (m_id == "18" or "over/under" in m_desc) and "half" not in m_desc and "team" not in m_desc:
+            if spec and "1.5" in str(spec):
+                for oc in m.get("outcomes", []):
+                    if str(oc.get("isActive", "1")) not in ("1", "True", "true") or str(oc.get("status", "0")) != "0":
+                        continue
+                    oc_desc = (oc.get("desc") or "").lower()
+                    odds = float(oc.get("odds") or 0)
+                    if "over" in oc_desc and 1.15 <= odds <= 1.45:
+                        found_candidates.append({
+                            "market_name": "Over/Under Goals",
+                            "selection_name": "Over 1.5 Goals",
+                            "odds": odds,
+                            "probability": 0.86,
+                            "market_id": m_id,
+                            "outcome_id": str(oc.get("id")),
+                            "specifier": spec,
+                            "reason": f"Verified live SportyBet Over 1.5 Goals (@ {odds:.2f}x)"
+                        })
+
+        # 3. Win Either Half (Yes)
+        elif "win either half" in m_desc or m_id in ("61", "62", "73", "74", "111"):
+            fav_team = away_team if is_away_intent else home_team
+            for oc in m.get("outcomes", []):
+                if str(oc.get("isActive", "1")) not in ("1", "True", "true") or str(oc.get("status", "0")) != "0":
+                    continue
+                oc_desc = (oc.get("desc") or "").lower()
+                odds = float(oc.get("odds") or 0)
+                if 1.15 <= odds <= 1.45 and any(k in oc_desc for k in ["yes", "1", "2", fav_team.lower()]):
+                    found_candidates.append({
+                        "market_name": "Win Either Half",
+                        "selection_name": f"{fav_team} Win Either Half",
+                        "odds": odds,
+                        "probability": 0.84,
+                        "market_id": m_id,
+                        "outcome_id": str(oc.get("id")),
+                        "specifier": spec,
+                        "reason": f"Verified live SportyBet Win Either Half ({fav_team} @ {odds:.2f}x)"
+                    })
+
+        # 4. Team Total Over 0.5
+        elif "team" in m_desc and "over" in m_desc:
+            fav_team = away_team if is_away_intent else home_team
+            if spec and "0.5" in str(spec):
+                for oc in m.get("outcomes", []):
+                    if str(oc.get("isActive", "1")) not in ("1", "True", "true") or str(oc.get("status", "0")) != "0":
+                        continue
+                    odds = float(oc.get("odds") or 0)
+                    if "over" in (oc.get("desc") or "").lower() and 1.15 <= odds <= 1.40:
+                        found_candidates.append({
+                            "market_name": "Team Total Goals",
+                            "selection_name": f"{fav_team} Over 0.5 Goals",
+                            "odds": odds,
+                            "probability": 0.88,
+                            "market_id": m_id,
+                            "outcome_id": str(oc.get("id")),
+                            "specifier": spec,
+                            "reason": f"Verified live SportyBet Team Over 0.5 Goals ({fav_team} @ {odds:.2f}x)"
+                        })
+
+    if not found_candidates:
+        return None
+
+    found_candidates.sort(key=lambda x: (x["probability"], x["odds"]), reverse=True)
+    return found_candidates[0]
 
 
 def _classify(prob: float) -> str:
@@ -406,8 +589,8 @@ async def re_edit_ticket(
             "portfolio_tickets": []
         }
 
-    # Normalize mode (force AUDITOR or REMOVE)
-    mode = "REMOVE" if mode.upper() == "REMOVE" else "AUDITOR"
+    # Normalize mode (accept EDIT / AUDITOR as synonyms, and REMOVE / TRIM as synonyms)
+    mode = "REMOVE" if mode.upper() in ("REMOVE", "TRIM") else "EDIT"
     rng = random.Random(reshuffle_seed) if reshuffle_seed else random.Random()
     num_t = max(1, min(4, int(num_tickets or 1)))
 
@@ -420,33 +603,43 @@ async def re_edit_ticket(
     remove_count = 0
 
     # ══════════════════════════════════════════════════════════════════════════
-    # MODE 1: AUDITOR MODE (Market Upgrades — 100% Same Matches)
+    # MODE 1: EDIT MODE (Elite AI Re-Prediction — Strictly Same Loaded Fixtures)
     # ══════════════════════════════════════════════════════════════════════════
-    if mode == "AUDITOR":
-        from app.services.sportybet_reconciliation import SportyBetVerificationEngine
-        _engine = SportyBetVerificationEngine(db_session=None)
-        _sem = asyncio.Semaphore(12)
+    if mode in ("EDIT", "AUDITOR"):
+        # Parallel pre-fetch of live SportyBet elite markets for all candidate fixtures
+        sem = asyncio.Semaphore(10)
+        async with httpx.AsyncClient(timeout=8.0, headers=SPORTYBET_HEADERS) as client:
+            async def _fetch_elite_item(s):
+                h = s.get("home_team", "Home")
+                a = s.get("away_team", "Away")
+                p = (s.get("selection_name") or "").lower()
+                m = (s.get("market_name") or "").lower()
+                is_away = "away" in p or "away" in m or "2" in p or a.lower() in p
+                raw_ev = str(s.get("event_id") or s.get("provider_event_id") or s.get("_sportybet_event_id") or s.get("external_fixture_id") or s.get("fixture_id") or s.get("game_id") or "").strip()
+                if raw_ev.startswith("fx_"):
+                    raw_ev = raw_ev[3:]
+                if raw_ev.startswith("sr_match_"):
+                    can_id = f"sr:match:{raw_ev[9:]}"
+                elif raw_ev.isdigit() and len(raw_ev) >= 7:
+                    can_id = f"sr:match:{raw_ev}"
+                else:
+                    can_id = raw_ev
 
-        async def _fetch_ranked_for_sel(sel):
-            ev_id = str(sel.get("external_fixture_id") or sel.get("game_id") or sel.get("fixture_id") or "")
-            if not ev_id or ev_id in ("None", "") or ev_id.startswith("AUDIT_"):
-                return ev_id, []
-            async with _sem:
-                ranked = await _engine.fetch_ranked_live_odds(
-                    event_id=ev_id,
-                    home_team=sel.get("home_team", ""),
-                    away_team=sel.get("away_team", ""),
-                    region="ng"
+                if not can_id or can_id.startswith("AUDIT_"):
+                    return can_id, None
+                async with sem:
+                    mkt = await _fetch_live_event_elite_markets(can_id, h, a, is_away, client=client)
+                    return can_id, mkt
+
+            try:
+                elite_pairs = await asyncio.wait_for(
+                    asyncio.gather(*[_fetch_elite_item(s) for s in scored]),
+                    timeout=20.0
                 )
-            return ev_id, ranked
-
-        try:
-            results = await asyncio.wait_for(
-                asyncio.gather(*[_fetch_ranked_for_sel(s) for s in scored]),
-                timeout=20.0
-            )
-        except Exception as e:
-            logger.warning(f"Auditor live odds prefetch error: {e}")
+                elite_mkt_map = dict(elite_pairs)
+            except Exception as e:
+                logger.warning(f"[TicketReeditor] Concurrent elite markets prefetch note: {e}")
+                elite_mkt_map = {}
 
         for idx, sel in enumerate(scored):
             is_expired, exp_reason = _is_expired_or_live(sel)
@@ -484,14 +677,15 @@ async def re_edit_ticket(
             m_lower = (orig_mkt or "").lower()
             p_lower = (orig_pick or "").lower()
 
-            # ── RULE 1: HIGH-QUALITY SAFE ORIGINAL PICK PRESERVATION ─────────
+            # ── RULE 1: PASS & KEEP HIGH-QUALITY SAFE ORIGINAL PICKS ─────────
             is_already_safe_tier1 = (
                 (any(k in m_lower or k in p_lower for k in ["team over", "team goals", "pure", "over 0.5", "over 1.5", "under 3.5", "under 4.5"]) and not any(x in p_lower for x in ["over 2.5", "over 3.5", "under 1.5", "under 0.5"])) or
                 (("double chance" in m_lower or "1x" in p_lower or "x2" in p_lower) and not ("12" in p_lower or "home or away" in p_lower)) or
-                (("handicap" in m_lower or "handicap" in p_lower or "(+" in p_lower) and any(x in p_lower for x in ["+1.5", "+2.0", "+1.0", "+2.5", "+0.5", "(+1", "(+2", "(+0"]))
+                (("handicap" in m_lower or "handicap" in p_lower or "(+" in p_lower) and any(x in p_lower for x in ["+1.5", "+2.0", "+1.0", "+2.5", "+0.5", "(+1", "(+2", "(+0"])) or
+                ("win either half" in m_lower or "win either half" in p_lower)
             )
 
-            if is_already_safe_tier1 and 1.15 <= orig_odds <= 1.55 and orig_m_id and orig_o_id:
+            if is_already_safe_tier1 and 1.15 <= orig_odds <= 1.55 and orig_prob >= SAFE_THRESHOLD and orig_m_id and orig_o_id:
                 final_pick = {
                     "fixture_id": canonical_event_id or f"AUDIT_{idx:03d}",
                     "event_id": canonical_event_id,
@@ -523,137 +717,60 @@ async def re_edit_ticket(
                 keep_count += 1
                 continue
 
-            # ── RULE 2: TACTICAL MARKET UPGRADE ──────────────────────────────
-            is_away_intent = "away" in p_lower or "away" in m_lower or "2" in p_lower or away.lower() in p_lower
-            
-            # Case A: 12 Double Chance trap -> Upgrade to safe Draw-Protected Asian Handicap (+1.5), 1X/X2, or Under 3.5
-            if "12" in p_lower or "home or away" in p_lower:
-                if (idx % 3) == 0:
-                    new_mkt = "Asian Handicap"
-                    new_pick = f"{away if is_away_intent else home} (+1.5 Handicap)"
-                    new_odds = round(max(1.15, min(1.30, orig_odds * 0.90)), 2)
-                    new_prob = 0.95
-                    mkt_id = "16"
-                    oc_id = "1715" if is_away_intent else "1714"
-                    spec = "hcp=1.5"
-                    reason_lbl = f"Upgraded volatile '12' Double Chance to draw-immune '{new_pick}'"
-                elif (idx % 3) == 1:
-                    new_mkt = "Over/Under Goals"
-                    new_pick = "Under 3.5 Goals"
-                    new_odds = round(max(1.18, min(1.38, orig_odds * 1.02)), 2)
-                    new_prob = 0.92
-                    mkt_id = "18"
-                    oc_id = "13"
-                    spec = "total=3.5"
-                    reason_lbl = f"Upgraded volatile '12' Double Chance to high-safety '{new_pick}' (protects against draws)"
-                else:
-                    new_mkt = "Double Chance"
-                    new_pick = f"{home} or Draw (1X)" if not is_away_intent else f"Draw or {away} (X2)"
-                    new_odds = round(max(1.16, min(1.35, orig_odds * 0.95)), 2)
-                    new_prob = 0.93
-                    mkt_id = "10"
-                    oc_id = "9" if not is_away_intent else "11"
-                    spec = None
-                    reason_lbl = f"Upgraded from volatile '12' Double Chance to draw-protected '{new_pick}'"
+            # ── RULE 2: VERIFIED SPORTYBET LIVE MARKET RE-PREDICTION ─────────
+            # Re-predict risky out-of-reach pick into live verified elite market (Double Chance, Over 1.5, Win Either Half, Team Goals)
+            real_mkt = elite_mkt_map.get(canonical_event_id)
+            if not real_mkt:
+                is_away_intent = "away" in p_lower or "away" in m_lower or "2" in p_lower or away.lower() in p_lower
+                real_mkt = await _fetch_live_event_elite_markets(canonical_event_id, home, away, is_away_intent)
 
-            # Case B: High Over / BTTS / Goal Bounds -> Upgrade to Over 1.5 (if <=1.25) or Under 3.5 / Team Over 0.5
-            elif any(k in m_lower or k in p_lower for k in ["over 2", "over 3", "btts", "both teams", "bounds", "halves"]):
-                if orig_odds <= 1.40:
-                    new_mkt = "Over/Under Goals"
-                    new_pick = "Over 1.5 Goals"
-                    new_odds = round(max(1.15, min(1.25, orig_odds * 0.85)), 2)
-                    new_prob = 0.93
-                    mkt_id = "18"
-                    oc_id = "12"
-                    spec = "total=1.5"
-                    reason_lbl = f"Upgraded goal market to Tier-1 cushion 'Over 1.5 Goals' (85%+ hit rate)"
-                else:
-                    new_mkt = "Over/Under Goals"
-                    new_pick = "Under 3.5 Goals"
-                    new_odds = round(max(1.18, min(1.35, orig_odds * 0.88)), 2)
-                    new_prob = 0.92
-                    mkt_id = "18"
-                    oc_id = "13"
-                    spec = "total=3.5"
-                    reason_lbl = f"Upgraded volatile goal market to safe-haven 'Under 3.5 Goals'"
-
-            # Case C: Straight 1X2 / Handicap / Win Either Half -> Upgrade to Asian Handicap (+1.5), Double Chance, or Team Goals
+            if real_mkt and float(real_mkt.get("odds", 0)) >= 1.15:
+                final_pick = {
+                    "fixture_id": canonical_event_id or f"AUDIT_{idx:03d}",
+                    "event_id": canonical_event_id,
+                    "game_id": short_game_id,
+                    "provider_event_id": canonical_event_id,
+                    "provider_market_id": real_mkt["market_id"],
+                    "provider_outcome_id": real_mkt["outcome_id"],
+                    "provider_specifier": real_mkt.get("specifier"),
+                    "_sportybet_market_id": real_mkt["market_id"],
+                    "_sportybet_outcome_id": real_mkt["outcome_id"],
+                    "_sportybet_specifier": real_mkt.get("specifier"),
+                    "_sportybet_event_id": canonical_event_id,
+                    "home_team": home,
+                    "away_team": away,
+                    "competition": sel.get("competition", "Domestic League"),
+                    "country": sel.get("country", ""),
+                    "market_name": real_mkt["market_name"],
+                    "selection_name": real_mkt["selection_name"],
+                    "estimated_prob": round(float(real_mkt["probability"]), 3),
+                    "estimated_odds": round(float(real_mkt["odds"]), 2),
+                    "odds": round(float(real_mkt["odds"]), 2),
+                    "action": "AUDITED_UPGRADED",
+                    "confidence_source": "STATIQ_SPORTYBET_VERIFIED_AUDITOR",
+                    "h2h_summary": sel.get("h2h_summary", "5-Gate Form Vetted"),
+                    "reason": real_mkt["reason"],
+                    "replaced_original": {
+                        "market_name": orig_mkt,
+                        "selection_name": orig_pick,
+                        "odds": orig_odds
+                    }
+                }
+                final_selections.append(final_pick)
+                keep_count += 1
             else:
-                h_clean = home.lower()
-                a_clean = away.lower()
-                is_home_power = any(k in h_clean for k in HIGH_TEMPO_CLUBS) or get_team_rating(home) >= 1750
-                is_away_power = any(k in a_clean for k in HIGH_TEMPO_CLUBS) or get_team_rating(away) >= 1750
-
-                if is_home_power and not is_away_intent and (idx % 2 == 1):
-                    new_mkt = "Team Total Goals"
-                    new_pick = f"{home} Over 1.5 Team Goals"
-                    new_odds = round(max(1.18, min(1.38, orig_odds * 0.85)), 2)
-                    new_prob = 0.91
-                    mkt_id = "19"
-                    oc_id = "12"
-                    spec = "total=1.5"
-                    reason_lbl = f"Upgraded straight win on powerhouse {home} to '{new_pick}'"
-                elif is_away_power and is_away_intent and (idx % 2 == 1):
-                    new_mkt = "Team Total Goals"
-                    new_pick = f"{away} Over 1.5 Team Goals"
-                    new_odds = round(max(1.18, min(1.38, orig_odds * 0.85)), 2)
-                    new_prob = 0.91
-                    mkt_id = "20"
-                    oc_id = "12"
-                    spec = "total=1.5"
-                    reason_lbl = f"Upgraded straight win on away powerhouse {away} to '{new_pick}'"
-                elif is_away_intent:
-                    new_mkt = "Asian Handicap"
-                    new_pick = f"{away} (+1.5 Handicap)"
-                    new_odds = round(max(1.15, min(1.35, orig_odds * 0.82)), 2)
-                    new_prob = 0.95
-                    mkt_id = "16"
-                    oc_id = "1715"
-                    spec = "hcp=1.5"
-                    reason_lbl = f"Upgraded straight pick '{orig_pick}' to Asian Handicap (+1.5) safety cushion"
-                else:
-                    new_mkt = "Double Chance"
-                    new_pick = f"{home} or Draw (1X)"
-                    new_odds = round(max(1.16, min(1.38, orig_odds * 0.82)), 2)
-                    new_prob = 0.94
-                    mkt_id = "10"
-                    oc_id = "9"
-                    spec = None
-                    reason_lbl = f"Upgraded straight pick '{orig_pick}' to Double Chance safety cushion ({new_pick})"
-
-            final_pick = {
-                "fixture_id": canonical_event_id or f"AUDIT_{idx:03d}",
-                "event_id": canonical_event_id,
-                "game_id": short_game_id,
-                "provider_event_id": canonical_event_id,
-                "provider_market_id": mkt_id,
-                "provider_outcome_id": oc_id,
-                "provider_specifier": spec,
-                "_sportybet_market_id": mkt_id,
-                "_sportybet_outcome_id": oc_id,
-                "_sportybet_specifier": spec,
-                "_sportybet_event_id": canonical_event_id,
-                "home_team": home,
-                "away_team": away,
-                "competition": sel.get("competition", "Domestic League"),
-                "country": sel.get("country", ""),
-                "market_name": new_mkt,
-                "selection_name": new_pick,
-                "estimated_prob": round(new_prob, 3),
-                "estimated_odds": round(new_odds, 2),
-                "odds": round(new_odds, 2),
-                "action": "AUDITED_UPGRADED",
-                "confidence_source": "STATIQ_5GATE_TACTICAL_AUDITOR",
-                "h2h_summary": sel.get("h2h_summary", "5-Gate Form Vetted"),
-                "reason": reason_lbl,
-                "replaced_original": {
+                # Discard fixture: no verified safe SportyBet market available meeting min odds floor >= 1.15
+                removed_selections.append({
+                    "home_team": home,
+                    "away_team": away,
                     "market_name": orig_mkt,
                     "selection_name": orig_pick,
-                    "odds": orig_odds
-                }
-            }
-            final_selections.append(final_pick)
-            keep_count += 1
+                    "original_odds": orig_odds,
+                    "estimated_prob": orig_prob,
+                    "classification": "UNVERIFIED_RISKY",
+                    "reason": f"No active SportyBet low-variance market available meeting min odds floor >= 1.15x for {home} vs {away}."
+                })
+                remove_count += 1
 
     # ══════════════════════════════════════════════════════════════════════════
     # MODE 2: REMOVE MODE (Risk Purge — Drop < 70% Confidence Picks)
@@ -1069,7 +1186,7 @@ async def re_edit_ticket(
 
                         is_already_in_ticket = any(_get_f_key(x) == f_key for x in t_final)
                         if not is_already_in_ticket:
-                            if mode == "AUDITOR" and current_count < max_allowed_for_cand:
+                            if mode in ("AUDITOR", "EDIT") and current_count < max_allowed_for_cand:
                                 diversified_cand = _derive_alternative_market(cand, variant_seed=t_idx)
                                 t_final.append(diversified_cand)
                                 fixture_usage_count[f_key] = current_count + 1
@@ -1113,7 +1230,7 @@ async def re_edit_ticket(
 
                             is_already_in_ticket = any(_get_f_key(x) == f_key for x in t_final)
                             if not is_already_in_ticket:
-                                if mode == "AUDITOR" and current_count < max_allowed_for_cand:
+                                if mode in ("AUDITOR", "EDIT") and current_count < max_allowed_for_cand:
                                     diversified_cand = _derive_alternative_market(cand)
                                     t_final.append(diversified_cand)
                                     fixture_usage_count[f_key] = current_count + 1

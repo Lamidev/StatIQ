@@ -757,8 +757,11 @@ def _is_league_match(comp_name: str, country_name: str, code_key: str, home_team
     if code in _country_map:
         expected_countries = _country_map[code]
         if country and any(c in country for c in expected_countries):
-            # Additional safety: exclude youth/women comps if we got here via fallback
-            bad_fallback = ["women", "youth", "u19", "u21", "u23", "reserve", "amateur"]
+            # Additional safety: exclude youth/women comps and low-tier filler leagues if we got here via fallback
+            bad_fallback = [
+                "women", "youth", "u19", "u21", "u23", "reserve", "amateur",
+                "san marino", "armenia", "andorra", "gibraltar", "srpska liga", "prva liga", "serbian league"
+            ]
             if not any(b in comp for b in bad_fallback):
                 return True
 
@@ -837,12 +840,17 @@ async def build_ai_ticket(req: BuildTicketRequest):
                 if db_events and len(db_events) > 0:
                     now_ms = time.time() * 1000.0
                     for ev in db_events:
-                        # 10-minute pre-match cutoff on mirror events (SportyBet suspends markets under 10m)
-                        if ev.start_time_ms and ev.start_time_ms <= (now_ms + 600000):
+                        # 45-minute pre-match safety cutoff on mirror events (SportyBet review & load buffer)
+                        if ev.start_time_ms and ev.start_time_ms <= (now_ms + 2700000):
                             continue
 
                         comp_name = ev.competition_rel.name if ev.competition_rel else "Football"
                         country_name = ev.competition_rel.country if ev.competition_rel else None
+
+                        # Banish low-tier filler leagues
+                        comp_lower = (comp_name or "").lower()
+                        if any(b in comp_lower for b in ["san marino", "armenia", "andorra", "gibraltar", "srpska liga", "prva liga", "serbian league"]):
+                            continue
 
                         # Extract 1X2 odds
                         o_h, o_d, o_a = 2.50, 3.00, 2.50
@@ -1003,7 +1011,7 @@ async def build_ai_ticket(req: BuildTicketRequest):
 
             if start_ms > 0:
                 diff_sec = (match_dt - now_utc).total_seconds()
-                if diff_sec < 600:  # If kickoff was in the past or within next 10 minutes, skip!
+                if diff_sec < 2700:  # 45-minute safety buffer: kickoff must be at least 45 minutes in future
                     continue
 
             # 1. Strict Date Window Filter
@@ -1057,8 +1065,8 @@ async def build_ai_ticket(req: BuildTicketRequest):
             if is_all_pool:
                 # Mode C: Full SportyBet Today Pool — Scan 100% of matches across club & international fixtures
                 comp_l = comp_name.lower()
-                # Anti-noise filter: protect ticket from SRL, club friendlies, youth, and women's exhibition matches
-                if any(x in comp_l for x in ["srl", "simulated reality", "simulated", "club friendly", "club friendlies", "u21", "u19", "u23", "u20", "u18", "u17", "youth", "women", "damallsvenskan", "femenino", "frauen"]):
+                # Anti-noise filter: protect ticket from SRL, club friendlies, youth, women, and low-tier filler leagues
+                if any(x in comp_l for x in ["srl", "simulated reality", "simulated", "club friendly", "club friendlies", "u21", "u19", "u23", "u20", "u18", "u17", "youth", "women", "damallsvenskan", "femenino", "frauen", "san marino", "armenia", "andorra", "gibraltar", "srpska liga", "prva liga", "serbian league"]):
                     continue
                 skip_res = False
                 for team_str in [h.lower(), a.lower()]:

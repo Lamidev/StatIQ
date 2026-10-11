@@ -17,8 +17,9 @@ DEFAULT_CONFIG = {
     "is_enabled": True,
     "active_days": ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"],  # Daily by default
     "enable_rollover_2x": True,            # Slip 1: 2.0x Rollover
-    "enable_acca_5x": True,                # Slip 2: 5.0x Value Acca (Zero Overlap)
-    "enable_acca_10x": True,               # Slip 3: 10.0x Mega Multiplier (Zero Overlap)
+    "enable_acca_10x": True,               # Slip 2: 10.0x Mega Multiplier (12–14 legs)
+    "enable_acca_20x": True,               # Slip 3: 20.0x Monster Acca (15–18 legs, replacing 5.0x)
+    "enable_acca_5x": False,               # Legacy 5.0x Value Acca (Disabled by default)
     "target_odds": 2.00,                   # 1.50 or 2.00
     "max_leg_odds": 1.45,                  # Upper safety bound per leg (1.15 to 1.45 corridor)
     "dispatch_time": "10:00",              # 10:00 AM WAT sharp
@@ -144,8 +145,9 @@ class RolloverCronScheduler:
                             current_stake = round(current_stake * (target_odds ** (curr_day - 1)))
 
                         en_ro = bool(cfg.get("enable_rollover_2x", True))
-                        en_5x = bool(cfg.get("enable_acca_5x", True))
                         en_10x = bool(cfg.get("enable_acca_10x", True))
+                        en_20x = bool(cfg.get("enable_acca_20x", True))
+                        en_5x = bool(cfg.get("enable_acca_5x", False))
 
                         # Execute async run in dedicated event loop
                         loop = asyncio.new_event_loop()
@@ -153,8 +155,9 @@ class RolloverCronScheduler:
                         trio_res = loop.run_until_complete(
                             EliteRolloverEngine.book_and_dispatch_daily_trio(
                                 enable_rollover=en_ro,
-                                enable_5odds=en_5x,
                                 enable_10odds=en_10x,
+                                enable_20odds=en_20x,
+                                enable_5odds=en_5x,
                                 send_telegram=True,
                                 rollover_stake=current_stake,
                                 challenge_day_info=challenge_info
@@ -166,8 +169,9 @@ class RolloverCronScheduler:
                         cfg["last_run_date"] = today_str
                         cfg["last_trio_result"] = trio_res
                         primary_ticket = (trio_res.get("rollover_ticket") 
-                                          or trio_res.get("acca_5x_ticket") 
-                                          or trio_res.get("acca_10x_ticket"))
+                                          or trio_res.get("acca_10x_ticket")
+                                          or trio_res.get("acca_20x_ticket")
+                                          or trio_res.get("acca_5x_ticket"))
                         cfg["last_ticket"] = primary_ticket
 
                         history_entry = {
@@ -176,9 +180,11 @@ class RolloverCronScheduler:
                             "status": trio_res.get("status"),
                             "unique_fixtures": trio_res.get("total_unique_fixtures", 0),
                             "rollover_code": trio_res.get("rollover_ticket", {}).get("booking_code") if trio_res.get("rollover_ticket") else None,
-                            "acca_5x_code": trio_res.get("acca_5x_ticket", {}).get("booking_code") if trio_res.get("acca_5x_ticket") else None,
                             "acca_10x_code": trio_res.get("acca_10x_ticket", {}).get("booking_code") if trio_res.get("acca_10x_ticket") else None,
-                            "zero_overlap": True,
+                            "acca_20x_code": trio_res.get("acca_20x_ticket", {}).get("booking_code") if trio_res.get("acca_20x_ticket") else None,
+                            "acca_5x_code": trio_res.get("acca_5x_ticket", {}).get("booking_code") if trio_res.get("acca_5x_ticket") else None,
+                            "zero_overlap": trio_res.get("zero_overlap_guaranteed", True),
+                            "calendar_mode": trio_res.get("calendar_mode", "STRICT_ZERO_OVERLAP"),
                             "campaign_mode": cfg.get("campaign_mode", "CONTINUOUS"),
                             "stake": current_stake
                         }
@@ -213,16 +219,18 @@ class RolloverCronScheduler:
         target_odds: Optional[float] = None,
         max_leg_odds: Optional[float] = None,
         enable_rollover: Optional[bool] = None,
-        enable_5odds: Optional[bool] = None,
-        enable_10odds: Optional[bool] = None
+        enable_10odds: Optional[bool] = None,
+        enable_20odds: Optional[bool] = None,
+        enable_5odds: Optional[bool] = None
     ) -> Dict[str, Any]:
         """
-        Manually triggers an immediate run of the Daily VIP Trio (Zero-Overlap Rollover + 5.0x + 10.0x).
+        Manually triggers an immediate run of the Daily VIP Trio (2.0x Rollover + 10.0x Mega + 20.0x Monster).
         """
         cfg = self.get_config()
         en_ro = enable_rollover if enable_rollover is not None else bool(cfg.get("enable_rollover_2x", True))
-        en_5x = enable_5odds if enable_5odds is not None else bool(cfg.get("enable_acca_5x", True))
         en_10x = enable_10odds if enable_10odds is not None else bool(cfg.get("enable_acca_10x", True))
+        en_20x = enable_20odds if enable_20odds is not None else bool(cfg.get("enable_acca_20x", True))
+        en_5x = enable_5odds if enable_5odds is not None else bool(cfg.get("enable_acca_5x", False))
 
         challenge_info = None
         current_stake = float(cfg.get("starting_stake", 5000))
@@ -233,11 +241,12 @@ class RolloverCronScheduler:
             challenge_info = f"Day {curr_day} of {tot_days}"
             current_stake = round(current_stake * (odds ** (curr_day - 1)))
 
-        logger.info(f"[RolloverScheduler] Executing manual 'Run Now' Daily VIP Trio (2x: {en_ro}, 5x: {en_5x}, 10x: {en_10x})...")
+        logger.info(f"[RolloverScheduler] Executing manual 'Run Now' Daily VIP Trio (2x: {en_ro}, 10x: {en_10x}, 20x: {en_20x})...")
         trio_res = await EliteRolloverEngine.book_and_dispatch_daily_trio(
             enable_rollover=en_ro,
-            enable_5odds=en_5x,
             enable_10odds=en_10x,
+            enable_20odds=en_20x,
+            enable_5odds=en_5x,
             send_telegram=True,
             rollover_stake=current_stake,
             challenge_day_info=challenge_info
@@ -248,8 +257,9 @@ class RolloverCronScheduler:
         today_str = now_wat.strftime("%Y-%m-%d")
         cfg["last_trio_result"] = trio_res
         primary_ticket = (trio_res.get("rollover_ticket") 
-                          or trio_res.get("acca_5x_ticket") 
-                          or trio_res.get("acca_10x_ticket"))
+                          or trio_res.get("acca_10x_ticket")
+                          or trio_res.get("acca_20x_ticket")
+                          or trio_res.get("acca_5x_ticket"))
         cfg["last_ticket"] = primary_ticket
 
         history = cfg.get("run_history", [])
@@ -259,9 +269,11 @@ class RolloverCronScheduler:
             "status": trio_res.get("status"),
             "unique_fixtures": trio_res.get("total_unique_fixtures", 0),
             "rollover_code": trio_res.get("rollover_ticket", {}).get("booking_code") if trio_res.get("rollover_ticket") else None,
-            "acca_5x_code": trio_res.get("acca_5x_ticket", {}).get("booking_code") if trio_res.get("acca_5x_ticket") else None,
             "acca_10x_code": trio_res.get("acca_10x_ticket", {}).get("booking_code") if trio_res.get("acca_10x_ticket") else None,
-            "zero_overlap": True,
+            "acca_20x_code": trio_res.get("acca_20x_ticket", {}).get("booking_code") if trio_res.get("acca_20x_ticket") else None,
+            "acca_5x_code": trio_res.get("acca_5x_ticket", {}).get("booking_code") if trio_res.get("acca_5x_ticket") else None,
+            "zero_overlap": trio_res.get("zero_overlap_guaranteed", True),
+            "calendar_mode": trio_res.get("calendar_mode", "STRICT_ZERO_OVERLAP"),
             "manual_trigger": True
         })
         cfg["run_history"] = history[:30]
