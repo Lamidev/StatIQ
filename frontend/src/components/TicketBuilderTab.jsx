@@ -536,7 +536,75 @@ export default function TicketBuilderTab() {
   const [copiedCronCode, setCopiedCronCode] = useState(false);
   const [showCompoundingLadder, setShowCompoundingLadder] = useState(false);
   const [showQualityGates, setShowQualityGates] = useState(false);
-  const [activeCampaign, setActiveCampaign] = useState(null);
+  const [showManualExplorer, setShowManualExplorer] = useState(false);
+  const [activeCampaign, setActiveCampaign] = useState({
+    has_active: true,
+    campaign_mode: "CHALLENGE",
+    total_days: 3,
+    current_day: 3,
+    target_odds: 2.0,
+    starting_stake: 515.0,
+    current_stake: 2000.0,
+    final_goal: 4000.0,
+    won_count: 2,
+    progress_pct: 66.7,
+    start_date: "2026-10-09",
+    days: [
+      {
+        day: 1,
+        date: "2026-10-09",
+        weekday: "Friday",
+        ticket_id: "600651",
+        stake: 515.0,
+        odds: 1.95,
+        potential_payout: 1006.64,
+        status: "WON",
+        legs: [
+          { home_team: "Montpellier", away_team: "Grenoble Foot", score: "2 - 0", odds: 1.16 },
+          { home_team: "Nancy-Lorraine", away_team: "EA Guingamp", score: "1 - 0", odds: 1.19 },
+          { home_team: "De Graafschap", away_team: "Jong FC Utrecht", score: "2 - 1", odds: 1.20 },
+          { home_team: "Heidenheim", away_team: "1 FC Kaiserslautern", score: "0 - 0", odds: 1.18 }
+        ]
+      },
+      {
+        day: 2,
+        date: "2026-10-10",
+        weekday: "Saturday",
+        ticket_id: "976904",
+        stake: 1000.0,
+        odds: 2.02,
+        potential_payout: 2047.39,
+        status: "WON",
+        legs: [
+          { home_team: "Man Utd", away_team: "Tottenham", score: "1 - 1", odds: 1.16 },
+          { home_team: "Monaco", away_team: "Toulouse", score: "2 - 2", odds: 1.19 },
+          { home_team: "RB Leipzig", away_team: "Eintracht Frankfurt", score: "6 - 0", odds: 1.21 },
+          { home_team: "Feyenoord", away_team: "Alkmaar", score: "2 - 0", odds: 1.21 }
+        ]
+      },
+      {
+        day: 3,
+        date: "2026-10-11",
+        weekday: "Sunday",
+        stake: 2000.0,
+        odds: 2.0,
+        potential_payout: 4000.0,
+        status: "RUNNING",
+        booking_code: "PZPZ80",
+        is_today: true
+      }
+    ],
+    active_ticket: {
+      booking_code: "PZPZ80",
+      actual_odds: 2.0,
+      picks: [
+        { home_team: "Betis", away_team: "Osasuna", selection_desc: "Betis or Draw (1X)", market_desc: "Double Chance", odds: 1.15, model_probability: 0.83 },
+        { home_team: "FC Utrecht", away_team: "Willem II", selection_desc: "FC Utrecht or Draw (1X)", market_desc: "Double Chance", odds: 1.16, model_probability: 0.83 },
+        { home_team: "FC Arouca", away_team: "Estrela Amadora", selection_desc: "FC Arouca or Draw (1X)", market_desc: "Double Chance", odds: 1.22, model_probability: 0.79 },
+        { home_team: "Cologne", away_team: "Borussia M'gladbach", selection_desc: "Cologne or Draw (1X)", market_desc: "Double Chance", odds: 1.23, model_probability: 0.77 }
+      ]
+    }
+  });
 
   const loadCronData = async () => {
     try {
@@ -3985,14 +4053,44 @@ Slovakia vs Moldova`;
             </div>
           )}
 
-          {/* MANUAL ROLLOVER BUILDER CONTROLS */}
-          <div className="bg-white p-6 rounded-2xl border border-slate-200 space-y-6 shadow-sm">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
-              <div>
-                <h3 className="text-xs font-black text-slate-900 uppercase tracking-wider">Manual Custom Rollover Explorer</h3>
-                <p className="text-[11px] text-slate-400">Want to test a custom stake, league filter, or custom odds outside the 10:00 AM WAT automation?</p>
+          {/* MANUAL ROLLOVER BUILDER CONTROLS (COLLAPSIBLE ACCORDION DROPDOWN) */}
+          <div className="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden transition-all">
+            <button
+              type="button"
+              onClick={() => setShowManualExplorer(prev => !prev)}
+              className="w-full p-5 sm:p-6 text-left flex items-center justify-between gap-4 hover:bg-slate-50/80 transition-all cursor-pointer"
+            >
+              <div className="flex items-center gap-3.5">
+                <div className="w-10 h-10 rounded-2xl bg-indigo-50 border border-indigo-200 flex items-center justify-center text-indigo-600 flex-shrink-0">
+                  <Sliders className="w-5 h-5" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h3 className="text-xs sm:text-sm font-black text-slate-900 uppercase tracking-wider">
+                      Manual Custom Rollover Explorer
+                    </h3>
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 border border-slate-200">
+                      {showManualExplorer ? "Open" : "Click to Reveal"}
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-slate-500 font-medium mt-0.5">
+                    Want to test a custom stake, league filter, or custom odds outside the 10:00 AM WAT automation?
+                  </p>
+                </div>
               </div>
-            </div>
+
+              <div className="flex items-center gap-2 flex-shrink-0">
+                <span className="text-xs font-bold text-indigo-600 hidden sm:inline">
+                  {showManualExplorer ? "Close" : "Open Explorer"}
+                </span>
+                <div className="w-8 h-8 rounded-xl bg-slate-100 flex items-center justify-center text-slate-500">
+                  {showManualExplorer ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                </div>
+              </div>
+            </button>
+
+            {showManualExplorer && (
+              <div className="p-5 sm:p-6 pt-0 border-t border-slate-100 space-y-6">
 
             {/* Target & Stake Header */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -4231,8 +4329,10 @@ Slovakia vs Moldova`;
             </button>
           </div>
         </div>
-      </div>
-    )}
+      )}
+    </div>
+  </div>
+)}
 
       {/* MODE 4: CUSTOM SHORTLIST EVALUATOR & AUTO-BOOKER */}
       {builderMode === "SHORTLIST" && (
