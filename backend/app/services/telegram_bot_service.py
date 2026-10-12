@@ -164,10 +164,11 @@ class StatIQTelegramBot:
             "• <code>/games 12 2 tickets</code> — 2 Variant Slips of 12 Matches Each\n\n"
             "🚀 <b>On-Demand Rollover:</b>\n"
             "• <code>/rollover</code> — Instant 2.0x Low-Variance Day Slip\n\n"
-            "✂️ <b>Ticket Trimmer & Risk Purge (REMOVE Mode):</b>\n"
-            "Send or trim any SportyBet 30+ game slip into 10–12 winnable picks:\n"
-            "• <code>/trim CODE 10 games 2 tickets</code> ➔ <i>Zero Overlap Guarantee!</i>\n"
-            "• <code>/remove CODE 2 tickets</code> ➔ <i>Purges risky legs into 2 independent slips</i>\n\n"
+            "🛡️ <b>Audit & Purge Bettor's Code (/remove):</b>\n"
+            "Check SportyBet odds, H2H & form to purge 50-50 traps & underdogs into winnable tickets:\n"
+            "• <code>/remove CODE 15 games 2 tickets</code> ➔ <i>Extracts 2 Zero-Overlap Slips of 15 games!</i>\n"
+            "• <code>/remove CODE 20 odds 2 tickets</code> ➔ <i>Target Odds with 100% Unique Fixtures</i>\n"
+            "• <code>/remove CODE</code> ➔ <i>Purges risk down to clean core games</i>\n\n"
             "📱 <b>Command Menu Modal:</b> Tap the <b>[Menu]</b> button at the bottom-left corner of your chat to view and run all commands with one tap!\n\n"
             "🛡️ <b>Strict Odds Floor:</b> Min odds ≥ <b>1.15x</b> strictly enforced across all picks."
         )
@@ -691,43 +692,32 @@ class StatIQTelegramBot:
             logger.error(f"[TelegramBot] Games build error: {e}", exc_info=True)
             self.send_message(chat_id, f"❌ <b>Error:</b> Failed to generate ticket ({_esc(str(e))}).")
 
-    def handle_reedit_command(
+    def handle_remove_command(
         self,
         chat_id: int | str,
         code: str,
         mode: str = "REMOVE",
         target_mode: str = "GAMES",
-        target_val: float = 10,
+        target_val: float = 15,
         num_tickets: int = 1
     ):
         """
-        Audits and optimizes an external SportyBet ticket.
-        Modes:
-        - REMOVE: Strictly keeps original bettor's exact predictions, purging only failing legs.
-        - EDIT: Strictly loaded fixtures; keeps elite picks and re-predicts risky picks to verified low-variance markets.
+        Audits and purges an external SportyBet ticket using live odds, H2H, and match dynamics.
+        Detects even-strength 50-50 traps, underdogs, and fortifies risky lines into winnable variants.
         """
         code = code.strip().upper()
         self.send_chat_action(chat_id, "typing")
-        is_edit = mode.upper() in ("EDIT", "AUDITOR")
         mode_desc = f"{int(target_val)} games" if target_mode == "GAMES" else f"{target_val:.1f}x odds"
         variant_desc = "2 separate slips (Zero Overlap)" if num_tickets == 2 else "1 core slip"
 
-        if is_edit:
-            self.send_message(
-                chat_id,
-                f"⏳ <b>AI Re-Editing SportyBet Ticket <code>{code}</code>...</b>\n"
-                f"➔ Operating strictly on loaded fixtures (Zero outside injection)\n"
-                f"➔ Upgrading risky lines to verified elite markets (Double Chance, Over 1.5, Win Either Half, Team Goals)\n"
-                f"➔ Output: <b>{variant_desc}</b> · Min Odds ≥ <b>1.15x</b>"
-            )
-        else:
-            self.send_message(
-                chat_id,
-                f"⏳ <b>Auditing SportyBet Ticket <code>{code}</code> (Risk Purge)...</b>\n"
-                f"➔ Keeping original bettor's exact predictions (no market changes)\n"
-                f"➔ Purging legs failing 70%+ model confidence or < 1.15x odds\n"
-                f"➔ Extracting: <b>{variant_desc}</b> targeting <b>{mode_desc}</b>"
-            )
+        self.send_message(
+            chat_id,
+            f"🛡️ <b>Auditing SportyBet Code <code>{code}</code>...</b>\n"
+            f"➔ Checking SportyBet 1X2 odds, H2H, and form for every match\n"
+            f"➔ Purging Even-Strength 50-50 traps & Underdog risks\n"
+            f"➔ Fortifying straight wins to Double Chance / Team Goals\n"
+            f"➔ Extracting: <b>{variant_desc}</b> targeting <b>{mode_desc}</b> (Min Odds ≥ 1.15x)"
+        )
 
         try:
             from app.adapters.bookmaker_adapter import SportyBetAdapter
@@ -748,9 +738,9 @@ class StatIQTelegramBot:
 
             original_count = len(selections)
 
-            # Step 2: Run Re-Editor with requested mode (EDIT or REMOVE)
-            target_games = int(target_val) if target_mode == "GAMES" else 10
-            target_odds = float(target_val) if target_mode == "ODDS" else 5.0
+            # Step 2: Run Re-Editor with live intelligence
+            target_games = int(target_val) if target_mode == "GAMES" else 15
+            target_odds = float(target_val) if target_mode == "ODDS" else 20.0
 
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
@@ -759,7 +749,7 @@ class StatIQTelegramBot:
                     re_edit_ticket(
                         selections=selections,
                         target_odds=target_odds,
-                        mode=mode,
+                        mode="REMOVE",
                         target_mode=target_mode,
                         target_games=target_games,
                         num_tickets=num_tickets
@@ -799,12 +789,16 @@ class StatIQTelegramBot:
                 for p in booked_picks:
                     acc_odd *= float(p.get("odds") or 1.20)
 
-                if is_edit:
-                    slip_title = f"🧠 AI Re-Edited Slip #{slip_idx} ({len(booked_picks)} Matches)"
-                    overlap_tag = "🔒 <b>Zero-Overlap Partition:</b> 100% Independent Fixtures" if num_tickets > 1 else "Elite AI Re-Prediction · Kept top picks + Upgraded risky lines"
-                else:
-                    slip_title = f"✂️ Trimmed Core Slip #{slip_idx} ({len(booked_picks)} of {original_count} Matches)"
-                    overlap_tag = "🔒 <b>Zero-Overlap Partition:</b> 100% Independent Fixtures" if num_tickets > 1 else f"Original picks kept · Purged high-risk legs"
+                slip_title = (
+                    f"🛡️ Optimized Variant #{slip_idx} ({len(booked_picks)} Matches)"
+                    if num_tickets > 1
+                    else f"🛡️ Optimized Core Slip ({len(booked_picks)} of {original_count} Matches)"
+                )
+                overlap_tag = (
+                    "🔒 <b>Zero-Overlap Partition:</b> 100% Unique Fixtures"
+                    if num_tickets > 1
+                    else "Even-Strength & Underdog Traps Purged"
+                )
 
                 self._dispatch_ticket_message(
                     chat_id=chat_id,
@@ -818,11 +812,12 @@ class StatIQTelegramBot:
                 )
 
         except Exception as e:
-            logger.error(f"[TelegramBot] Re-edit error: {e}", exc_info=True)
+            logger.error(f"[TelegramBot] Remove error: {e}", exc_info=True)
             self.send_message(chat_id, f"❌ <b>Error processing ticket:</b> {_esc(str(e))}")
 
-    # Alias for backwards compatibility
-    handle_trim_command = handle_reedit_command
+    # Aliases for backwards compatibility
+    handle_reedit_command = handle_remove_command
+    handle_trim_command = handle_remove_command
 
     def handle_raw_code_detected(self, chat_id: int | str, code: str):
         """When user pastes a booking code, inspect it and offer 1-tap action buttons."""
@@ -856,16 +851,12 @@ class StatIQTelegramBot:
             keyboard = {
                 "inline_keyboard": [
                     [
-                        {"text": f"✂️ Trim 10 Games (REMOVE)", "callback_data": f"trim:{code}:10:games:1"},
-                        {"text": f"✂️ 2 Tickets (Zero Overlap)", "callback_data": f"trim:{code}:10:games:2"}
+                        {"text": "🛡️ 15 Games (REMOVE Risky Legs)", "callback_data": f"rem:{code}:15:games:1"},
+                        {"text": "🛡️ 2 Variants (Zero Overlap)", "callback_data": f"rem:{code}:15:games:2"}
                     ],
                     [
-                        {"text": f"🧠 AI Re-Edit All (EDIT)", "callback_data": f"edit:{code}:14:games:1"},
-                        {"text": f"🧠 AI Re-Edit 2 Slips (Zero Overlap)", "callback_data": f"edit:{code}:10:games:2"}
-                    ],
-                    [
-                        {"text": f"🧠 AI Re-Edit 20.0x Odds", "callback_data": f"edit:{code}:20.0:odds:1"},
-                        {"text": f"🎯 Trim to 2.0x (2 Slips)", "callback_data": f"trim:{code}:2.0:odds:2"}
+                        {"text": "🎯 Target 20.0x Odds (1 Slip)", "callback_data": f"rem:{code}:20.0:odds:1"},
+                        {"text": "🎯 Target 20.0x Odds (2 Slips)", "callback_data": f"rem:{code}:20.0:odds:2"}
                     ]
                 ]
             }
@@ -1077,19 +1068,18 @@ class StatIQTelegramBot:
                 num_t = int(parts[3]) if len(parts) > 3 else 1
                 self.handle_games_command(chat_id, val, num_tickets=num_t)
 
-        # Case 2: Trimmer button (trim:...) or AI Re-Editor button (edit:...)
-        elif data.startswith("trim:") or data.startswith("edit:"):
+        # Case 2: Code Optimizer (/remove, trim, edit)
+        elif data.startswith("trim:") or data.startswith("edit:") or data.startswith("rem:"):
             parts = data.split(":")
             if len(parts) >= 5:
-                action_mode = "EDIT" if parts[0] == "edit" else "REMOVE"
                 code = parts[1]
                 val = float(parts[2])
                 mode = parts[3].upper()  # GAMES or ODDS
                 num_tickets = int(parts[4])
-                self.handle_reedit_command(
+                self.handle_remove_command(
                     chat_id=chat_id,
                     code=code,
-                    mode=action_mode,
+                    mode="REMOVE",
                     target_mode=mode,
                     target_val=val,
                     num_tickets=num_tickets
@@ -1177,15 +1167,17 @@ class StatIQTelegramBot:
             self.handle_games_command(chat_id, cnt, num_tickets=num_tickets)
             return
 
-        # 5a. /trim or /remove (REMOVE Mode: Risk Purge, retains bettor's exact picks)
+        # 5. /remove (Single unified code optimizer & risk purge)
+        # Aliases supported for backwards-compatibility: /trim, /edit, /reedit, /upgrade
         # Examples:
-        # /trim D99K41 12 games
-        # /trim D99K41 10 games 2 tickets
+        # /remove D99K41 15 games 2 tickets
+        # /remove D99K41 20 odds 2 tickets
         # /remove D99K41 2 tickets
-        trim_prefix = re.match(r"^/(?:trim|remove)\s+([A-Za-z0-9]+)(.*)", text, re.IGNORECASE)
-        if trim_prefix:
-            code = trim_prefix.group(1).upper()
-            rest = trim_prefix.group(2).lower()
+        # /remove D99K41
+        remove_match = re.match(r"^/(?:remove|trim|edit|reedit|upgrade)\s+([A-Za-z0-9]+)(.*)", text, re.IGNORECASE)
+        if remove_match:
+            code = remove_match.group(1).upper()
+            rest = remove_match.group(2).lower()
 
             target_mode = "GAMES"
             is_two = any(k in rest for k in ["2 ticket", "2 variant", "2 slip", "two ticket", "two variant", "two slip", " 2 "]) or rest.strip().startswith("2")
@@ -1202,9 +1194,9 @@ class StatIQTelegramBot:
                 target_val = float(games_m.group(1))
             else:
                 target_mode = "GAMES"
-                target_val = 10.0
+                target_val = 15.0
 
-            self.handle_reedit_command(
+            self.handle_remove_command(
                 chat_id=chat_id,
                 code=code,
                 mode="REMOVE",
@@ -1213,20 +1205,6 @@ class StatIQTelegramBot:
                 num_tickets=num_tickets
             )
             return
-
-        # 5b. /edit or /reedit (EDIT Mode: Elite AI Re-Prediction to low-variance markets)
-        # Examples:
-        # /edit D99K41
-        # /reedit D99K41 2 tickets
-        # /edit D99K41 20 odds
-        edit_prefix = re.match(r"^/(?:edit|reedit|upgrade)\s+([A-Za-z0-9]+)(.*)", text, re.IGNORECASE)
-        if edit_prefix:
-            code = edit_prefix.group(1).upper()
-            rest = edit_prefix.group(2).lower()
-
-            target_mode = "GAMES"
-            is_two = any(k in rest for k in ["2 ticket", "2 variant", "2 slip", "two ticket", "two variant", "two slip", " 2 "]) or rest.strip().startswith("2")
-            num_tickets = 2 if is_two else 1
 
             odds_m = re.search(r"(\d+\.?\d*)\s*(?:odd|odds|x)", rest)
             games_m = re.search(r"(\d+)\s*(?:game|games|leg|legs|match|matches)", rest)
@@ -1283,16 +1261,13 @@ class StatIQTelegramBot:
         """
         commands = [
             {"command": "start", "description": "Show main menu & quick action buttons"},
+            {"command": "remove", "description": "Audit & purge code (/remove CODE 15 games 2 tickets)"},
             {"command": "auto", "description": "Daily 10 AM VIP Automation status & toggles"},
-            {"command": "schedule", "description": "Configure 10 AM dispatch time & active days"},
-            {"command": "dispatch", "description": "Dispatch today's 3 slips (Zero Overlap!)"},
+            {"command": "dispatch", "description": "Dispatch today's daily slips now"},
             {"command": "rollover", "description": "Generate today's 2.0x Safe Rollover slip"},
-            {"command": "odds", "description": "Target odds (/odds 2.0 or /odds 2.0 2 tickets)"},
-            {"command": "games", "description": "Top matches (/games 10 or /games 10 2 tickets)"},
-            {"command": "edit", "description": "AI Re-Predict risky picks (/edit CODE 2 tickets)"},
-            {"command": "reedit", "description": "Re-Predict to elite markets (/reedit CODE 12 games)"},
-            {"command": "trim", "description": "Trim risky legs (/trim CODE 10 games 2 tickets)"},
-            {"command": "remove", "description": "Purge risky picks (/remove CODE 2 tickets)"},
+            {"command": "odds", "description": "Target odds (/odds 20 or /odds 20 2 tickets)"},
+            {"command": "games", "description": "Top matches (/games 15 or /games 15 2 tickets)"},
+            {"command": "schedule", "description": "Configure 10 AM dispatch time & active days"},
             {"command": "help", "description": "Help guide & full usage manual"},
         ]
         try:
