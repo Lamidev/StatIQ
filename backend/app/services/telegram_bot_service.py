@@ -244,11 +244,15 @@ class StatIQTelegramBot:
             f"🤖 <b>Scheduler Status:</b> {master_icon}\n"
             f"⏰ <b>Dispatch Time:</b> <b>{disp_time} AM WAT</b>\n"
             f"📅 <b>Active Days:</b> <b>{days_label}</b>\n"
-            "🔒 <b>Adaptive Calendar Engine:</b> Weekend Strict Zero-Overlap | Weekday Smart Hybrid\n\n"
-            "<b>The 3 Daily Slips:</b>\n"
-            f"• 🎯 <b>2.0x Rollover:</b> {ro_icon} (3–4 Banker Legs, 100% Isolated)\n"
-            f"• ⚡ <b>10.0x Mega Multiplier:</b> {acca10_icon} (10–12 High-Dominance Legs)\n"
-            f"• 🚀 <b>20.0x Monster Acca:</b> {acca20_icon} (13–15 Dominance Legs, 15 Max)\n\n"
+            "🔒 <b>Zero-Overlap Guarantee:</b> 100% Unique Fixtures Across All Daily Slips\n\n"
+            "<b>📅 Adaptive Calendar Dispatch:</b>\n"
+            "• 🗓️ <b>Mon–Thu (Mid-Week Duo):</b>\n"
+            f"   ➔ 🎯 <b>2.0x Rollover:</b> {ro_icon} (3–4 Banker Legs, 100% Isolated)\n"
+            f"   ➔ ⚡ <b>15.0x Mid-Week Multiplier:</b> {acca10_icon} (11–14 High-Dominance Legs)\n"
+            "• 🗓️ <b>Fri–Sun (Weekend Trio):</b>\n"
+            f"   ➔ 🎯 <b>2.0x Rollover:</b> {ro_icon} (3–4 Banker Legs)\n"
+            f"   ➔ ⚡ <b>10.0x Mega Slip:</b> {acca10_icon} (10–12 High-Dominance Legs)\n"
+            f"   ➔ 🚀 <b>20.0x Monster Acca:</b> {acca20_icon} (13–15 Dominance Legs, 15 Max)\n\n"
             "<i>Tap any button below to toggle tickets on/off, cycle active days, or dispatch today's slips instantly:</i>"
         )
 
@@ -404,9 +408,22 @@ class StatIQTelegramBot:
                 )
                 dispatched_count += 1
 
-            # 2. 10.0x Mega Multiplier slip
+            # 2. Mid-Week 15.0x Multiplier or Weekend 10.0x Mega slip
+            acca15 = trio_res.get("acca_15x_ticket")
             acca10 = trio_res.get("acca_10x_ticket")
-            if acca10 and acca10.get("picks"):
+            if acca15 and acca15.get("picks"):
+                self._dispatch_ticket_message(
+                    chat_id=chat_id,
+                    title="⚡ StatIQ 15.0x Mid-Week Multiplier Slip",
+                    booking_code=acca15.get("booking_code"),
+                    share_url=acca15.get("share_url"),
+                    total_odds=acca15.get("actual_odds", 15.0),
+                    confidence=acca15.get("confidence_score", 45.0),
+                    picks=acca15.get("picks", []),
+                    extra_note="Daily VIP Slip 2 of 2 (Mid-Week) · ⚡ 15.0x Multiplier (11–14 Legs) · 🔒 Zero-Overlap with Rollover · Min Odds ≥ 1.15x"
+                )
+                dispatched_count += 1
+            elif acca10 and acca10.get("picks"):
                 self._dispatch_ticket_message(
                     chat_id=chat_id,
                     title="⚡ StatIQ 10.0x Mega Multiplier Slip",
@@ -415,11 +432,11 @@ class StatIQTelegramBot:
                     total_odds=acca10.get("actual_odds", 10.0),
                     confidence=acca10.get("confidence_score", 52.0),
                     picks=acca10.get("picks", []),
-                    extra_note="Daily VIP Slip 2 of 3 · ⚡ 10.0x Mega Multiplier (12–14 Legs) · 🔒 Adaptive Calendar · Min Odds ≥ 1.15x"
+                    extra_note="Daily VIP Slip 2 of 3 (Weekend) · ⚡ 10.0x Mega Multiplier (10–12 Legs) · 🔒 Strict Zero-Overlap · Min Odds ≥ 1.15x"
                 )
                 dispatched_count += 1
 
-            # 3. 20.0x Monster Acca slip
+            # 3. Weekend 20.0x Monster Acca slip
             acca20 = trio_res.get("acca_20x_ticket")
             if acca20 and acca20.get("picks"):
                 self._dispatch_ticket_message(
@@ -430,7 +447,7 @@ class StatIQTelegramBot:
                     total_odds=acca20.get("actual_odds", 20.0),
                     confidence=acca20.get("confidence_score", 35.0),
                     picks=acca20.get("picks", []),
-                    extra_note="Daily VIP Slip 3 of 3 · 🚀 20.0x Monster Acca (15–18 Legs) · 🔒 Adaptive Calendar · Min Odds ≥ 1.15x"
+                    extra_note="Daily VIP Slip 3 of 3 (Weekend) · 🚀 20.0x Monster Acca (13–15 Legs) · 🔒 Strict Zero-Overlap · Min Odds ≥ 1.15x"
                 )
                 dispatched_count += 1
 

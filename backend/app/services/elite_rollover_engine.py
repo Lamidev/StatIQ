@@ -288,6 +288,18 @@ class EliteRolloverEngine:
             fav_is_juggernaut = any(jg in fav_team_name.lower() for jg in JUGGERNAUTS)
             juggernaut_bonus = 45.0 if (fav_is_juggernaut and dominance_ratio >= 1.45) else 0.0
 
+            # Tier-Weighted League Quality Shield:
+            # - Tier 1: Top flights have elite depth (min dominance 1.30)
+            # - Tier 2: Recognized national flights (min dominance 1.35)
+            # - Tier 3 / Regional: Lower obscure divisions must have clear runaway dominance (min dominance 1.65 or juggernaut)
+            #   Prevents 50-50 amateur traps (Padova, Bursaspor) while preserving runaway lower-league favorites for multi-ticket variants.
+            if is_tier_1:
+                min_dominance = 1.30
+            elif is_tier_2:
+                min_dominance = 1.35
+            else:
+                min_dominance = 1.65 if not fav_is_juggernaut else 1.35
+
             # Evaluate each eligible low-variance market in the fixture
             for m in markets:
                 # STRICT BETTABLE FILTER: SportyBet market status must be 0 (Active/Bettable)
@@ -318,8 +330,8 @@ class EliteRolloverEngine:
                         if odds < 1.15 or odds > max_leg_odds:
                             continue
 
-                        # 1X on Home favorite (dominance ratio >= 1.35)
-                        if (oc_id == "9" or "home or draw" in oc_desc.lower() or "1x" in oc_desc.lower()) and is_home_fav and dominance_ratio >= 1.35:
+                        # 1X on Home favorite (dominance ratio >= min_dominance)
+                        if (oc_id == "9" or "home or draw" in oc_desc.lower() or "1x" in oc_desc.lower()) and is_home_fav and dominance_ratio >= min_dominance:
                             prob = round(min(0.92, (1.0 / odds) * 0.96), 4)
                             sel_desc = f"{h_team} or Draw (1X)"
                             stats_3p = evaluate_fixture_3pillar_metrics(h_team, a_team, "Double Chance", sel_desc, odds)
@@ -348,8 +360,8 @@ class EliteRolloverEngine:
                                     "selection_rationale": f"{tier_label} · {stats_3p.get('h2h_summary')} · {stats_3p.get('form_summary')}"
                                 })
 
-                        # X2 on Away favorite (dominance ratio >= 1.35)
-                        elif (oc_id == "11" or "draw or away" in oc_desc.lower() or "x2" in oc_desc.lower()) and (not is_home_fav) and dominance_ratio >= 1.35:
+                        # X2 on Away favorite (dominance ratio >= min_dominance)
+                        elif (oc_id == "11" or "draw or away" in oc_desc.lower() or "x2" in oc_desc.lower()) and (not is_home_fav) and dominance_ratio >= min_dominance:
                             prob = round(min(0.90, (1.0 / odds) * 0.96), 4)
                             sel_desc = f"Draw or {a_team} (X2)"
                             stats_3p = evaluate_fixture_3pillar_metrics(h_team, a_team, "Double Chance", sel_desc, odds)
@@ -442,7 +454,7 @@ class EliteRolloverEngine:
                             fav_team = h_team if is_home_fav else a_team
                             sel_desc = f"{fav_team} Over 0.5 Goals"
                             stats_3p = evaluate_fixture_3pillar_metrics(h_team, a_team, f"{fav_team} Team Goals", sel_desc, odds)
-                            if prob >= 0.80 and dominance_ratio >= 1.35 and stats_3p.get("composite_safety_score", 0.7) >= 0.68:
+                            if prob >= 0.80 and dominance_ratio >= min_dominance and stats_3p.get("composite_safety_score", 0.7) >= 0.68:
                                 c_sc = float(stats_3p.get("composite_safety_score", 0.75))
                                 candidates.append({
                                     "event_id": eid,
@@ -468,7 +480,7 @@ class EliteRolloverEngine:
                                 })
 
                 # D. Heavy Favorite Win Either Half (Yes)
-                if ("win either half" in m_desc or "either half" in m_desc or m_id in ("61", "62", "73", "74", "111")) and dominance_ratio >= 1.45:
+                if ("win either half" in m_desc or "either half" in m_desc or m_id in ("61", "62", "73", "74", "111")) and dominance_ratio >= max(1.40, min_dominance):
                     for oc in m.get("outcomes", []):
                         is_active = oc.get("isActive")
                         if is_active is not None and str(is_active) not in ("1", "True", "true"):
@@ -834,21 +846,18 @@ class EliteRolloverEngine:
 
         target = float(target_odds)
 
-        # Market diversity cap:
-        # Active round-robin market quota ensures balanced mix:
-        # - Team to Score (Heavy Favorite Over 0.5 Goals)
-        # - Win Either Half (Yes)
-        # - Over 1.5 Total Goals
-        # - Double Chance (1X/X2 capped at max 30% of slip)
-        max_dc = max(1, int(min_legs * 0.30))
-        max_per_market = max(3, int(max_legs * 0.35))
+        # PASS 1: Targeted Market Diversity Mix
+        # Initial preference: balance Team Over 0.5, Over 1.5, Win Either Half, and Double Chance
+        max_dc = max(2, int(min_legs * 0.45))
+        max_per_market = max(3, int(max_legs * 0.40))
         market_counts: Dict[str, int] = collections.defaultdict(int)
 
         selected_legs: List[Dict[str, Any]] = []
+        selected_fids = set()
         curr_odds = 1.0
 
-        target_floor = (target * 0.98) if target >= 9.5 else (target * 0.92)
-        target_ceiling = (target * 1.06) if target >= 9.5 else (target * 1.15)
+        target_floor = (target * 0.96) if target >= 9.5 else (target * 0.90)
+        target_ceiling = (target * 1.08) if target >= 9.5 else (target * 1.15)
 
         for fid in sorted_fixtures:
             opts = fixture_candidates[fid]
@@ -860,25 +869,45 @@ class EliteRolloverEngine:
                     chosen = cand
                     break
 
-            if not chosen:
-                least_used = min(opts, key=lambda c: market_counts[c.get("market_type") or "OTHER"])
-                m_type = least_used.get("market_type") or "OTHER"
-                limit = max_dc if m_type == "DOUBLE_CHANCE" else max_per_market
-                if market_counts[m_type] >= limit:
+            if chosen:
+                m_type = chosen.get("market_type") or "OTHER"
+                market_counts[m_type] += 1
+                selected_legs.append(chosen)
+                selected_fids.add(fid)
+                curr_odds *= chosen["odds"]
+
+                if len(selected_legs) >= min_legs and curr_odds >= target_floor:
+                    break
+                if len(selected_legs) >= max_legs:
+                    break
+                if curr_odds >= target_ceiling and len(selected_legs) >= min_legs:
+                    break
+
+        # PASS 2: Adaptive Fill-Forward Guarantee
+        # If after Pass 1 the accumulator has not yet reached its target odds or minimum leg count,
+        # dynamically expand the market quota and draw from the highest-ranked remaining fixtures.
+        # This guarantees the accumulator NEVER starves or aborts early with incomplete odds.
+        if (len(selected_legs) < min_legs or curr_odds < target_floor) and len(selected_legs) < max_legs:
+            for fid in sorted_fixtures:
+                if fid in selected_fids:
                     continue
-                chosen = least_used
+                opts = fixture_candidates[fid]
+                if not opts:
+                    continue
+                # Pick the highest quality vetted candidate for this fixture
+                chosen = opts[0]
+                m_type = chosen.get("market_type") or "OTHER"
+                market_counts[m_type] += 1
+                selected_legs.append(chosen)
+                selected_fids.add(fid)
+                curr_odds *= chosen["odds"]
 
-            m_type = chosen.get("market_type") or "OTHER"
-            market_counts[m_type] += 1
-            selected_legs.append(chosen)
-            curr_odds *= chosen["odds"]
-
-            if len(selected_legs) >= min_legs and curr_odds >= target_floor:
-                break
-            if len(selected_legs) >= max_legs:
-                break
-            if curr_odds >= target_ceiling and len(selected_legs) >= min_legs:
-                break
+                if len(selected_legs) >= min_legs and curr_odds >= target_floor:
+                    break
+                if len(selected_legs) >= max_legs:
+                    break
+                if curr_odds >= target_ceiling and len(selected_legs) >= min_legs:
+                    break
 
         return selected_legs
 
@@ -1013,7 +1042,9 @@ class EliteRolloverEngine:
 
         wat_tz = datetime.timezone(datetime.timedelta(hours=1))
         wat_now = datetime.datetime.now(wat_tz)
-        is_weekend = wat_now.weekday() in (5, 6) # Sat=5, Sun=6
+        # Monday=0, Tuesday=1, Wednesday=2, Thursday=3, Friday=4, Saturday=5, Sunday=6
+        is_midweek = wat_now.weekday() in (0, 1, 2, 3) # Mon to Thu
+        is_weekend = not is_midweek # Fri, Sat, Sun
         claimed_event_ids = set()
         ro_event_ids = set()
         today_str = wat_now.strftime("%A, %b %d, %Y")
@@ -1022,10 +1053,13 @@ class EliteRolloverEngine:
         trio_result = {
             "status": "SUCCESS",
             "date_str": today_str,
-            "zero_overlap_guaranteed": is_weekend,
-            "calendar_mode": "STRICT_ZERO_OVERLAP" if is_weekend else "SMART_HYBRID",
+            "is_midweek": is_midweek,
+            "schedule_mode": "MIDWEEK_DUO" if is_midweek else "WEEKEND_TRIO",
+            "zero_overlap_guaranteed": True,
+            "calendar_mode": "MIDWEEK_2X_15X" if is_midweek else "WEEKEND_2X_10X_20X",
             "rollover_ticket": None,
             "acca_10x_ticket": None,
+            "acca_15x_ticket": None,
             "acca_20x_ticket": None,
             "acca_5x_ticket": None,
             "total_unique_fixtures": 0
@@ -1070,111 +1104,136 @@ class EliteRolloverEngine:
 
                 trio_result["rollover_ticket"] = ro_payload
 
-        # ── 2. SLIP 2: 10.0x MEGA MULTIPLIER (10–12 Matches, Target 9.80x–10.50x) ──
-        acca10_legs = []
-        if enable_10odds:
-            unclaimed_10x = [c for c in acca_candidates if c["event_id"] not in claimed_event_ids]
-            acca10_legs = cls.assemble_optimal_accumulator_slip(
-                unclaimed_10x,
-                target_odds=10.00,
-                min_legs=10,
-                max_legs=12,
-                excluded_event_ids=claimed_event_ids
-            )
-            if acca10_legs:
-                for leg in acca10_legs:
-                    claimed_event_ids.add(leg["event_id"])
+        # ── 2. MID-WEEK SCHEDULE (Mon–Thu): 15.0x MULTIPLIER SLIP (~11–14 Legs, Target ~15.00x) ──
+        if is_midweek:
+            if enable_10odds or enable_20odds:
+                unclaimed_15x = [c for c in acca_candidates if c["event_id"] not in claimed_event_ids]
+                acca15_legs = cls.assemble_optimal_accumulator_slip(
+                    unclaimed_15x,
+                    target_odds=15.00,
+                    min_legs=11,
+                    max_legs=14,
+                    excluded_event_ids=claimed_event_ids
+                )
+                if acca15_legs:
+                    for leg in acca15_legs:
+                        claimed_event_ids.add(leg["event_id"])
 
-                acca10_odds = round(math.prod(leg["odds"] for leg in acca10_legs), 2)
-                acca10_prob = round(math.prod(leg["model_probability"] for leg in acca10_legs) * 100.0, 1)
-                acca10_code, acca10_url = await cls._request_sportybet_share_code(acca10_legs)
-                acca10_ticket_id = f"ACCA10X-{now_ts}"
+                    acca15_odds = round(math.prod(leg["odds"] for leg in acca15_legs), 2)
+                    acca15_prob = round(math.prod(leg["model_probability"] for leg in acca15_legs) * 100.0, 1)
+                    acca15_code, acca15_url = await cls._request_sportybet_share_code(acca15_legs)
+                    acca15_ticket_id = f"ACCA15X-{now_ts}"
 
-                cls._persist_ticket_record(acca10_ticket_id, acca10_code, "MEGA_MULTIPLIER", 10.00, acca10_odds, 1000.0, acca10_legs)
+                    cls._persist_ticket_record(acca15_ticket_id, acca15_code, "MIDWEEK_15X", 15.00, acca15_odds, 1000.0, acca15_legs)
 
-                acca10_payload = {
-                    "status": "SUCCESS",
-                    "ticket_id": acca10_ticket_id,
-                    "title": "10.0x Mega Multiplier Slip",
-                    "booking_code": acca10_code or "N/A",
-                    "share_url": acca10_url,
-                    "target_odds": 10.00,
-                    "actual_odds": acca10_odds,
-                    "confidence_score": acca10_prob,
-                    "date_str": today_str,
-                    "leg_count": len(acca10_legs),
-                    "picks": acca10_legs,
-                    "stake": 1000.0,
-                    "telegram_dispatched": False
-                }
+                    acca15_payload = {
+                        "status": "SUCCESS",
+                        "ticket_id": acca15_ticket_id,
+                        "title": "15.0x Mid-Week Multiplier Slip",
+                        "booking_code": acca15_code or "N/A",
+                        "share_url": acca15_url,
+                        "target_odds": 15.00,
+                        "actual_odds": acca15_odds,
+                        "confidence_score": acca15_prob,
+                        "date_str": today_str,
+                        "leg_count": len(acca15_legs),
+                        "picks": acca15_legs,
+                        "stake": 1000.0,
+                        "telegram_dispatched": False
+                    }
 
-                if send_telegram and acca10_code:
-                    acca10_payload["telegram_dispatched"] = RolloverTelegramNotifier.dispatch_mega_multiplier_slip(acca10_payload)
+                    if send_telegram and acca15_code:
+                        acca15_payload["telegram_dispatched"] = RolloverTelegramNotifier.dispatch_midweek_15x_slip(acca15_payload)
 
-                trio_result["acca_10x_ticket"] = acca10_payload
+                    trio_result["acca_15x_ticket"] = acca15_payload
+                    trio_result["acca_10x_ticket"] = acca15_payload # Keep for clients expecting second ticket
 
-        # ── 3. SLIP 3: 20.0x MONSTER ACCA (13–15 Matches Max, Target 19.0x–22.0x, Replacing Old 5.0x) ──
-        if enable_20odds:
-            pool_for_20x = [c for c in acca_candidates if c["event_id"] not in claimed_event_ids]
-            
-            # Weekdays Smart Hybrid Mode:
-            # 2.0x Rollover remains 100% sacred & isolated (0 shared fixtures anywhere).
-            # 10.0x and 20.0x slips can share at most 2–3 Elite Giants (different markets only:
-            # e.g., Over 1.5 on 10x, Win Either Half or Double Chance on 20x).
-            # At least 80%+ of fixtures on each slip remain completely unique matches.
-            if not is_weekend and len(pool_for_20x) < 15 and acca10_legs:
-                shared_count = 0
-                for leg10 in acca10_legs:
-                    if shared_count >= 3:
-                        break
-                    # Must be Tier 1 or Juggernaut giant
-                    if leg10.get("dominance_ratio", 0) >= 1.7 or leg10.get("is_juggernaut"):
-                        alt_cand = next(
-                            (c for c in acca_candidates if c["event_id"] == leg10["event_id"] and c["market_type"] != leg10["market_type"] and c["odds"] >= 1.15),
-                            None
-                        )
-                        if alt_cand and alt_cand not in pool_for_20x:
-                            pool_for_20x.append(alt_cand)
-                            shared_count += 1
+        # ── 3. WEEKEND SCHEDULE (Fri–Sun): 10.0x MEGA SLIP + 20.0x MONSTER ACCA ──
+        else:
+            # 2a. SLIP 2: 10.0x MEGA MULTIPLIER (10–12 Matches, Target 9.80x–10.50x)
+            acca10_legs = []
+            if enable_10odds:
+                unclaimed_10x = [c for c in acca_candidates if c["event_id"] not in claimed_event_ids]
+                acca10_legs = cls.assemble_optimal_accumulator_slip(
+                    unclaimed_10x,
+                    target_odds=10.00,
+                    min_legs=10,
+                    max_legs=12,
+                    excluded_event_ids=claimed_event_ids
+                )
+                if acca10_legs:
+                    for leg in acca10_legs:
+                        claimed_event_ids.add(leg["event_id"])
 
-            acca20_legs = cls.assemble_optimal_accumulator_slip(
-                pool_for_20x,
-                target_odds=20.00,
-                min_legs=13,
-                max_legs=15,
-                excluded_event_ids=ro_event_ids # Zero contact with Rollover
-            )
-            if acca20_legs:
-                for leg in acca20_legs:
-                    claimed_event_ids.add(leg["event_id"])
+                    acca10_odds = round(math.prod(leg["odds"] for leg in acca10_legs), 2)
+                    acca10_prob = round(math.prod(leg["model_probability"] for leg in acca10_legs) * 100.0, 1)
+                    acca10_code, acca10_url = await cls._request_sportybet_share_code(acca10_legs)
+                    acca10_ticket_id = f"ACCA10X-{now_ts}"
 
-                acca20_odds = round(math.prod(leg["odds"] for leg in acca20_legs), 2)
-                acca20_prob = round(math.prod(leg["model_probability"] for leg in acca20_legs) * 100.0, 1)
-                acca20_code, acca20_url = await cls._request_sportybet_share_code(acca20_legs)
-                acca20_ticket_id = f"ACCA20X-{now_ts}"
+                    cls._persist_ticket_record(acca10_ticket_id, acca10_code, "MEGA_MULTIPLIER", 10.00, acca10_odds, 1000.0, acca10_legs)
 
-                cls._persist_ticket_record(acca20_ticket_id, acca20_code, "MEGA_20X", 20.00, acca20_odds, 500.0, acca20_legs)
+                    acca10_payload = {
+                        "status": "SUCCESS",
+                        "ticket_id": acca10_ticket_id,
+                        "title": "10.0x Mega Multiplier Slip",
+                        "booking_code": acca10_code or "N/A",
+                        "share_url": acca10_url,
+                        "target_odds": 10.00,
+                        "actual_odds": acca10_odds,
+                        "confidence_score": acca10_prob,
+                        "date_str": today_str,
+                        "leg_count": len(acca10_legs),
+                        "picks": acca10_legs,
+                        "stake": 1000.0,
+                        "telegram_dispatched": False
+                    }
 
-                acca20_payload = {
-                    "status": "SUCCESS",
-                    "ticket_id": acca20_ticket_id,
-                    "title": "20.0x Monster Acca Slip",
-                    "booking_code": acca20_code or "N/A",
-                    "share_url": acca20_url,
-                    "target_odds": 20.00,
-                    "actual_odds": acca20_odds,
-                    "confidence_score": acca20_prob,
-                    "date_str": today_str,
-                    "leg_count": len(acca20_legs),
-                    "picks": acca20_legs,
-                    "stake": 500.0,
-                    "telegram_dispatched": False
-                }
+                    if send_telegram and acca10_code:
+                        acca10_payload["telegram_dispatched"] = RolloverTelegramNotifier.dispatch_mega_multiplier_slip(acca10_payload)
 
-                if send_telegram and acca20_code:
-                    acca20_payload["telegram_dispatched"] = RolloverTelegramNotifier.dispatch_mega_20x_slip(acca20_payload)
+                    trio_result["acca_10x_ticket"] = acca10_payload
 
-                trio_result["acca_20x_ticket"] = acca20_payload
+            # 2b. SLIP 3: 20.0x MONSTER ACCA (13–15 Matches Max, Target 19.0x–22.0x)
+            if enable_20odds:
+                pool_for_20x = [c for c in acca_candidates if c["event_id"] not in claimed_event_ids]
+                acca20_legs = cls.assemble_optimal_accumulator_slip(
+                    pool_for_20x,
+                    target_odds=20.00,
+                    min_legs=13,
+                    max_legs=15,
+                    excluded_event_ids=claimed_event_ids
+                )
+                if acca20_legs:
+                    for leg in acca20_legs:
+                        claimed_event_ids.add(leg["event_id"])
+
+                    acca20_odds = round(math.prod(leg["odds"] for leg in acca20_legs), 2)
+                    acca20_prob = round(math.prod(leg["model_probability"] for leg in acca20_legs) * 100.0, 1)
+                    acca20_code, acca20_url = await cls._request_sportybet_share_code(acca20_legs)
+                    acca20_ticket_id = f"ACCA20X-{now_ts}"
+
+                    cls._persist_ticket_record(acca20_ticket_id, acca20_code, "MEGA_20X", 20.00, acca20_odds, 500.0, acca20_legs)
+
+                    acca20_payload = {
+                        "status": "SUCCESS",
+                        "ticket_id": acca20_ticket_id,
+                        "title": "20.0x Monster Acca Slip",
+                        "booking_code": acca20_code or "N/A",
+                        "share_url": acca20_url,
+                        "target_odds": 20.00,
+                        "actual_odds": acca20_odds,
+                        "confidence_score": acca20_prob,
+                        "date_str": today_str,
+                        "leg_count": len(acca20_legs),
+                        "picks": acca20_legs,
+                        "stake": 500.0,
+                        "telegram_dispatched": False
+                    }
+
+                    if send_telegram and acca20_code:
+                        acca20_payload["telegram_dispatched"] = RolloverTelegramNotifier.dispatch_mega_20x_slip(acca20_payload)
+
+                    trio_result["acca_20x_ticket"] = acca20_payload
 
         # ── 4. OPTIONAL: 5.0x VALUE ACCA (If explicitly enabled) ──
         if enable_5odds:
@@ -1277,11 +1336,13 @@ class EliteRolloverEngine:
                     reverse=True
                 )
 
-                max_dc = max(1, int(target_games * 0.30))
-                max_per_market = max(3, int(target_games * 0.35))
+                max_dc = max(2, int(target_games * 0.45))
+                max_per_market = max(3, int(target_games * 0.40))
                 market_counts: Dict[str, int] = collections.defaultdict(int)
                 slip_legs = []
+                selected_eids = set()
 
+                # Pass 1: Targeted Market Diversity Mix
                 for eid in sorted_fids:
                     opts = fixture_cands[eid]
                     chosen = None
@@ -1292,30 +1353,42 @@ class EliteRolloverEngine:
                             chosen = cand
                             break
 
-                    if not chosen:
-                        least_used = min(opts, key=lambda c: market_counts[c.get("market_type") or "OTHER"])
-                        m_type = least_used.get("market_type") or "OTHER"
-                        limit = max_dc if m_type == "DOUBLE_CHANCE" else max_per_market
-                        if market_counts[m_type] >= limit:
-                            continue
-                        chosen = least_used
+                    if chosen:
+                        m_type = chosen.get("market_type") or "OTHER"
+                        market_counts[m_type] += 1
+                        slip_legs.append(chosen)
+                        selected_eids.add(eid)
+                        if len(slip_legs) >= target_games:
+                            break
 
-                    m_type = chosen.get("market_type") or "OTHER"
-                    market_counts[m_type] += 1
-                    slip_legs.append(chosen)
-                    if len(slip_legs) >= target_games:
-                        break
+                # Pass 2: Adaptive Fill-Forward Guarantee (ensures target_games is always reached)
+                if len(slip_legs) < target_games:
+                    for eid in sorted_fids:
+                        if eid in selected_eids:
+                            continue
+                        opts = fixture_cands[eid]
+                        if not opts:
+                            continue
+                        chosen = opts[0]
+                        m_type = chosen.get("market_type") or "OTHER"
+                        market_counts[m_type] += 1
+                        slip_legs.append(chosen)
+                        selected_eids.add(eid)
+                        if len(slip_legs) >= target_games:
+                            break
             else:
                 t_odds = float(target_odds or 5.0)
                 if t_odds <= 2.2:
                     slip_legs = cls.assemble_optimal_rollover_slip(unclaimed, target_odds=t_odds)
                 else:
                     if t_odds >= 18.0:
-                        min_l, max_l = 15, 20
+                        min_l, max_l = 13, 16
+                    elif t_odds >= 14.0:
+                        min_l, max_l = 11, 14
                     elif t_odds >= 9.0:
-                        min_l, max_l = 11, 15
+                        min_l, max_l = 9, 13
                     elif t_odds >= 4.5:
-                        min_l, max_l = 6, 9
+                        min_l, max_l = 5, 8
                     else:
                         min_l, max_l = 3, 5
                     slip_legs = cls.assemble_optimal_accumulator_slip(

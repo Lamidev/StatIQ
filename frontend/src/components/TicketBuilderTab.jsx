@@ -549,7 +549,7 @@ export default function TicketBuilderTab() {
         setCronConfig(prev => ({ ...prev, ...res.config }));
         if (res.config.last_trio_result) {
           setTrioResult(res.config.last_trio_result);
-          const primary = res.config.last_trio_result.rollover_ticket || res.config.last_trio_result.acca_10x_ticket || res.config.last_trio_result.acca_20x_ticket || res.config.last_trio_result.acca_5x_ticket;
+          const primary = res.config.last_trio_result.rollover_ticket || res.config.last_trio_result.acca_15x_ticket || res.config.last_trio_result.acca_10x_ticket || res.config.last_trio_result.acca_20x_ticket || res.config.last_trio_result.acca_5x_ticket;
           if (primary) {
             setCronTicketResult(primary);
           }
@@ -723,7 +723,7 @@ export default function TicketBuilderTab() {
       });
       if (res && res.status === "SUCCESS" && res.result) {
         setTrioResult(res.result);
-        const primary = res.result.rollover_ticket || res.result.acca_10x_ticket || res.result.acca_20x_ticket || res.result.acca_5x_ticket;
+        const primary = res.result.rollover_ticket || res.result.acca_15x_ticket || res.result.acca_10x_ticket || res.result.acca_20x_ticket || res.result.acca_5x_ticket;
         if (primary) setCronTicketResult(primary);
         setCronNotice(`Daily VIP Slips generated! Dispatched to Telegram (${res.result.total_unique_fixtures || 0} unique fixtures, ${res.result.calendar_mode || "Adaptive Calendar"})!`);
         const histRes = await fetchRolloverHistory();
@@ -3378,11 +3378,12 @@ Slovakia vs Moldova`;
           {/* LIVE DISPATCHED VIP SLIPS (TRIO WITH ADAPTIVE CALENDAR ENGINE) */}
           {(() => {
             const activeTrio = trioResult || cronConfig.last_trio_result;
+            const midWeekTicket = activeTrio?.acca_15x_ticket;
             const currentTicket = (activeTrioTab === "ROLLOVER" 
               ? (activeTrio?.rollover_ticket || cronTicketResult)
-              : activeTrioTab === "ACCA_10X"
-              ? (activeTrio?.acca_10x_ticket || activeTrio?.acca_5x_ticket)
-              : (activeTrio?.acca_20x_ticket || activeTrio?.acca_10x_ticket)) || cronTicketResult;
+              : activeTrioTab === "ACCA_10X" || activeTrioTab === "ACCA_15X"
+              ? (midWeekTicket || activeTrio?.acca_10x_ticket || activeTrio?.acca_5x_ticket)
+              : (activeTrio?.acca_20x_ticket || midWeekTicket || activeTrio?.acca_10x_ticket)) || cronTicketResult;
 
             if (!currentTicket && !activeTrio) {
               return (
@@ -3424,7 +3425,7 @@ Slovakia vs Moldova`;
                   </div>
                 )}
 
-                {/* 3-Ticket Tab Switcher */}
+                {/* Multi-Ticket Tab Switcher */}
                 {activeTrio && (
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100">
                     <div className="flex items-center gap-1.5 p-1 bg-slate-100 rounded-2xl border border-slate-200 overflow-x-auto">
@@ -3449,42 +3450,44 @@ Slovakia vs Moldova`;
                         type="button"
                         onClick={() => setActiveTrioTab("ACCA_10X")}
                         className={`px-3.5 py-2 rounded-xl text-xs font-black transition-all flex items-center gap-1.5 cursor-pointer whitespace-nowrap ${
-                          activeTrioTab === "ACCA_10X"
+                          activeTrioTab === "ACCA_10X" || activeTrioTab === "ACCA_15X"
                             ? "bg-white text-indigo-800 shadow-sm border border-slate-200/80"
                             : "text-slate-600 hover:text-slate-900"
                         }`}
                       >
-                        <span>🔥 10.0x Mega Acca</span>
-                        {(activeTrio.acca_10x_ticket || activeTrio.acca_5x_ticket) && (
+                        <span>{midWeekTicket ? "⚡ 15.0x Mid-Week Acca" : "🔥 10.0x Mega Acca"}</span>
+                        {(midWeekTicket || activeTrio.acca_10x_ticket || activeTrio.acca_5x_ticket) && (
                           <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-indigo-100 text-indigo-800 font-extrabold">
-                            {(activeTrio.acca_10x_ticket || activeTrio.acca_5x_ticket).actual_odds}x
+                            {(midWeekTicket || activeTrio.acca_10x_ticket || activeTrio.acca_5x_ticket).actual_odds}x
                           </span>
                         )}
                       </button>
 
-                      <button
-                        type="button"
-                        onClick={() => setActiveTrioTab("ACCA_20X")}
-                        className={`px-3.5 py-2 rounded-xl text-xs font-black transition-all flex items-center gap-1.5 cursor-pointer whitespace-nowrap ${
-                          activeTrioTab === "ACCA_20X"
-                            ? "bg-white text-amber-800 shadow-sm border border-slate-200/80"
-                            : "text-slate-600 hover:text-slate-900"
-                        }`}
-                      >
-                        <span>⚡ 20.0x Monster Acca</span>
-                        {activeTrio.acca_20x_ticket && (
+                      {activeTrio.acca_20x_ticket && (
+                        <button
+                          type="button"
+                          onClick={() => setActiveTrioTab("ACCA_20X")}
+                          className={`px-3.5 py-2 rounded-xl text-xs font-black transition-all flex items-center gap-1.5 cursor-pointer whitespace-nowrap ${
+                            activeTrioTab === "ACCA_20X"
+                              ? "bg-white text-amber-800 shadow-sm border border-slate-200/80"
+                              : "text-slate-600 hover:text-slate-900"
+                          }`}
+                        >
+                          <span>🚀 20.0x Monster Acca</span>
                           <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-amber-100 text-amber-800 font-extrabold">
                             {activeTrio.acca_20x_ticket.actual_odds}x
                           </span>
-                        )}
-                      </button>
+                        </button>
+                      )}
                     </div>
 
                     <div className="flex items-center gap-2 self-start sm:self-center">
                       <span className="px-3 py-1 rounded-full text-[10px] font-black bg-emerald-50 text-emerald-800 border border-emerald-200 flex items-center gap-1.5">
                         <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
                         <span>
-                          {activeTrio.calendar_mode === "SMART_HYBRID"
+                          {activeTrio.is_midweek || activeTrio.schedule_mode === "MIDWEEK_DUO"
+                            ? `Mid-Week Duo Mode (2.0x + 15.0x • Zero Overlap • ${activeTrio.total_unique_fixtures || 0} Fixtures)`
+                            : activeTrio.calendar_mode === "SMART_HYBRID"
                             ? `Smart Hybrid Mode (2.0x Sacred • ${activeTrio.total_unique_fixtures || 0} Fixtures)`
                             : `Strict Zero Overlap (${activeTrio.total_unique_fixtures || 0} Unique Fixtures)`}
                         </span>

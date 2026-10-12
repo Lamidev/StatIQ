@@ -181,6 +181,47 @@ class RolloverTelegramNotifier:
         return cls.send_message(msg)
 
     @classmethod
+    def dispatch_midweek_15x_slip(cls, ticket_data: Dict[str, Any]) -> bool:
+        """
+        Formats and sends the 15.0x Mid-Week Multiplier alert to Telegram with Zero-Overlap assurance.
+        """
+        code = ticket_data.get("booking_code") or "N/A"
+        target_odds = ticket_data.get("target_odds", 15.0)
+        actual_odds = ticket_data.get("actual_odds", target_odds)
+        confidence = ticket_data.get("confidence_score", 42.0)
+        picks = ticket_data.get("picks", [])
+        date_str = ticket_data.get("date_str", "Today")
+        share_url = ticket_data.get("share_url") or f"https://www.sportybet.com/ng/?shareCode={code}"
+
+        lines = [
+            "⚡ <b>StatIQ 15.0x Mid-Week Multiplier Slip</b>",
+            "🔒 <b>Zero-Overlap Guarantee:</b> 100% Unique Fixtures (No Clash with Rollover)",
+            f"📅 <b>Date:</b> {date_str} (10:00 AM WAT Dispatch)",
+            f"⚡ <b>Total Multiplier:</b> {actual_odds:.2f}x | <b>Combined Confidence:</b> {confidence:.1f}%",
+            f"📊 <b>Leg Count:</b> {len(picks)} High-Dominance Matches\n"
+        ]
+
+        for i, p in enumerate(picks, 1):
+            h = p.get("home_team")
+            a = p.get("away_team")
+            comp = p.get("competition") or "Football"
+            mkt = p.get("market_desc") or p.get("market_name") or "Pick"
+            sel = p.get("selection_desc") or p.get("selection_name") or "Selection"
+            odd = float(p.get("odds") or 1.22)
+            prob = float(p.get("model_probability") or 0.80) * 100.0
+
+            lines.append(f"<b>{i}. {h} vs {a}</b> ({comp})")
+            lines.append(f"   ➔ <b>Pick:</b> {sel} [{mkt}] @ <b>{odd:.2f}</b> (Win: {prob:.0f}%)")
+
+        lines.append(f"\n🚀 <b>Total Multiplier:</b> {actual_odds:.2f}x")
+        lines.append(f"🎟️ <b>SportyBet Code:</b> <code>{code}</code>")
+        lines.append(f"🔗 <a href=\"{share_url}\"><b>Click to Pre-Load on SportyBet</b></a>\n")
+        lines.append("🤖 <i>Automated via StatIQ Daily VIP Scheduler · Min Odds ≥ 1.15x</i>")
+
+        msg = "\n".join(lines)
+        return cls.send_message(msg)
+
+    @classmethod
     def dispatch_mega_20x_slip(cls, ticket_data: Dict[str, Any]) -> bool:
         """
         Formats and sends the 20.0x Mega Multiplier alert to Telegram with Calendar Adaptive Guarantee.
