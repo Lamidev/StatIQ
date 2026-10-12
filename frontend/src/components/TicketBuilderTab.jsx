@@ -17,7 +17,8 @@ import {
   fetchActiveCampaign,
   updateCampaignDay,
   dismissCampaign,
-  startCampaign
+  startCampaign,
+  clearRolloverLastSlip
 } from "../api/client";
 import { Copy, Info, Calendar, Send, ShieldCheck, RefreshCw, CheckCircle2, ExternalLink, X, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, AlertCircle, Award, Trash2, Lock, ShieldAlert, Sliders, Sparkles, Search, Filter, BarChart2, Target, RotateCcw, Ticket, Layers, Zap, FileText, Upload, ListFilter, Clipboard, Check, Clock, Bell, Play, CheckCircle, TrendingUp, DollarSign, ArrowRight, Shield, Flame, Activity } from "lucide-react";
 
@@ -506,8 +507,9 @@ export default function TicketBuilderTab() {
     is_enabled: true,
     active_days: ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"],
     enable_rollover_2x: true,
-    enable_acca_5x: true,
     enable_acca_10x: true,
+    enable_acca_20x: true,
+    enable_acca_5x: false,
     target_odds: 2.00,
     max_leg_odds: 1.45,
     dispatch_time: "10:00",
@@ -523,7 +525,7 @@ export default function TicketBuilderTab() {
     last_trio_result: null
   });
   const [trioResult, setTrioResult] = useState(null);
-  const [activeTrioTab, setActiveTrioTab] = useState("ROLLOVER"); // "ROLLOVER", "ACCA_5X", "ACCA_10X"
+  const [activeTrioTab, setActiveTrioTab] = useState("ROLLOVER"); // "ROLLOVER", "ACCA_10X", "ACCA_20X"
   const [cronLoading, setCronLoading] = useState(false);
   const [cronRunningNow, setCronRunningNow] = useState(false);
   const [cronNotice, setCronNotice] = useState(null);
@@ -537,74 +539,8 @@ export default function TicketBuilderTab() {
   const [showCompoundingLadder, setShowCompoundingLadder] = useState(false);
   const [showQualityGates, setShowQualityGates] = useState(false);
   const [showManualExplorer, setShowManualExplorer] = useState(false);
-  const [activeCampaign, setActiveCampaign] = useState({
-    has_active: true,
-    campaign_mode: "CHALLENGE",
-    total_days: 3,
-    current_day: 3,
-    target_odds: 2.0,
-    starting_stake: 515.0,
-    current_stake: 2000.0,
-    final_goal: 4000.0,
-    won_count: 2,
-    progress_pct: 66.7,
-    start_date: "2026-10-09",
-    days: [
-      {
-        day: 1,
-        date: "2026-10-09",
-        weekday: "Friday",
-        ticket_id: "600651",
-        stake: 515.0,
-        odds: 1.95,
-        potential_payout: 1006.64,
-        status: "WON",
-        legs: [
-          { home_team: "Montpellier", away_team: "Grenoble Foot", score: "2 - 0", odds: 1.16 },
-          { home_team: "Nancy-Lorraine", away_team: "EA Guingamp", score: "1 - 0", odds: 1.19 },
-          { home_team: "De Graafschap", away_team: "Jong FC Utrecht", score: "2 - 1", odds: 1.20 },
-          { home_team: "Heidenheim", away_team: "1 FC Kaiserslautern", score: "0 - 0", odds: 1.18 }
-        ]
-      },
-      {
-        day: 2,
-        date: "2026-10-10",
-        weekday: "Saturday",
-        ticket_id: "976904",
-        stake: 1000.0,
-        odds: 2.02,
-        potential_payout: 2047.39,
-        status: "WON",
-        legs: [
-          { home_team: "Man Utd", away_team: "Tottenham", score: "1 - 1", odds: 1.16 },
-          { home_team: "Monaco", away_team: "Toulouse", score: "2 - 2", odds: 1.19 },
-          { home_team: "RB Leipzig", away_team: "Eintracht Frankfurt", score: "6 - 0", odds: 1.21 },
-          { home_team: "Feyenoord", away_team: "Alkmaar", score: "2 - 0", odds: 1.21 }
-        ]
-      },
-      {
-        day: 3,
-        date: "2026-10-11",
-        weekday: "Sunday",
-        stake: 2000.0,
-        odds: 2.0,
-        potential_payout: 4000.0,
-        status: "RUNNING",
-        booking_code: "PZPZ80",
-        is_today: true
-      }
-    ],
-    active_ticket: {
-      booking_code: "PZPZ80",
-      actual_odds: 2.0,
-      picks: [
-        { home_team: "Betis", away_team: "Osasuna", selection_desc: "Betis or Draw (1X)", market_desc: "Double Chance", odds: 1.15, model_probability: 0.83 },
-        { home_team: "FC Utrecht", away_team: "Willem II", selection_desc: "FC Utrecht or Draw (1X)", market_desc: "Double Chance", odds: 1.16, model_probability: 0.83 },
-        { home_team: "FC Arouca", away_team: "Estrela Amadora", selection_desc: "FC Arouca or Draw (1X)", market_desc: "Double Chance", odds: 1.22, model_probability: 0.79 },
-        { home_team: "Cologne", away_team: "Borussia M'gladbach", selection_desc: "Cologne or Draw (1X)", market_desc: "Double Chance", odds: 1.23, model_probability: 0.77 }
-      ]
-    }
-  });
+  const [activeCampaign, setActiveCampaign] = useState(null);
+  const [isAutomationDrawerOpen, setIsAutomationDrawerOpen] = useState(false);
 
   const loadCronData = async () => {
     try {
@@ -613,7 +549,7 @@ export default function TicketBuilderTab() {
         setCronConfig(prev => ({ ...prev, ...res.config }));
         if (res.config.last_trio_result) {
           setTrioResult(res.config.last_trio_result);
-          const primary = res.config.last_trio_result.rollover_ticket || res.config.last_trio_result.acca_5x_ticket || res.config.last_trio_result.acca_10x_ticket;
+          const primary = res.config.last_trio_result.rollover_ticket || res.config.last_trio_result.acca_10x_ticket || res.config.last_trio_result.acca_20x_ticket || res.config.last_trio_result.acca_5x_ticket;
           if (primary) {
             setCronTicketResult(primary);
           }
@@ -720,8 +656,9 @@ export default function TicketBuilderTab() {
         is_enabled: cronConfig.is_enabled,
         active_days: cronConfig.active_days,
         enable_rollover_2x: cronConfig.enable_rollover_2x,
-        enable_acca_5x: cronConfig.enable_acca_5x,
         enable_acca_10x: cronConfig.enable_acca_10x,
+        enable_acca_20x: cronConfig.enable_acca_20x,
+        enable_acca_5x: cronConfig.enable_acca_5x,
         target_odds: cronConfig.target_odds,
         max_leg_odds: cronConfig.max_leg_odds || 1.45,
         dispatch_time: cronConfig.dispatch_time || "10:00",
@@ -746,6 +683,31 @@ export default function TicketBuilderTab() {
     }
   };
 
+  const handleToggleCronMaster = async () => {
+    const nextState = !cronConfig.is_enabled;
+    setCronConfig(prev => ({ ...prev, is_enabled: nextState }));
+    setCronLoading(true);
+    try {
+      const res = await updateRolloverSchedule({
+        ...cronConfig,
+        is_enabled: nextState
+      });
+      if (res && res.status === "SUCCESS") {
+        setCronNotice(nextState ? "Daily VIP Automation activated! Dispatches to Telegram at 10:00 AM WAT." : "Daily VIP Automation stopped! Telegram alerts silenced.");
+      } else {
+        setCronError("Failed to update automation status.");
+      }
+      setTimeout(() => {
+        setCronNotice(null);
+        setCronError(null);
+      }, 4000);
+    } catch (e) {
+      console.error("Error toggling automation:", e);
+    } finally {
+      setCronLoading(false);
+    }
+  };
+
   const handleRunCronNow = async () => {
     setCronRunningNow(true);
     setCronError(null);
@@ -753,16 +715,17 @@ export default function TicketBuilderTab() {
     try {
       const res = await runRolloverNow({
         enable_rollover_2x: cronConfig.enable_rollover_2x,
-        enable_acca_5x: cronConfig.enable_acca_5x,
         enable_acca_10x: cronConfig.enable_acca_10x,
+        enable_acca_20x: cronConfig.enable_acca_20x,
+        enable_acca_5x: cronConfig.enable_acca_5x,
         target_odds: cronConfig.target_odds,
         max_leg_odds: cronConfig.max_leg_odds || 1.45
       });
       if (res && res.status === "SUCCESS" && res.result) {
         setTrioResult(res.result);
-        const primary = res.result.rollover_ticket || res.result.acca_5x_ticket || res.result.acca_10x_ticket;
+        const primary = res.result.rollover_ticket || res.result.acca_10x_ticket || res.result.acca_20x_ticket || res.result.acca_5x_ticket;
         if (primary) setCronTicketResult(primary);
-        setCronNotice(`Daily VIP Slips generated! Dispatched to Telegram with Zero-Overlap Guarantee! (${res.result.total_unique_fixtures || 0} unique fixtures)`);
+        setCronNotice(`Daily VIP Slips generated! Dispatched to Telegram (${res.result.total_unique_fixtures || 0} unique fixtures, ${res.result.calendar_mode || "Adaptive Calendar"})!`);
         const histRes = await fetchRolloverHistory();
         if (histRes && histRes.history) {
           setCronHistory(histRes.history);
@@ -792,6 +755,23 @@ export default function TicketBuilderTab() {
     } finally {
       setTelegramTesting(false);
       setTimeout(() => setTelegramStatus(null), 5000);
+    }
+  };
+
+  const handleClearLastSlip = async () => {
+    try {
+      await clearRolloverLastSlip();
+      setTrioResult(null);
+      setCronTicketResult(null);
+      setCronConfig(prev => ({
+        ...prev,
+        last_ticket: null,
+        last_trio_result: null
+      }));
+      setCronNotice("Archived slip dismissed from live view.");
+      setTimeout(() => setCronNotice(null), 3000);
+    } catch (e) {
+      console.error("Error clearing last slip:", e);
     }
   };
 
@@ -3083,414 +3063,190 @@ Slovakia vs Moldova`;
             </div>
           )}
 
-          {/* AUTOMATED 10:00 AM DAILY VIP AUTOMATION HUB */}
-          <div className="bg-white rounded-3xl border border-slate-200 shadow-xl shadow-slate-100/90 p-5 sm:p-7 space-y-6 relative overflow-hidden">
-            {/* Ambient subtle decorative background glows */}
-            <div className="absolute top-0 right-0 w-80 h-80 bg-emerald-500/5 rounded-full blur-3xl pointer-events-none" />
-            <div className="absolute bottom-0 left-0 w-80 h-80 bg-indigo-500/5 rounded-full blur-3xl pointer-events-none" />
-
-            {/* Header: Title, Live Status, and Enable/Pause Toggle */}
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-5 border-b border-slate-100 relative z-10">
-              <div className="flex items-start sm:items-center gap-3.5">
-                <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-amber-500 to-indigo-600 flex items-center justify-center text-white flex-shrink-0 shadow-lg shadow-amber-500/20">
-                  <Zap className="w-6 h-6" />
+          {/* COMPACT AUTOMATION CONTROLLER & COLLAPSIBLE DRAWER (OPTION B) */}
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden transition-all">
+            {/* Top Compact Horizontal Control Strip */}
+            <div className="p-3.5 sm:p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-gradient-to-r from-slate-50 via-white to-slate-50">
+              <div className="flex items-center gap-3 min-w-0">
+                <div className={`w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 shadow-xs ${
+                  cronConfig.is_enabled 
+                    ? "bg-emerald-500 text-white shadow-emerald-500/20" 
+                    : "bg-slate-200 text-slate-500"
+                }`}>
+                  <Zap className="w-4 h-4" />
                 </div>
-                <div>
+                <div className="min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
-                    <h2 className="text-base sm:text-lg font-black tracking-tight text-slate-900 flex items-center gap-2">
-                      <span>Daily VIP Automation Hub (10:00 AM WAT)</span>
-                    </h2>
-                    <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider flex items-center gap-1.5 border ${
-                      cronConfig.is_enabled 
-                        ? "bg-emerald-50 border-emerald-200 text-emerald-700" 
+                    <span className="text-xs sm:text-sm font-black text-slate-900 tracking-tight">
+                      Daily VIP Automation
+                    </span>
+                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider flex items-center gap-1.5 border ${
+                      cronConfig.is_enabled
+                        ? "bg-emerald-50 border-emerald-200 text-emerald-700"
                         : "bg-slate-100 border-slate-200 text-slate-500"
                     }`}>
                       <span className={`w-1.5 h-1.5 rounded-full ${cronConfig.is_enabled ? "bg-emerald-500 animate-pulse" : "bg-slate-400"}`} />
-                      <span>{cronConfig.is_enabled ? `Active · ${cronConfig.dispatch_time || "10:00"} AM WAT Dispatch` : "Automation Paused"}</span>
-                    </span>
-                    <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-emerald-50 border border-emerald-200 text-emerald-700">
-                      🔒 Zero-Overlap Guarantee
+                      <span>{cronConfig.is_enabled ? `Active · ${cronConfig.dispatch_time || "10:00"} AM WAT` : "Paused · Telegram Silent"}</span>
                     </span>
                   </div>
-                  <p className="text-xs text-slate-500 mt-1 font-medium leading-relaxed">
-                    Autonomous morning engine sweeps SportyBet live matches directly at 10:00 AM WAT. Generates up to 3 simultaneous variant slips (2.0x Rollover, 5.0x Value Acca, and 10.0x Mega Multiplier) with <b>100% unique fixtures</b> (0 overlap across tickets).
-                  </p>
+                  <div className="flex items-center gap-2 text-[11px] text-slate-500 font-medium mt-0.5 flex-wrap">
+                    <span>Active Slips:</span>
+                    <span className={`font-bold ${cronConfig.enable_rollover_2x ? "text-emerald-700" : "text-slate-400 line-through"}`}>2.0x (3–4 legs max)</span>
+                    <span>•</span>
+                    <span className={`font-bold ${cronConfig.enable_acca_10x ? "text-indigo-700" : "text-slate-400 line-through"}`}>10.0x (10–12 legs)</span>
+                    <span>•</span>
+                    <span className={`font-bold ${cronConfig.enable_acca_20x ? "text-amber-700" : "text-slate-400 line-through"}`}>20.0x (15 legs max)</span>
+                  </div>
                 </div>
               </div>
 
-              {/* Master Enabled / Paused Toggle Button */}
-              <div className="flex items-center gap-2 self-start sm:self-center">
+              {/* Action Buttons: Stop/Start Automation, Run Now, Expand Drawer */}
+              <div className="flex items-center gap-2 self-start sm:self-center flex-wrap sm:flex-nowrap">
+                {/* One-Click Stop / Start Automation */}
                 <button
                   type="button"
-                  onClick={() => setCronConfig(prev => ({ ...prev, is_enabled: !prev.is_enabled }))}
-                  className={`px-4 py-2 rounded-xl text-xs font-black transition-all flex items-center gap-2 border cursor-pointer shadow-sm ${
+                  onClick={handleToggleCronMaster}
+                  disabled={cronLoading}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-black transition-all flex items-center gap-1.5 border cursor-pointer shadow-xs ${
                     cronConfig.is_enabled
-                      ? "bg-emerald-500 text-white border-emerald-600 hover:bg-emerald-600 shadow-emerald-500/20"
-                      : "bg-slate-100 text-slate-600 border-slate-200 hover:bg-slate-200"
+                      ? "bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100"
+                      : "bg-emerald-500 text-white border-emerald-600 hover:bg-emerald-600 shadow-emerald-500/20"
                   }`}
+                  title={cronConfig.is_enabled ? "Pause automation and silence Telegram dispatches" : "Resume scheduled 10:00 AM automation"}
                 >
-                  <span className={`w-2 h-2 rounded-full ${cronConfig.is_enabled ? "bg-white animate-pulse" : "bg-slate-400"}`} />
-                  <span>{cronConfig.is_enabled ? "Master Active" : "Enable Master"}</span>
+                  <span className={`w-2 h-2 rounded-full ${cronConfig.is_enabled ? "bg-rose-500" : "bg-white animate-pulse"}`} />
+                  <span>{cronConfig.is_enabled ? "Stop Automation" : "Start Automation"}</span>
+                </button>
+
+                {/* Instant Trigger Run Now */}
+                <button
+                  type="button"
+                  onClick={handleRunCronNow}
+                  disabled={cronRunningNow}
+                  className="px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-black transition-all flex items-center gap-1.5 cursor-pointer shadow-xs"
+                >
+                  {cronRunningNow ? <RefreshCw className="w-3 h-3 animate-spin text-white" /> : <Play className="w-3 h-3 fill-white" />}
+                  <span>{cronRunningNow ? "Generating..." : "Run Now ⚡"}</span>
+                </button>
+
+                {/* Toggle Settings Drawer */}
+                <button
+                  type="button"
+                  onClick={() => setIsAutomationDrawerOpen(!isAutomationDrawerOpen)}
+                  className="px-2.5 py-1.5 rounded-xl bg-white hover:bg-slate-100 border border-slate-200 text-slate-700 text-xs font-bold transition-all flex items-center gap-1 cursor-pointer"
+                >
+                  <Sliders className="w-3.5 h-3.5 text-slate-500" />
+                  <span>{isAutomationDrawerOpen ? "Hide Settings" : "Settings"}</span>
+                  {isAutomationDrawerOpen ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
                 </button>
               </div>
             </div>
 
-            {/* DAILY VIP SLIPS SELECTION & ZERO-OVERLAP PIPELINE */}
-            <div className="bg-gradient-to-br from-slate-50 via-indigo-50/20 to-emerald-50/20 border border-slate-200 rounded-2xl p-4 sm:p-5 space-y-3 relative z-10">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                <div>
-                  <h3 className="text-xs font-black text-slate-900 uppercase tracking-wider flex items-center gap-1.5">
-                    <Sparkles className="w-4 h-4 text-amber-500" />
-                    <span>Daily VIP Automated Tickets (Zero-Overlap Pipeline)</span>
-                  </h3>
-                  <p className="text-[11px] text-slate-500 font-medium mt-0.5">
-                    Select which tickets are automatically generated and sent to Telegram at 10:00 AM WAT:
-                  </p>
-                </div>
-                <span className="text-[10px] font-black text-emerald-800 bg-emerald-100 px-2.5 py-0.5 rounded-full border border-emerald-300 self-start sm:self-center">
-                  🔒 Unique Fixtures Guaranteed
-                </span>
+            {/* Notifications Bar */}
+            {cronNotice && (
+              <div className="px-4 py-2 bg-emerald-50 border-t border-emerald-200 text-emerald-800 text-xs font-bold flex items-center gap-2">
+                <CheckCircle className="w-3.5 h-3.5 text-emerald-600 flex-shrink-0" />
+                <span>{cronNotice}</span>
               </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-1">
-                {/* 2.0x Rollover Card */}
-                <div
-                  onClick={() => setCronConfig(prev => ({ ...prev, enable_rollover_2x: !prev.enable_rollover_2x }))}
-                  className={`p-3.5 rounded-2xl border transition-all cursor-pointer flex flex-col justify-between ${
-                    cronConfig.enable_rollover_2x
-                      ? "bg-white border-emerald-500 ring-2 ring-emerald-500/20 shadow-sm"
-                      : "bg-white/60 border-slate-200 opacity-60 hover:opacity-100"
-                  }`}
-                >
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-black text-slate-900 flex items-center gap-1.5">
-                      <span>🎯 2.0x Rollover</span>
-                    </span>
-                    <span className={`w-4 h-4 rounded-full border flex items-center justify-center ${
-                      cronConfig.enable_rollover_2x ? "bg-emerald-500 border-emerald-600 text-white" : "border-slate-300 bg-white"
-                    }`}>
-                      {cronConfig.enable_rollover_2x && <Check className="w-3 h-3 text-white" />}
-                    </span>
-                  </div>
-                  <p className="text-[11px] text-slate-500 mt-2 font-medium leading-relaxed">
-                    2–3 Ultra-safe banker legs (Double Chance, Over 1.5, Team Goals). Target ~85% joint win rate.
-                  </p>
-                  <div className="mt-2.5 pt-2 border-t border-slate-100 flex items-center justify-between text-[10px] font-bold">
-                    <span className="text-emerald-700 font-black">2.00x Target</span>
-                    <span className="text-slate-400">Slip #1</span>
-                  </div>
-                </div>
-
-                {/* 5.0x Value Acca Card */}
-                <div
-                  onClick={() => setCronConfig(prev => ({ ...prev, enable_acca_5x: !prev.enable_acca_5x }))}
-                  className={`p-3.5 rounded-2xl border transition-all cursor-pointer flex flex-col justify-between ${
-                    cronConfig.enable_acca_5x
-                      ? "bg-white border-indigo-500 ring-2 ring-indigo-500/20 shadow-sm"
-                      : "bg-white/60 border-slate-200 opacity-60 hover:opacity-100"
-                  }`}
-                >
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-black text-slate-900 flex items-center gap-1.5">
-                      <span>🔥 5.0x Value Acca</span>
-                    </span>
-                    <span className={`w-4 h-4 rounded-full border flex items-center justify-center ${
-                      cronConfig.enable_acca_5x ? "bg-indigo-600 border-indigo-700 text-white" : "border-slate-300 bg-white"
-                    }`}>
-                      {cronConfig.enable_acca_5x && <Check className="w-3 h-3 text-white" />}
-                    </span>
-                  </div>
-                  <p className="text-[11px] text-slate-500 mt-2 font-medium leading-relaxed">
-                    4–7 Vetted picks. Zero fixture clash with Rollover. Dixon-Coles expected value edge.
-                  </p>
-                  <div className="mt-2.5 pt-2 border-t border-slate-100 flex items-center justify-between text-[10px] font-bold">
-                    <span className="text-indigo-700 font-black">5.00x Target</span>
-                    <span className="text-slate-400">Slip #2</span>
-                  </div>
-                </div>
-
-                {/* 10.0x Mega Multiplier Card */}
-                <div
-                  onClick={() => setCronConfig(prev => ({ ...prev, enable_acca_10x: !prev.enable_acca_10x }))}
-                  className={`p-3.5 rounded-2xl border transition-all cursor-pointer flex flex-col justify-between ${
-                    cronConfig.enable_acca_10x
-                      ? "bg-white border-amber-500 ring-2 ring-amber-500/20 shadow-sm"
-                      : "bg-white/60 border-slate-200 opacity-60 hover:opacity-100"
-                  }`}
-                >
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-black text-slate-900 flex items-center gap-1.5">
-                      <span>⚡ 10.0x Mega Multiplier</span>
-                    </span>
-                    <span className={`w-4 h-4 rounded-full border flex items-center justify-center ${
-                      cronConfig.enable_acca_10x ? "bg-amber-500 border-amber-600 text-white" : "border-slate-300 bg-white"
-                    }`}>
-                      {cronConfig.enable_acca_10x && <Check className="w-3 h-3 text-white" />}
-                    </span>
-                  </div>
-                  <p className="text-[11px] text-slate-500 mt-2 font-medium leading-relaxed">
-                    7–12 Dominance picks. 100% unique fixtures across all 3 tickets. High payout potential.
-                  </p>
-                  <div className="mt-2.5 pt-2 border-t border-slate-100 flex items-center justify-between text-[10px] font-bold">
-                    <span className="text-amber-700 font-black">10.00x Target</span>
-                    <span className="text-slate-400">Slip #3</span>
-                  </div>
-                </div>
+            )}
+            {cronError && (
+              <div className="px-4 py-2 bg-rose-50 border-t border-rose-200 text-rose-800 text-xs font-bold flex items-center gap-2">
+                <AlertCircle className="w-3.5 h-3.5 text-rose-600 flex-shrink-0" />
+                <span>{cronError}</span>
               </div>
-            </div>
-
-            {/* Campaign Mode Tabs: Compounding Challenge vs Continuous Schedule */}
-            <div className="space-y-4 relative z-10">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                <div>
-                  <h3 className="text-xs font-black text-slate-900 uppercase tracking-wider flex items-center gap-1.5">
-                    <Target className="w-3.5 h-3.5 text-indigo-600" />
-                    <span>1. Campaign Execution Mode & Duration</span>
-                  </h3>
-                  <p className="text-[11px] text-slate-500 font-medium mt-0.5">
-                    Choose how long the bot runs: a dedicated compounding ladder (e.g. 10 days) or continuous daily schedule.
-                  </p>
-                </div>
-
-                {/* Mode Switcher Pills */}
-                <div className="flex items-center p-1 bg-slate-100 rounded-xl border border-slate-200 self-start sm:self-center">
-                  <button
-                    type="button"
-                    onClick={() => setCronConfig(prev => ({ ...prev, campaign_mode: "CHALLENGE" }))}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-black transition-all flex items-center gap-1.5 cursor-pointer ${
-                      cronConfig.campaign_mode === "CHALLENGE"
-                        ? "bg-white text-indigo-700 shadow-sm border border-slate-200/80 font-black"
-                        : "text-slate-600 hover:text-slate-900"
-                    }`}
-                  >
-                    <TrendingUp className="w-3.5 h-3.5" />
-                    <span>Compounding Challenge</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setCronConfig(prev => ({ ...prev, campaign_mode: "CONTINUOUS" }))}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-black transition-all flex items-center gap-1.5 cursor-pointer ${
-                      cronConfig.campaign_mode === "CONTINUOUS"
-                        ? "bg-white text-indigo-700 shadow-sm border border-slate-200/80 font-black"
-                        : "text-slate-600 hover:text-slate-900"
-                    }`}
-                  >
-                    <Calendar className="w-3.5 h-3.5" />
-                    <span>Continuous Schedule</span>
-                  </button>
-                </div>
+            )}
+            {telegramStatus && (
+              <div className="px-4 py-2 bg-sky-50 border-t border-sky-200 text-sky-800 text-xs font-bold flex items-center gap-2">
+                <Info className="w-3.5 h-3.5 text-sky-600 flex-shrink-0" />
+                <span>{telegramStatus.msg}</span>
               </div>
+            )}
 
-              {/* Mode Specific Controls */}
-              {cronConfig.campaign_mode === "CHALLENGE" ? (
-                /* CHALLENGE MODE CONTROLS */
-                <div className="bg-gradient-to-br from-indigo-50/50 via-slate-50 to-emerald-50/40 border border-indigo-100 p-4 sm:p-5 rounded-2xl space-y-4">
-                  {/* Preset Duration Chips */}
-                  <div>
-                    <label className="text-[11px] font-black text-slate-700 uppercase tracking-wider block mb-2">
-                      Select Challenge Duration (How many days the bot runs):
-                    </label>
-                    <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
-                      {[
-                        { days: 3, label: "Weekend Sprint", desc: "3 Days" },
-                        { days: 5, label: "5-Day Doubler", desc: "5 Days" },
-                        { days: 7, label: "Weekly Ladder", desc: "7 Days" },
-                        { days: 10, label: "10-Day Power", desc: "10 Days", recommended: true },
-                        { days: "CUSTOM", label: "Custom Days", desc: `${cronConfig.challenge_days} Days` }
-                      ].map(item => {
-                        const isSelected = item.days === "CUSTOM"
-                          ? ![3, 5, 7, 10].includes(cronConfig.challenge_days)
-                          : cronConfig.challenge_days === item.days;
-                        return (
-                          <button
-                            key={item.label}
-                            type="button"
-                            onClick={() => {
-                              if (item.days !== "CUSTOM") {
-                                setCronConfig(prev => ({ ...prev, challenge_days: item.days }));
-                              }
-                            }}
-                            className={`p-2.5 rounded-xl border text-left transition-all relative cursor-pointer ${
-                              isSelected
-                                ? "bg-white border-indigo-500 shadow-md shadow-indigo-100 ring-2 ring-indigo-500/20"
-                                : "bg-white/80 border-slate-200 hover:border-slate-300 hover:bg-white text-slate-700"
-                            }`}
-                          >
-                            {item.recommended && (
-                              <span className="absolute -top-2 right-2 px-1.5 py-0.2 rounded-full text-[9px] font-black bg-emerald-500 text-white shadow-xs">
-                                Recommended
-                              </span>
-                            )}
-                            <span className="text-xs font-black block text-slate-900">{item.label}</span>
-                            <span className="text-[10px] text-slate-500 font-bold block mt-0.5">{item.desc}</span>
-                          </button>
-                        );
-                      })}
-                    </div>
-
-                    {/* Custom days stepper if not in preset */}
-                    {![3, 5, 7, 10].includes(cronConfig.challenge_days) && (
-                      <div className="mt-3 flex items-center gap-3 bg-white p-3 rounded-xl border border-indigo-200 max-w-sm">
-                        <span className="text-xs font-black text-slate-700">Custom Days:</span>
-                        <div className="flex items-center gap-2">
-                          <button
-                            type="button"
-                            onClick={() => setCronConfig(prev => ({ ...prev, challenge_days: Math.max(1, (prev.challenge_days || 10) - 1) }))}
-                            className="w-7 h-7 rounded-lg bg-slate-100 hover:bg-slate-200 font-bold flex items-center justify-center text-xs text-slate-800"
-                          >
-                            -
-                          </button>
-                          <input
-                            type="number"
-                            min="1"
-                            max="30"
-                            value={cronConfig.challenge_days || 10}
-                            onChange={(e) => setCronConfig(prev => ({ ...prev, challenge_days: Math.max(1, parseInt(e.target.value) || 1) }))}
-                            className="w-14 text-center py-1 rounded-lg border border-slate-200 font-black text-xs text-slate-900"
-                          />
-                          <button
-                            type="button"
-                            onClick={() => setCronConfig(prev => ({ ...prev, challenge_days: Math.min(30, (prev.challenge_days || 10) + 1) }))}
-                            className="w-7 h-7 rounded-lg bg-slate-100 hover:bg-slate-200 font-bold flex items-center justify-center text-xs text-slate-800"
-                          >
-                            +
-                          </button>
-                          <span className="text-xs font-bold text-slate-500">Days</span>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Compounding Ladder Progress & Stake Config */}
-                  <div className="bg-white border border-slate-200/90 rounded-xl p-4 space-y-3.5">
-                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            {/* EXPANDED SETTINGS DRAWER */}
+            {isAutomationDrawerOpen && (
+              <div className="p-4 sm:p-6 border-t border-slate-200 space-y-5 bg-slate-50/70">
+                {/* 1. Slips Selector Grid */}
+                <div className="space-y-2">
+                  <label className="text-xs font-black text-slate-800 uppercase tracking-wider block">
+                    1. Active Slips to Dispatch (Adaptive Calendar Engine)
+                  </label>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    {/* 2.0x Rollover Card */}
+                    <div
+                      onClick={() => setCronConfig(prev => ({ ...prev, enable_rollover_2x: !prev.enable_rollover_2x }))}
+                      className={`p-3 rounded-xl border transition-all cursor-pointer flex items-center justify-between ${
+                        cronConfig.enable_rollover_2x
+                          ? "bg-white border-emerald-500 ring-2 ring-emerald-500/20 shadow-xs"
+                          : "bg-white/60 border-slate-200 opacity-60"
+                      }`}
+                    >
                       <div>
-                        <div className="flex items-center gap-2">
-                          <span className="text-xs font-black text-slate-900">
-                            Current Challenge Status:
-                          </span>
-                          <span className="px-2 py-0.5 rounded-md text-[10px] font-black bg-emerald-50 text-emerald-700 border border-emerald-200">
-                            Day {cronConfig.challenge_day_current || 1} of {cronConfig.challenge_days || 10}
-                          </span>
-                        </div>
-                        <p className="text-[11px] text-slate-500 font-medium mt-0.5">
-                          At 2.00x daily target, the initial stake doubles each day until completing Day {cronConfig.challenge_days || 10}.
-                        </p>
+                        <span className="text-xs font-black text-slate-900 block">🎯 2.0x Rollover</span>
+                        <span className="text-[10px] text-slate-500 font-medium">3–4 Banker Legs (100% Isolated)</span>
                       </div>
-
-                      {/* Starting Stake Stepper */}
-                      <div className="flex items-center gap-2">
-                        <span className="text-[11px] font-black text-slate-600">Starting Stake:</span>
-                        <div className="flex items-center bg-slate-50 rounded-lg border border-slate-200 px-2 py-1">
-                          <span className="text-xs font-bold text-slate-400 mr-1">₦</span>
-                          <input
-                            type="number"
-                            step="1000"
-                            min="500"
-                            value={cronConfig.starting_stake || 5000}
-                            onChange={(e) => setCronConfig(prev => ({ ...prev, starting_stake: Math.max(100, parseFloat(e.target.value) || 100) }))}
-                            className="w-20 bg-transparent text-xs font-black text-slate-900 focus:outline-none"
-                          />
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => handleResetChallenge(cronConfig.challenge_days || 10, cronConfig.starting_stake || 5000)}
-                          disabled={cronLoading}
-                          className="px-2.5 py-1.5 rounded-lg text-[10px] font-black bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-200 transition-all flex items-center gap-1 cursor-pointer"
-                          title="Restart challenge from Day 1"
-                        >
-                          <RotateCcw className="w-3 h-3" />
-                          <span>Reset to Day 1</span>
-                        </button>
-                      </div>
-                    </div>
-
-                    {/* Progress Bar */}
-                    <div className="space-y-1.5">
-                      <div className="flex items-center justify-between text-[10px] font-black text-slate-500">
-                        <span>Day 1 (Start)</span>
-                        <span className="text-indigo-600 font-extrabold">
-                          {Math.round(((cronConfig.challenge_day_current || 1) / (cronConfig.challenge_days || 10)) * 100)}% Complete
-                        </span>
-                        <span>Day {cronConfig.challenge_days || 10} Goal: {formatNGN((cronConfig.starting_stake || 5000) * Math.pow(cronConfig.target_odds || 2.00, cronConfig.challenge_days || 10))}</span>
-                      </div>
-                      <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
-                        <div
-                          className="bg-gradient-to-r from-emerald-500 to-indigo-600 h-full rounded-full transition-all duration-500"
-                          style={{
-                            width: `${Math.min(100, Math.max(5, ((cronConfig.challenge_day_current || 1) / (cronConfig.challenge_days || 10)) * 100))}%`
-                          }}
-                        />
-                      </div>
-                    </div>
-
-                    {/* Toggle Full Compounding Ladder Preview */}
-                    <div className="pt-1 border-t border-slate-100 flex items-center justify-between">
-                      <button
-                        type="button"
-                        onClick={() => setShowCompoundingLadder(!showCompoundingLadder)}
-                        className="text-xs font-bold text-indigo-600 hover:text-indigo-800 flex items-center gap-1 cursor-pointer"
-                      >
-                        <TrendingUp className="w-3.5 h-3.5" />
-                        <span>{showCompoundingLadder ? "Hide Compounding Ladder" : `View Compounding Ladder (${cronConfig.challenge_days || 10} Days Projection)`}</span>
-                        {showCompoundingLadder ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
-                      </button>
-                      <span className="text-[11px] text-slate-500 font-medium">
-                        Target Return: <b className="text-emerald-600 font-black">{formatNGN((cronConfig.starting_stake || 5000) * Math.pow(cronConfig.target_odds || 2.00, cronConfig.challenge_days || 10))}</b>
+                      <span className={`w-4 h-4 rounded-full border flex items-center justify-center ${
+                        cronConfig.enable_rollover_2x ? "bg-emerald-500 border-emerald-600 text-white" : "border-slate-300 bg-white"
+                      }`}>
+                        {cronConfig.enable_rollover_2x && <Check className="w-3 h-3 text-white" />}
                       </span>
                     </div>
 
-                    {/* Expanded Compounding Steps Ladder */}
-                    {showCompoundingLadder && (
-                      <div className="mt-2 pt-2 border-t border-slate-100 overflow-x-auto">
-                        <div className="flex gap-2 pb-1 min-w-max">
-                          {calculateCompoundingLadder(cronConfig.starting_stake || 5000, cronConfig.challenge_days || 10, cronConfig.target_odds || 2.00).map(step => {
-                            const isCurrent = step.day === (cronConfig.challenge_day_current || 1);
-                            const isPast = step.day < (cronConfig.challenge_day_current || 1);
-                            return (
-                              <div
-                                key={step.day}
-                                className={`p-2.5 rounded-xl border text-center min-w-[105px] transition-all ${
-                                  isCurrent
-                                    ? "bg-emerald-50 border-emerald-400 ring-2 ring-emerald-400/30 shadow-sm"
-                                    : isPast
-                                    ? "bg-slate-50 border-slate-200 opacity-60"
-                                    : "bg-white border-slate-200"
-                                }`}
-                              >
-                                <span className={`text-[10px] font-black uppercase block ${isCurrent ? "text-emerald-700" : "text-slate-500"}`}>
-                                  Day {step.day} {isCurrent && "• Today"}
-                                </span>
-                                <span className="text-[10px] text-slate-400 font-bold block mt-0.5">Stake: {formatNGN(step.stake)}</span>
-                                <span className="text-xs font-black text-slate-900 block mt-1">
-                                  {formatNGN(step.return)}
-                                </span>
-                                <span className="text-[9px] text-emerald-600 font-extrabold block">@{step.targetOdds.toFixed(2)}x</span>
-                              </div>
-                            );
-                          })}
-                        </div>
+                    {/* 10.0x Mega Acca Card */}
+                    <div
+                      onClick={() => setCronConfig(prev => ({ ...prev, enable_acca_10x: !prev.enable_acca_10x }))}
+                      className={`p-3 rounded-xl border transition-all cursor-pointer flex items-center justify-between ${
+                        cronConfig.enable_acca_10x
+                          ? "bg-white border-indigo-500 ring-2 ring-indigo-500/20 shadow-xs"
+                          : "bg-white/60 border-slate-200 opacity-60"
+                      }`}
+                    >
+                      <div>
+                        <span className="text-xs font-black text-slate-900 block">🔥 10.0x Mega Acca</span>
+                        <span className="text-[10px] text-slate-500 font-medium">10–12 Vetted Legs (~10.0x Target)</span>
                       </div>
-                    )}
+                      <span className={`w-4 h-4 rounded-full border flex items-center justify-center ${
+                        cronConfig.enable_acca_10x ? "bg-indigo-600 border-indigo-700 text-white" : "border-slate-300 bg-white"
+                      }`}>
+                        {cronConfig.enable_acca_10x && <Check className="w-3 h-3 text-white" />}
+                      </span>
+                    </div>
+
+                    {/* 20.0x Monster Acca Card */}
+                    <div
+                      onClick={() => setCronConfig(prev => ({ ...prev, enable_acca_20x: !prev.enable_acca_20x }))}
+                      className={`p-3 rounded-xl border transition-all cursor-pointer flex items-center justify-between ${
+                        cronConfig.enable_acca_20x
+                          ? "bg-white border-amber-500 ring-2 ring-amber-500/20 shadow-xs"
+                          : "bg-white/60 border-slate-200 opacity-60"
+                      }`}
+                    >
+                      <div>
+                        <span className="text-xs font-black text-slate-900 block">⚡ 20.0x Monster Acca</span>
+                        <span className="text-[10px] text-slate-500 font-medium">13–15 Dominance Legs (15 Max)</span>
+                      </div>
+                      <span className={`w-4 h-4 rounded-full border flex items-center justify-center ${
+                        cronConfig.enable_acca_20x ? "bg-amber-500 border-amber-600 text-white" : "border-slate-300 bg-white"
+                      }`}>
+                        {cronConfig.enable_acca_20x && <Check className="w-3 h-3 text-white" />}
+                      </span>
+                    </div>
                   </div>
                 </div>
-              ) : (
-                /* CONTINUOUS SCHEDULE CONTROLS */
-                <div className="bg-slate-50 border border-slate-200 p-4 rounded-2xl space-y-3">
+
+                {/* 2. Schedule Days & Dispatch Time */}
+                <div className="space-y-2">
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                    <label className="text-xs font-black text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
+                    <label className="text-xs font-black text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
                       <Calendar className="w-3.5 h-3.5 text-indigo-600" />
-                      <span>Active Weekly Schedule Days</span>
+                      <span>2. Active Days & Dispatch Time</span>
                     </label>
                     <div className="flex items-center gap-2">
-                      <span className="text-[11px] font-bold text-slate-500">
-                        Dispatches at:
-                      </span>
+                      <span className="text-[11px] font-bold text-slate-500">Time:</span>
                       <input
                         type="time"
                         value={cronConfig.dispatch_time || "10:00"}
                         onChange={(e) => setCronConfig(prev => ({ ...prev, dispatch_time: e.target.value }))}
-                        className="bg-white border border-slate-300 text-slate-900 rounded-lg px-2 py-0.5 text-xs font-black focus:outline-none focus:border-indigo-500 shadow-xs"
+                        className="bg-white border border-slate-300 text-slate-900 rounded-lg px-2 py-0.5 text-xs font-black focus:outline-none"
                       />
                       <span className="text-[10px] font-black text-indigo-700 bg-indigo-50 px-1.5 py-0.5 rounded border border-indigo-200">
                         WAT
@@ -3514,10 +3270,10 @@ Slovakia vs Moldova`;
                           key={day.id}
                           type="button"
                           onClick={() => handleToggleCronDay(day.id)}
-                          className={`py-2 rounded-xl text-xs font-black transition-all border flex flex-col items-center justify-center cursor-pointer ${
+                          className={`py-1.5 rounded-lg text-xs font-black transition-all border flex items-center justify-center cursor-pointer ${
                             isSelected
-                              ? "bg-indigo-600 border-indigo-600 text-white shadow-sm"
-                              : "bg-white border-slate-200 text-slate-500 hover:border-slate-300 hover:text-slate-800"
+                              ? "bg-indigo-600 border-indigo-600 text-white shadow-xs"
+                              : "bg-white border-slate-200 text-slate-500 hover:border-slate-300"
                           }`}
                         >
                           <span>{day.label}</span>
@@ -3532,274 +3288,142 @@ Slovakia vs Moldova`;
                     <button
                       type="button"
                       onClick={() => setCronConfig(prev => ({ ...prev, active_days: ["FRI", "SAT", "SUN"] }))}
-                      className="px-2.5 py-1 rounded-lg text-[10px] font-black bg-white border border-slate-200 text-slate-700 hover:bg-slate-100 transition-all cursor-pointer"
+                      className="px-2 py-0.5 rounded text-[10px] font-bold bg-white border border-slate-200 text-slate-700 hover:bg-slate-100"
                     >
                       Weekend (Fri–Sun)
                     </button>
                     <button
                       type="button"
                       onClick={() => setCronConfig(prev => ({ ...prev, active_days: ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"] }))}
-                      className="px-2.5 py-1 rounded-lg text-[10px] font-black bg-white border border-slate-200 text-slate-700 hover:bg-slate-100 transition-all cursor-pointer"
+                      className="px-2 py-0.5 rounded text-[10px] font-bold bg-white border border-slate-200 text-slate-700 hover:bg-slate-100"
                     >
                       Daily (All 7 Days)
                     </button>
+                  </div>
+                </div>
+
+                {/* 3. Safety Odds Corridor Ceiling */}
+                <div className="space-y-2">
+                  <label className="text-xs font-black text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
+                    <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
+                    <span>3. Max Single-Leg Odds Ceiling</span>
+                  </label>
+                  <div className="grid grid-cols-3 gap-2">
+                    {[
+                      { val: 1.35, label: "1.35x Max", desc: "Ultra-Tight" },
+                      { val: 1.40, label: "1.40x Max", desc: "Balanced" },
+                      { val: 1.45, label: "1.45x Max", desc: "Standard Golden Corridor" },
+                    ].map(corridor => {
+                      const isSel = Math.abs((cronConfig.max_leg_odds || 1.45) - corridor.val) < 0.02;
+                      return (
+                        <button
+                          key={corridor.val}
+                          type="button"
+                          onClick={() => setCronConfig(prev => ({ ...prev, max_leg_odds: corridor.val }))}
+                          className={`p-2 rounded-xl border text-left transition-all cursor-pointer ${
+                            isSel
+                              ? "bg-emerald-50 border-emerald-500 ring-2 ring-emerald-500/20 text-emerald-950 font-black shadow-xs"
+                              : "bg-white border-slate-200 hover:border-slate-300 text-slate-700 font-bold"
+                          }`}
+                        >
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs font-black">{corridor.label}</span>
+                            {isSel && <span className="w-2 h-2 rounded-full bg-emerald-600" />}
+                          </div>
+                          <span className="text-[10px] text-slate-500 block mt-0.5">{corridor.desc}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Footer Buttons: Save, Test Telegram Ping, Collapse */}
+                <div className="pt-2 border-t border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="flex items-center gap-2">
                     <button
                       type="button"
-                      onClick={() => setCronConfig(prev => ({ ...prev, active_days: ["TUE", "WED", "THU"] }))}
-                      className="px-2.5 py-1 rounded-lg text-[10px] font-black bg-white border border-slate-200 text-slate-700 hover:bg-slate-100 transition-all cursor-pointer"
+                      onClick={handleTestCronTelegram}
+                      disabled={telegramTesting}
+                      className="px-3 py-2 rounded-xl bg-white hover:bg-slate-100 border border-slate-200 text-slate-700 text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-xs"
                     >
-                      Midweek (Tue–Thu)
+                      {telegramTesting ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Send className="w-3 h-3" />}
+                      <span>{telegramTesting ? "Pinging..." : "Test Telegram Ping"}</span>
+                    </button>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={handleSaveCronSchedule}
+                      disabled={cronLoading}
+                      className="px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-black transition-all flex items-center gap-1.5 cursor-pointer shadow-xs"
+                    >
+                      {cronLoading ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />}
+                      <span>Save Settings</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setIsAutomationDrawerOpen(false)}
+                      className="px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold transition-all cursor-pointer"
+                    >
+                      Done / Close
                     </button>
                   </div>
                 </div>
-              )}
-            </div>
-
-            {/* Target Rollover Multiplier & Strict Safety Corridor */}
-            <div className="space-y-3.5 relative z-10">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1.5">
-                <label className="text-xs font-black text-slate-900 uppercase tracking-wider flex items-center gap-1.5">
-                  <Award className="w-3.5 h-3.5 text-indigo-600" />
-                  <span>2. Target Multiplier & Safety Corridor</span>
-                </label>
-                <div className="flex items-center gap-1.5 flex-wrap">
-                  <span className="text-[11px] font-black text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200">
-                    Floor: ≥ 1.15
-                  </span>
-                  <span className="text-[11px] font-black text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded-md border border-indigo-200">
-                    Ceiling: ≤ {(cronConfig.max_leg_odds || 1.45).toFixed(2)}x
-                  </span>
-                </div>
-              </div>
-
-              {/* Target Odds Selector Cards */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div
-                  onClick={() => setCronConfig(prev => ({ ...prev, target_odds: 2.00 }))}
-                  className={`p-4 rounded-2xl border cursor-pointer transition-all flex flex-col justify-between ${
-                    Math.abs(cronConfig.target_odds - 2.00) < 0.05
-                      ? "bg-indigo-50/70 border-indigo-500 ring-2 ring-indigo-500/20 shadow-sm"
-                      : "bg-white border-slate-200 hover:border-slate-300"
-                  }`}
-                >
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm font-black text-slate-900">~2.00x Odds</span>
-                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-800 font-black">
-                      Standard Doubler (Recommended)
-                    </span>
-                  </div>
-                  <p className="text-xs text-slate-500 mt-1.5 font-medium leading-relaxed">
-                    2–3 elite safety cushions (80%+ win rate). Perfect for 5-day or 10-day compounding ladders.
-                  </p>
-                </div>
-
-                <div
-                  onClick={() => setCronConfig(prev => ({ ...prev, target_odds: 1.50 }))}
-                  className={`p-4 rounded-2xl border cursor-pointer transition-all flex flex-col justify-between ${
-                    Math.abs(cronConfig.target_odds - 1.50) < 0.05
-                      ? "bg-indigo-50/70 border-indigo-500 ring-2 ring-indigo-500/20 shadow-sm"
-                      : "bg-white border-slate-200 hover:border-slate-300"
-                  }`}
-                >
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm font-black text-slate-900">~1.50x Odds</span>
-                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 font-black">
-                      Conservative Safe
-                    </span>
-                  </div>
-                  <p className="text-xs text-slate-500 mt-1.5 font-medium leading-relaxed">
-                    1–2 elite cushions (88%+ win rate). Ultra-low variance, highest protection.
-                  </p>
-                </div>
-              </div>
-
-              {/* Max Leg Odds Upper Bound Corridor Pills */}
-              <div className="bg-slate-50 border border-slate-200/90 rounded-2xl p-3.5 space-y-2">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1">
-                  <span className="text-xs font-black text-slate-800 flex items-center gap-1.5">
-                    <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
-                    <span>Single-Leg Safety Corridor Ceiling (Max Odds)</span>
-                  </span>
-                  <span className="text-[11px] font-bold text-slate-500">
-                    Bans any leg above ceiling to eliminate high-variance traps
-                  </span>
-                </div>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                  {[
-                    { val: 1.35, label: "1.35x Max", desc: "Ultra-Safe Corridor" },
-                    { val: 1.40, label: "1.40x Max", desc: "Tight Corridor" },
-                    { val: 1.45, label: "1.45x Max", desc: "Standard (Recommended)" },
-                  ].map(corridor => {
-                    const isSel = Math.abs((cronConfig.max_leg_odds || 1.45) - corridor.val) < 0.02;
-                    return (
-                      <button
-                        key={corridor.val}
-                        type="button"
-                        onClick={() => setCronConfig(prev => ({ ...prev, max_leg_odds: corridor.val }))}
-                        className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer ${
-                          isSel
-                            ? "bg-emerald-50 border-emerald-500 ring-2 ring-emerald-500/20 text-emerald-950 font-black shadow-xs"
-                            : "bg-white border-slate-200 hover:border-slate-300 text-slate-700 font-bold"
-                        }`}
-                      >
-                        <div className="flex items-center justify-between">
-                          <span className="text-xs font-black">{corridor.label}</span>
-                          {isSel && <span className="w-2 h-2 rounded-full bg-emerald-600" />}
-                        </div>
-                        <span className="text-[10px] text-slate-500 block mt-0.5 font-medium">{corridor.desc}</span>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-            </div>
-
-            {/* TRANSPARENT 5-GATE PREDICTION ENGINE INSPECTOR (Addresses User Concerns) */}
-            <div className="bg-slate-50 border border-slate-200/90 rounded-2xl p-4 sm:p-5 space-y-3 relative z-10">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                <div className="flex items-center gap-2">
-                  <div className="w-7 h-7 rounded-lg bg-emerald-100 text-emerald-700 flex items-center justify-center flex-shrink-0">
-                    <ShieldCheck className="w-4 h-4" />
-                  </div>
-                  <div>
-                    <span className="text-xs font-black text-slate-900 block">
-                      Deterministic Selection Architecture (Zero Randomness)
-                    </span>
-                    <span className="text-[11px] text-slate-500 font-medium block">
-                      Every pick is mathematically audited against SportyBet's live feeds through 5 non-random gates.
-                    </span>
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setShowQualityGates(!showQualityGates)}
-                  className="text-xs font-black text-indigo-600 hover:text-indigo-800 flex items-center gap-1 cursor-pointer self-start sm:self-center"
-                >
-                  <span>{showQualityGates ? "Hide Gates" : "Inspect 5 Quality Gates"}</span>
-                  {showQualityGates ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
-                </button>
-              </div>
-
-              {/* 5-Gate Details */}
-              {showQualityGates && (
-                <div className="grid grid-cols-1 sm:grid-cols-5 gap-2.5 pt-2 border-t border-slate-200/70">
-                  <div className="p-3 bg-white rounded-xl border border-slate-200 space-y-1">
-                    <span className="text-[10px] font-black text-indigo-600 uppercase block">Gate 1: Ingestion</span>
-                    <p className="text-xs font-black text-slate-900">SportyBet Today Feed</p>
-                    <p className="text-[10px] text-slate-500">Live API only. Unlocked, active, non-suspended markets with ≥ 10m to kickoff.</p>
-                  </div>
-                  <div className="p-3 bg-white rounded-xl border border-slate-200 space-y-1">
-                    <span className="text-[10px] font-black text-rose-600 uppercase block">Gate 2: Anti-Noise</span>
-                    <p className="text-xs font-black text-slate-900">Zero Obscure Leagues</p>
-                    <p className="text-[10px] text-slate-500">Auto-rejects U19/U21 youth tournaments, reserves, B-teams, and simulated SRL.</p>
-                  </div>
-                  <div className="p-3 bg-white rounded-xl border border-slate-200 space-y-1">
-                    <span className="text-[10px] font-black text-amber-600 uppercase block">Gate 3: Pedigree</span>
-                    <p className="text-xs font-black text-slate-900">Tier Pedigree System</p>
-                    <p className="text-[10px] text-slate-500">Tier 1 & European/FIFA competitions get +25 pt priority score boost.</p>
-                  </div>
-                  <div className="p-3 bg-white rounded-xl border border-slate-200 space-y-1">
-                    <span className="text-[10px] font-black text-emerald-600 uppercase block">Gate 4: Modeling & Form</span>
-                    <p className="text-xs font-black text-slate-900">H2H & 5-Match Form Audit</p>
-                    <p className="text-[10px] text-slate-500">Direct SportyBet ingestion. Vets H2H win rates, 5-match form consistency, and enforces safety corridor [1.15 ≤ Odds ≤ Max].</p>
-                  </div>
-                  <div className="p-3 bg-white rounded-xl border border-slate-200 space-y-1">
-                    <span className="text-[10px] font-black text-purple-600 uppercase block">Gate 5: Combinatorics</span>
-                    <p className="text-xs font-black text-slate-900">Deterministic Optimizer</p>
-                    <p className="text-[10px] text-slate-500">Evaluates top 50 ranked picks across 2-, 3-, and 4-leg permutations for highest joint probability.</p>
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* Telegram Channel Bar & Primary Actions */}
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-4 border-t border-slate-100 relative z-10">
-              <div className="flex items-center gap-2.5">
-                <div className="w-9 h-9 rounded-xl bg-sky-50 border border-sky-200 flex items-center justify-center text-sky-600 flex-shrink-0">
-                  <Send className="w-4 h-4" />
-                </div>
-                <div>
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs font-black text-slate-900">Telegram Dispatch Channel</span>
-                    <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                  </div>
-                  <span className="text-[10px] text-slate-500">Delivers booking codes and analysis directly to your Telegram chat at 10:00 AM WAT</span>
-                </div>
-                <button
-                  type="button"
-                  onClick={handleTestCronTelegram}
-                  disabled={telegramTesting}
-                  className="ml-2 px-2.5 py-1.5 rounded-lg text-[10px] font-black bg-sky-50 text-sky-700 hover:bg-sky-100 border border-sky-200 transition-all cursor-pointer flex items-center gap-1 shadow-xs"
-                >
-                  {telegramTesting ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Send className="w-3 h-3" />}
-                  <span>{telegramTesting ? "Sending..." : "Test Ping"}</span>
-                </button>
-              </div>
-
-              {/* Action Buttons: Save & Run Now */}
-              <div className="flex items-center gap-2.5 flex-wrap">
-                <button
-                  type="button"
-                  onClick={handleSaveCronSchedule}
-                  disabled={cronLoading}
-                  className="px-4 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-black border border-slate-200 transition-all flex items-center gap-1.5 cursor-pointer shadow-xs"
-                >
-                  {cronLoading ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />}
-                  <span>Save Settings</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={handleRunCronNow}
-                  disabled={cronRunningNow}
-                  className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-emerald-600 via-teal-600 to-indigo-600 hover:from-emerald-700 hover:to-indigo-700 text-white text-xs font-black shadow-lg shadow-emerald-600/20 transition-all flex items-center gap-2 cursor-pointer"
-                >
-                  {cronRunningNow ? <RefreshCw className="w-4 h-4 animate-spin text-white" /> : <Play className="w-4 h-4 text-white fill-white" />}
-                  <span>{cronRunningNow ? "Sweeping & Booking 3 Zero-Overlap Slips..." : "🚀 Run & Dispatch Active Slips Now"}</span>
-                </button>
-              </div>
-            </div>
-
-            {/* Notifications / Alerts */}
-            {telegramStatus && (
-              <div className={`p-3 rounded-xl text-xs font-bold flex items-center gap-2 ${
-                telegramStatus.type === "SUCCESS"
-                  ? "bg-sky-50 border border-sky-200 text-sky-800"
-                  : "bg-rose-50 border border-rose-200 text-rose-800"
-              }`}>
-                <Info className="w-4 h-4 flex-shrink-0" />
-                <span>{telegramStatus.msg}</span>
-              </div>
-            )}
-
-            {cronNotice && (
-              <div className="p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-bold flex items-center gap-2">
-                <CheckCircle className="w-4 h-4 text-emerald-600 flex-shrink-0" />
-                <span>{cronNotice}</span>
-              </div>
-            )}
-
-            {cronError && (
-              <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-bold flex items-center gap-2">
-                <AlertCircle className="w-4 h-4 text-rose-600 flex-shrink-0" />
-                <span>{cronError}</span>
               </div>
             )}
           </div>
 
-          {/* LIVE DISPATCHED VIP SLIPS (TRIO WITH ZERO-OVERLAP GUARANTEE) */}
+          {/* LIVE DISPATCHED VIP SLIPS (TRIO WITH ADAPTIVE CALENDAR ENGINE) */}
           {(() => {
             const activeTrio = trioResult || cronConfig.last_trio_result;
             const currentTicket = (activeTrioTab === "ROLLOVER" 
               ? (activeTrio?.rollover_ticket || cronTicketResult)
-              : activeTrioTab === "ACCA_5X"
-              ? activeTrio?.acca_5x_ticket
-              : activeTrio?.acca_10x_ticket) || cronTicketResult;
+              : activeTrioTab === "ACCA_10X"
+              ? (activeTrio?.acca_10x_ticket || activeTrio?.acca_5x_ticket)
+              : (activeTrio?.acca_20x_ticket || activeTrio?.acca_10x_ticket)) || cronTicketResult;
 
-            if (!currentTicket && !activeTrio) return null;
+            if (!currentTicket && !activeTrio) {
+              return (
+                <div className="bg-white rounded-3xl border border-slate-200 p-8 shadow-sm text-center space-y-3">
+                  <div className="w-12 h-12 rounded-2xl bg-emerald-50 border border-emerald-200 flex items-center justify-center mx-auto text-emerald-600">
+                    <Award className="w-6 h-6" />
+                  </div>
+                  <h4 className="text-sm font-black text-slate-800">No Live Dispatched Slips For Today Yet</h4>
+                  <p className="text-xs text-slate-500 max-w-md mx-auto">
+                    The automated calendar engine runs at 10:00 AM WAT on active days. You can also click <b>"Run Now ⚡"</b> above to trigger today's fresh slips instantly.
+                  </p>
+                </div>
+              );
+            }
+
+            const isPreviousDay = Boolean(
+              currentTicket?.date_str &&
+              !currentTicket.date_str.toLowerCase().includes("today") &&
+              currentTicket.date_str !== new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric', year: 'numeric' })
+            );
 
             return (
               <div className="bg-white rounded-3xl border border-slate-200 p-6 shadow-sm space-y-5">
+                {/* Previous Day Notice Banner */}
+                {isPreviousDay && (
+                  <div className="flex items-center justify-between p-3 rounded-2xl bg-amber-50 border border-amber-200 text-amber-900 text-xs font-semibold">
+                    <div className="flex items-center gap-2">
+                      <Clock className="w-4 h-4 text-amber-600 flex-shrink-0" />
+                      <span><b>Previous Day's Dispatch ({currentTicket.date_str})</b> · This slip ran on a previous day and matches have concluded.</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleClearLastSlip}
+                      className="px-2.5 py-1 rounded-xl bg-amber-200/90 hover:bg-amber-300 text-amber-900 text-[11px] font-bold transition-all cursor-pointer flex items-center gap-1 shadow-xs"
+                    >
+                      <Trash2 className="w-3 h-3" />
+                      <span>Dismiss / Clear</span>
+                    </button>
+                  </div>
+                )}
+
                 {/* 3-Ticket Tab Switcher */}
                 {activeTrio && (
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100">
@@ -3823,34 +3447,34 @@ Slovakia vs Moldova`;
 
                       <button
                         type="button"
-                        onClick={() => setActiveTrioTab("ACCA_5X")}
+                        onClick={() => setActiveTrioTab("ACCA_10X")}
                         className={`px-3.5 py-2 rounded-xl text-xs font-black transition-all flex items-center gap-1.5 cursor-pointer whitespace-nowrap ${
-                          activeTrioTab === "ACCA_5X"
+                          activeTrioTab === "ACCA_10X"
                             ? "bg-white text-indigo-800 shadow-sm border border-slate-200/80"
                             : "text-slate-600 hover:text-slate-900"
                         }`}
                       >
-                        <span>🔥 5.0x Value Acca</span>
-                        {activeTrio.acca_5x_ticket && (
+                        <span>🔥 10.0x Mega Acca</span>
+                        {(activeTrio.acca_10x_ticket || activeTrio.acca_5x_ticket) && (
                           <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-indigo-100 text-indigo-800 font-extrabold">
-                            {activeTrio.acca_5x_ticket.actual_odds}x
+                            {(activeTrio.acca_10x_ticket || activeTrio.acca_5x_ticket).actual_odds}x
                           </span>
                         )}
                       </button>
 
                       <button
                         type="button"
-                        onClick={() => setActiveTrioTab("ACCA_10X")}
+                        onClick={() => setActiveTrioTab("ACCA_20X")}
                         className={`px-3.5 py-2 rounded-xl text-xs font-black transition-all flex items-center gap-1.5 cursor-pointer whitespace-nowrap ${
-                          activeTrioTab === "ACCA_10X"
+                          activeTrioTab === "ACCA_20X"
                             ? "bg-white text-amber-800 shadow-sm border border-slate-200/80"
                             : "text-slate-600 hover:text-slate-900"
                         }`}
                       >
-                        <span>⚡ 10.0x Mega Multiplier</span>
-                        {activeTrio.acca_10x_ticket && (
+                        <span>⚡ 20.0x Monster Acca</span>
+                        {activeTrio.acca_20x_ticket && (
                           <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-amber-100 text-amber-800 font-extrabold">
-                            {activeTrio.acca_10x_ticket.actual_odds}x
+                            {activeTrio.acca_20x_ticket.actual_odds}x
                           </span>
                         )}
                       </button>
@@ -3859,7 +3483,11 @@ Slovakia vs Moldova`;
                     <div className="flex items-center gap-2 self-start sm:self-center">
                       <span className="px-3 py-1 rounded-full text-[10px] font-black bg-emerald-50 text-emerald-800 border border-emerald-200 flex items-center gap-1.5">
                         <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                        <span>Zero Overlap Active ({activeTrio.total_unique_fixtures || 0} Unique Fixtures)</span>
+                        <span>
+                          {activeTrio.calendar_mode === "SMART_HYBRID"
+                            ? `Smart Hybrid Mode (2.0x Sacred • ${activeTrio.total_unique_fixtures || 0} Fixtures)`
+                            : `Strict Zero Overlap (${activeTrio.total_unique_fixtures || 0} Unique Fixtures)`}
+                        </span>
                       </span>
                     </div>
                   </div>
@@ -3920,13 +3548,22 @@ Slovakia vs Moldova`;
                             <span>Load on SportyBet</span>
                             <ExternalLink className="w-3 h-3" />
                           </a>
+
+                          <button
+                            type="button"
+                            onClick={handleClearLastSlip}
+                            className="p-2 rounded-xl bg-slate-100 hover:bg-rose-50 text-slate-500 hover:text-rose-600 transition-all cursor-pointer border border-slate-200"
+                            title="Dismiss Slip"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
                         </div>
                       )}
                     </div>
 
               {/* Legs Grid */}
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-                {cronTicketResult.picks.map((p, idx) => (
+                {(currentTicket.picks || []).map((p, idx) => (
                   <div key={idx} className="p-3.5 rounded-2xl bg-slate-50 border border-slate-200/80 space-y-2">
                     <div className="flex items-center justify-between text-[11px] text-slate-500">
                       <span className="font-extrabold text-indigo-600 uppercase tracking-wider">{p.competition || "League"}</span>

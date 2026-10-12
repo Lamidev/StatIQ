@@ -804,6 +804,97 @@ async def build_ai_ticket(req: BuildTicketRequest):
     selected_lgs = req.selected_leagues or []
     is_today_live_requested = any(x.upper() in ["ALL_TODAY", "ALL_SPORTYBET", "SPORTYBET_TODAY", "ALL_WORLDWIDE", "ALL_MATCHES"] for x in selected_lgs) or (req.date_window == "TODAY")
 
+    # ── UNIFIED ENGINE: When building tickets for Today, utilize EliteRolloverEngine ──
+    # Guarantees 100% architectural parity across Website, Telegram bot, and Daily 10 AM Automation.
+    if is_today_live_requested and not req.custom_fixtures:
+        from app.services.elite_rollover_engine import EliteRolloverEngine
+        try:
+            target_odds_arg = req.target_odds if (req.target_mode == "ODDS" or req.mode.upper() == "ROLLOVER") else None
+            target_games_arg = req.target_games if req.target_mode == "GAMES" else None
+            num_t_arg = max(1, min(4, int(req.num_tickets or 1)))
+
+            elite_portfolio = await EliteRolloverEngine.generate_elite_accumulator(
+                target_odds=target_odds_arg,
+                target_games=target_games_arg,
+                num_tickets=num_t_arg,
+                excluded_event_ids=set(req.exclude_fixture_ids or [])
+            )
+
+            if elite_portfolio:
+                formatted_results = []
+                for idx, slip in enumerate(elite_portfolio):
+                    raw_legs = slip.get("approved_legs") or []
+                    legs_norm = []
+                    for leg in raw_legs:
+                        ev_id = str(leg.get("event_id") or "")
+                        legs_norm.append({
+                            "fixture_id": ev_id,
+                            "event_id": ev_id,
+                            "provider_event_id": ev_id,
+                            "game_id": ev_id,
+                            "home_team": leg.get("home_team"),
+                            "away_team": leg.get("away_team"),
+                            "competition": leg.get("competition"),
+                            "country": leg.get("country", ""),
+                            "kickoff_datetime": leg.get("kickoff_datetime") or today_str,
+                            "market_name": leg.get("market_desc", "Double Chance"),
+                            "selection_name": leg.get("selection_desc", ""),
+                            "market_desc": leg.get("market_desc", "Double Chance"),
+                            "selection_desc": leg.get("selection_desc", ""),
+                            "model_probability": leg.get("model_probability", 0.85),
+                            "estimated_odds": leg.get("odds", 1.25),
+                            "odds": leg.get("odds", 1.25),
+                            "confidence_tier": "ELITE" if leg.get("model_probability", 0.85) >= 0.88 else "HIGH",
+                            "market_id": str(leg.get("market_id", "10")),
+                            "outcome_id": str(leg.get("outcome_id", "9")),
+                            "specifier": leg.get("specifier") or "",
+                            "tactical_reason": leg.get("selection_rationale") or f"Tier Dominance ({leg.get('dominance_ratio', 1.5)}x)",
+                            "quality_score": leg.get("quality_score", 85.0),
+                            "h2h_summary": leg.get("h2h_summary", ""),
+                            "form_summary": leg.get("form_summary", "")
+                        })
+
+                    t_dict = {
+                        "ticket_index": idx + 1,
+                        "title": f"Ticket {idx+1} ({len(legs_norm)} Legs)" if num_t_arg > 1 else f"Accumulator ({len(legs_norm)} Legs)",
+                        "mode": req.mode.upper(),
+                        "target_mode": req.target_mode,
+                        "target_odds": req.target_odds,
+                        "target_games": len(legs_norm) if req.target_mode == "GAMES" else req.target_games,
+                        "accumulated_odds": slip.get("accumulated_odds", 1.0),
+                        "combined_probability": slip.get("combined_probability", 0.70),
+                        "correlation_adjusted_probability": slip.get("combined_probability", 0.70),
+                        "confidence_tier": "ELITE",
+                        "recommended_stake_pct": 5.0,
+                        "approved_legs": legs_norm,
+                        "selections": legs_norm,
+                        "rejected_picks": [],
+                        "total_evaluated": len(legs_norm),
+                        "decision_audit_summary": f"Generated via StatIQ Elite Selection Engine with Zero-Overlap and Min Odds >= 1.15x.",
+                        "booking_code": slip.get("booking_code"),
+                        "share_url": slip.get("share_url"),
+                        "flex_cut": req.flex_cut,
+                        "date_window": req.date_window,
+                        "notice": f"Built with StatIQ Elite Selection Engine (Zero-Overlap Guarantee · Min Odds ≥ 1.15x)."
+                    }
+                    formatted_results.append(t_dict)
+
+                primary = formatted_results[0]
+                return {
+                    "status": "SUCCESS",
+                    "num_tickets": len(formatted_results),
+                    "ticket": primary,
+                    "portfolio_tickets": formatted_results,
+                    "portfolio_summary": {
+                        "total_tickets": len(formatted_results),
+                        "total_unique_matches": sum(len(t["approved_legs"]) for t in formatted_results),
+                        "diversification_mode": req.overlap_mode or "ZERO_OVERLAP",
+                        "message": f"Successfully generated {len(formatted_results)} diversified tickets via Elite Selection Engine."
+                    }
+                }
+        except Exception as e:
+            logger.warning(f"[TicketBuilder] Direct EliteRolloverEngine generation error: {e}, falling back to legacy pipeline...")
+
     if req.custom_fixtures and len(req.custom_fixtures) > 0:
         fixture_pool = [_normalize_fixture_item(f, req.single_league or "PL") for f in req.custom_fixtures]
     else:

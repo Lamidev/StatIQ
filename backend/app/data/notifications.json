@@ -1,5 +1,19 @@
 [
   {
+    "id": "NOTIF-ROLLOVER-1791723442",
+    "ticket_id": "ROLLOVER-1791723442",
+    "code": "RX6BN6",
+    "mode": "ROLLOVER",
+    "title": "\ud83c\udf89 Ticket WON! \u2014 RX6BN6",
+    "message": "WON (Clean Sweep - 0 Losses) \u2022 Stake \u20a62,060.00",
+    "flex_status_text": "WON (Clean Sweep - 0 Losses)",
+    "status": "WON",
+    "odds": 1.86,
+    "potential_payout": 3831.6,
+    "created_at": "2026-10-11 22:30:30",
+    "read": true
+  },
+  {
     "id": "NOTIF-TICK-1787328778",
     "ticket_id": "TICK-1787328778",
     "code": "YNQC59",

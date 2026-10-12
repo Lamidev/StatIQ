@@ -194,9 +194,27 @@ class StatIQTelegramBot:
         }
         return self.send_message(chat_id, msg, reply_markup=keyboard)
 
-    def handle_auto_command(self, chat_id: int | str):
-        """Displays Daily VIP Automation status with 1-tap toggles and instant run button."""
+    def handle_auto_command(self, chat_id: int | str, text: str = ""):
+        """Displays Daily VIP Automation status with 1-tap toggles, or processes direct commands like /auto on, /auto off."""
         from app.services.rollover_cron_scheduler import rollover_scheduler
+
+        t_clean = text.lower().strip()
+        if " on" in t_clean or t_clean in ("/start_auto", "/autoon") or "enable" in t_clean:
+            rollover_scheduler.save_config({"is_enabled": True})
+            self.send_message(
+                chat_id,
+                "🟢 <b>Daily VIP Automation Activated!</b>\n\n"
+                "The engine will automatically book and dispatch 2.0x, 10.0x, and 20.0x slips daily at <b>10:00 AM WAT</b>.\n"
+                "Adaptive Calendar Engine is active (Weekend Strict Zero-Overlap | Weekday Smart Hybrid)."
+            )
+        elif " off" in t_clean or t_clean in ("/stop_auto", "/autooff") or "disable" in t_clean or "pause" in t_clean:
+            rollover_scheduler.save_config({"is_enabled": False})
+            self.send_message(
+                chat_id,
+                "⏸️ <b>Daily VIP Automation Paused.</b>\n\n"
+                "Scheduled 10:00 AM WAT dispatches are paused. Send <code>/auto on</code> to resume at any time."
+            )
+
         cfg = rollover_scheduler.get_config()
 
         master_on = cfg.get("is_enabled", True)
@@ -229,8 +247,8 @@ class StatIQTelegramBot:
             "🔒 <b>Adaptive Calendar Engine:</b> Weekend Strict Zero-Overlap | Weekday Smart Hybrid\n\n"
             "<b>The 3 Daily Slips:</b>\n"
             f"• 🎯 <b>2.0x Rollover:</b> {ro_icon} (3–4 Banker Legs, 100% Isolated)\n"
-            f"• ⚡ <b>10.0x Mega Multiplier:</b> {acca10_icon} (12–14 High-Dominance Legs)\n"
-            f"• 🚀 <b>20.0x Monster Acca:</b> {acca20_icon} (15–18 Vetted Legs, replacing 5.0x)\n\n"
+            f"• ⚡ <b>10.0x Mega Multiplier:</b> {acca10_icon} (10–12 High-Dominance Legs)\n"
+            f"• 🚀 <b>20.0x Monster Acca:</b> {acca20_icon} (13–15 Dominance Legs, 15 Max)\n\n"
             "<i>Tap any button below to toggle tickets on/off, cycle active days, or dispatch today's slips instantly:</i>"
         )
 
@@ -1094,9 +1112,9 @@ class StatIQTelegramBot:
             self.handle_challenge_command(chat_id)
             return
 
-        # 3. Daily VIP Automation: /auto, /automation, /dispatch, /schedule, /days
-        if any(text.startswith(cmd) for cmd in ["/auto", "/automation", "/autostatus"]):
-            self.handle_auto_command(chat_id)
+        # 3. Daily VIP Automation: /auto, /automation, /dispatch, /schedule, /days, /start_auto, /stop_auto
+        if any(text.startswith(cmd) for cmd in ["/auto", "/automation", "/autostatus", "/start_auto", "/stop_auto", "/autoon", "/autooff"]):
+            self.handle_auto_command(chat_id, text)
             return
 
         if any(text.startswith(cmd) for cmd in ["/schedule", "/setdays", "/days"]):

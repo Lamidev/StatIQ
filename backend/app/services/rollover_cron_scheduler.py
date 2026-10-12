@@ -115,9 +115,8 @@ class RolloverCronScheduler:
                         total_days = int(cfg.get("challenge_days", 10))
                         if current_day > total_days:
                             cfg["challenge_status"] = "COMPLETED"
-                            cfg["is_enabled"] = False
                             self.save_config(cfg)
-                            logger.info(f"[RolloverScheduler] Compounding Challenge completed ({total_days} days reached). Pausing cron.")
+                            logger.info(f"[RolloverScheduler] Compounding Challenge completed ({total_days} days reached). Daily VIP Automation remains active.")
                             time.sleep(30)
                             continue
 
@@ -383,8 +382,10 @@ class RolloverCronScheduler:
 
         active_ticket = cfg.get("last_ticket")
 
+        has_active = is_enabled and (campaign_mode == "CHALLENGE") and (challenge_status not in ("DISMISSED", "COMPLETED"))
+
         return {
-            "has_active": is_enabled and (campaign_mode == "CHALLENGE" or campaign_mode == "CONTINUOUS"),
+            "has_active": has_active,
             "campaign_mode": campaign_mode,
             "challenge_status": "COMPLETED" if is_completed else challenge_status,
             "is_completed": is_completed,

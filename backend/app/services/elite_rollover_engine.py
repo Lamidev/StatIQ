@@ -4,6 +4,7 @@ import logging
 import asyncio
 from typing import Dict, Any, List, Optional, Tuple
 import datetime
+import collections
 import httpx
 from sqlalchemy.orm import Session
 
@@ -131,6 +132,11 @@ class EliteRolloverEngine:
 
         for ev in events:
             # 1. Unstarted pre-match check
+            # 1. Unstarted pre-match status check
+            status_str = str(ev.get("status") or ev.get("matchStatus") or "").upper().strip()
+            if status_str in ["LIVE", "STARTED", "1H", "2H", "HT", "FINISHED", "FT", "ENDED", "CANCELLED", "POSTPONED", "ABANDONED", "CLOSED", "CONCLUDED", "SUSPENDED", "NULLED_EXPIRED"]:
+                continue
+
             status = ev.get("status")
             if status is not None:
                 try:
@@ -140,12 +146,12 @@ class EliteRolloverEngine:
                     pass
 
             start_ms = ev.get("estimateStartTime") or ev.get("startTime") or 0
-            # Strict 45-Minute Kickoff Safety Buffer: Never select matches kicking off within 45 mins of dispatch
-            # or before 10:45 AM WAT on today's scheduled 10:00 AM dispatch
-            wat_tz = datetime.timezone(datetime.timedelta(hours=1))
-            now_wat = datetime.datetime.now(wat_tz)
-            today_1045_wat_ms = now_wat.replace(hour=10, minute=45, second=0, microsecond=0).timestamp() * 1000.0
-            if start_ms > 0 and (start_ms <= (now_ms + 45 * 60 * 1000) or start_ms <= today_1045_wat_ms):
+            if isinstance(start_ms, (int, float)) and 0 < start_ms < 100000000000:
+                start_ms = start_ms * 1000.0
+
+            # Strict 15-Minute Pre-Match Cutoff across all hours of day:
+            # Prevents odds-removal or in-play lockouts when user books tickets
+            if start_ms > 0 and start_ms <= (now_ms + 15 * 60 * 1000):
                 continue
 
             h_team = ev.get("homeTeamName") or "Home"
@@ -338,7 +344,7 @@ class EliteRolloverEngine:
                                     "h2h_summary": stats_3p.get("h2h_summary") or f"H2H Coverage: {h_team} (Home Floor)",
                                     "form_summary": stats_3p.get("form_summary") or f"Form: {h_team} Unbeaten Trend",
                                     "composite_safety_score": c_sc,
-                                    "quality_score": (prob * 55.0) + (c_sc * 45.0) + (dominance_ratio * 3.0) + pedigree_bonus + juggernaut_bonus + 10.0,
+                                    "quality_score": (prob * 50.0) + (c_sc * 40.0) + (dominance_ratio * 2.0) + pedigree_bonus + juggernaut_bonus + 3.0,
                                     "selection_rationale": f"{tier_label} · {stats_3p.get('h2h_summary')} · {stats_3p.get('form_summary')}"
                                 })
 
@@ -368,98 +374,101 @@ class EliteRolloverEngine:
                                     "h2h_summary": stats_3p.get("h2h_summary") or f"H2H Coverage: {a_team} (Away Floor)",
                                     "form_summary": stats_3p.get("form_summary") or f"Form: {a_team} Unbeaten Trend",
                                     "composite_safety_score": c_sc,
-                                    "quality_score": (prob * 55.0) + (c_sc * 45.0) + (dominance_ratio * 3.0) + pedigree_bonus + juggernaut_bonus + 8.0,
+                                    "quality_score": (prob * 50.0) + (c_sc * 40.0) + (dominance_ratio * 2.0) + pedigree_bonus + juggernaut_bonus + 3.0,
                                     "selection_rationale": f"{tier_label} · {stats_3p.get('h2h_summary')} · {stats_3p.get('form_summary')}"
                                 })
 
                 # B. Full-Time Over 1.5 Goals
-                if (m_id == "18" or "over/under" in m_desc) and "half" not in m_desc and "corner" not in m_desc and "team" not in m_desc:
-                    if "total=1.5" in spec or "1.5" in spec:
-                        for oc in m.get("outcomes", []):
-                            is_active = oc.get("isActive")
-                            if is_active is not None and str(is_active) not in ("1", "True", "true"):
-                                continue
-                            oc_st = oc.get("status")
-                            if oc_st is not None and str(oc_st) != "0":
-                                continue
+                if (m_id == "18" or "over/under" in m_desc or "total goals" in m_desc) and "half" not in m_desc and "corner" not in m_desc and "team" not in m_desc:
+                    for oc in m.get("outcomes", []):
+                        is_active = oc.get("isActive")
+                        if is_active is not None and str(is_active) not in ("1", "True", "true"):
+                            continue
+                        oc_st = oc.get("status")
+                        if oc_st is not None and str(oc_st) != "0":
+                            continue
 
-                            oc_id = str(oc.get("id"))
-                            oc_desc = (oc.get("desc") or "").lower()
-                            odds = float(oc.get("odds") or 0)
-                            if "over" in oc_desc and 1.15 <= odds <= max_leg_odds:
-                                prob = cls._calculate_poisson_over15_prob(h_odds, d_odds, a_odds)
-                                sel_desc = "Over 1.5 Goals"
-                                stats_3p = evaluate_fixture_3pillar_metrics(h_team, a_team, "Over/Under 1.5", sel_desc, odds)
-                                if prob >= 0.78 and stats_3p.get("composite_safety_score", 0.7) >= 0.68:
-                                    c_sc = float(stats_3p.get("composite_safety_score", 0.75))
-                                    candidates.append({
-                                        "event_id": eid,
-                                        "home_team": h_team,
-                                        "away_team": a_team,
-                                        "competition": f"{c_name} · {t_name}",
-                                        "competition_tier": tier_label,
-                                        "dominance_ratio": round(dominance_ratio, 2),
-                                        "is_juggernaut": fav_is_juggernaut,
-                                        "market_id": m_id,
-                                        "market_desc": "Over/Under 1.5",
-                                        "outcome_id": oc_id,
-                                        "selection_desc": sel_desc,
-                                        "specifier": spec or "total=1.5",
-                                        "odds": odds,
-                                        "model_probability": prob,
-                                        "market_type": "OVER_15",
-                                        "h2h_summary": stats_3p.get("h2h_summary") or f"H2H Goal Index: {h_team} vs {a_team}",
-                                        "form_summary": stats_3p.get("form_summary") or f"Form Goal Rate: {h_team} + {a_team}",
-                                        "composite_safety_score": c_sc,
-                                        "quality_score": (prob * 55.0) + (c_sc * 45.0) + pedigree_bonus + (juggernaut_bonus * 0.7) + 6.0,
-                                        "selection_rationale": f"{tier_label} · Poisson Scoring Profile · {stats_3p.get('h2h_summary')} · {stats_3p.get('form_summary')}"
-                                    })
+                        oc_id = str(oc.get("id"))
+                        oc_desc = (oc.get("desc") or "").lower()
+                        odds = float(oc.get("odds") or 0)
+                        
+                        # Match total=1.5 in specifier or description
+                        is_line_15 = ("1.5" in spec) or ("1.5" in oc_desc) or ("total=1.5" in spec) or ("over 1.5" in oc_desc)
+                        if is_line_15 and "over" in oc_desc and 1.15 <= odds <= max_leg_odds:
+                            prob = cls._calculate_poisson_over15_prob(h_odds, d_odds, a_odds)
+                            sel_desc = "Over 1.5 Goals"
+                            stats_3p = evaluate_fixture_3pillar_metrics(h_team, a_team, "Over/Under 1.5", sel_desc, odds)
+                            if prob >= 0.78 and stats_3p.get("composite_safety_score", 0.7) >= 0.68:
+                                c_sc = float(stats_3p.get("composite_safety_score", 0.75))
+                                candidates.append({
+                                    "event_id": eid,
+                                    "home_team": h_team,
+                                    "away_team": a_team,
+                                    "competition": f"{c_name} · {t_name}",
+                                    "competition_tier": tier_label,
+                                    "dominance_ratio": round(dominance_ratio, 2),
+                                    "is_juggernaut": fav_is_juggernaut,
+                                    "market_id": m_id,
+                                    "market_desc": "Over/Under 1.5",
+                                    "outcome_id": oc_id,
+                                    "selection_desc": sel_desc,
+                                    "specifier": spec or "total=1.5",
+                                    "odds": odds,
+                                    "model_probability": prob,
+                                    "market_type": "OVER_15",
+                                    "h2h_summary": stats_3p.get("h2h_summary") or f"H2H Goal Index: {h_team} vs {a_team}",
+                                    "form_summary": stats_3p.get("form_summary") or f"Form Goal Rate: {h_team} + {a_team}",
+                                    "composite_safety_score": c_sc,
+                                    "quality_score": (prob * 55.0) + (c_sc * 45.0) + pedigree_bonus + (juggernaut_bonus * 0.9) + 8.0,
+                                    "selection_rationale": f"{tier_label} · Poisson Scoring Profile · {stats_3p.get('h2h_summary')} · {stats_3p.get('form_summary')}"
+                                })
 
                 # C. Heavy Favorite Team Total Over 0.5 (Team to Score)
-                if ("team" in m_desc or m_id in ("19", "20")) and "over/under" in m_desc:
-                    if "total=0.5" in spec or "0.5" in spec:
-                        for oc in m.get("outcomes", []):
-                            is_active = oc.get("isActive")
-                            if is_active is not None and str(is_active) not in ("1", "True", "true"):
-                                continue
-                            oc_st = oc.get("status")
-                            if oc_st is not None and str(oc_st) != "0":
-                                continue
-                            oc_id = str(oc.get("id"))
-                            oc_desc = (oc.get("desc") or "").lower()
-                            odds = float(oc.get("odds") or 0)
-                            if "over" in oc_desc and 1.15 <= odds <= min(max_leg_odds, 1.45):
-                                prob = round(min(0.93, (1.0 / odds) * 0.97), 4)
-                                fav_team = h_team if is_home_fav else a_team
-                                sel_desc = f"{fav_team} Over 0.5 Goals"
-                                stats_3p = evaluate_fixture_3pillar_metrics(h_team, a_team, f"{fav_team} Team Goals", sel_desc, odds)
-                                if prob >= 0.80 and dominance_ratio >= 1.4 and stats_3p.get("composite_safety_score", 0.7) >= 0.68:
-                                    c_sc = float(stats_3p.get("composite_safety_score", 0.75))
-                                    candidates.append({
-                                        "event_id": eid,
-                                        "home_team": h_team,
-                                        "away_team": a_team,
-                                        "competition": f"{c_name} · {t_name}",
-                                        "competition_tier": tier_label,
-                                        "dominance_ratio": round(dominance_ratio, 2),
-                                        "is_juggernaut": fav_is_juggernaut,
-                                        "market_id": m_id,
-                                        "market_desc": f"{fav_team} Over/Under",
-                                        "outcome_id": oc_id,
-                                        "selection_desc": sel_desc,
-                                        "specifier": spec or "total=0.5",
-                                        "odds": odds,
-                                        "model_probability": prob,
-                                        "market_type": "TEAM_OVER_05",
-                                        "h2h_summary": stats_3p.get("h2h_summary") or f"H2H Coverage: {fav_team} Scoring Proof",
-                                        "form_summary": stats_3p.get("form_summary") or f"Form: {fav_team} Scoring Rate",
-                                        "composite_safety_score": c_sc,
-                                        "quality_score": (prob * 55.0) + (c_sc * 45.0) + (dominance_ratio * 2.0) + pedigree_bonus + juggernaut_bonus + 7.0,
-                                        "selection_rationale": f"{tier_label} · Favorite {fav_team} Dominance {dominance_ratio:.1f}x · {stats_3p.get('h2h_summary')} · {stats_3p.get('form_summary')}"
-                                    })
+                if ("team" in m_desc or m_id in ("19", "20") or "home" in m_desc or "away" in m_desc) and ("over/under" in m_desc or "goals" in m_desc):
+                    for oc in m.get("outcomes", []):
+                        is_active = oc.get("isActive")
+                        if is_active is not None and str(is_active) not in ("1", "True", "true"):
+                            continue
+                        oc_st = oc.get("status")
+                        if oc_st is not None and str(oc_st) != "0":
+                            continue
+                        oc_id = str(oc.get("id"))
+                        oc_desc = (oc.get("desc") or "").lower()
+                        odds = float(oc.get("odds") or 0)
+                        
+                        is_line_05 = ("0.5" in spec) or ("0.5" in oc_desc) or ("total=0.5" in spec) or ("over 0.5" in oc_desc)
+                        if is_line_05 and "over" in oc_desc and 1.15 <= odds <= min(max_leg_odds, 1.45):
+                            prob = round(min(0.93, (1.0 / odds) * 0.97), 4)
+                            fav_team = h_team if is_home_fav else a_team
+                            sel_desc = f"{fav_team} Over 0.5 Goals"
+                            stats_3p = evaluate_fixture_3pillar_metrics(h_team, a_team, f"{fav_team} Team Goals", sel_desc, odds)
+                            if prob >= 0.80 and dominance_ratio >= 1.35 and stats_3p.get("composite_safety_score", 0.7) >= 0.68:
+                                c_sc = float(stats_3p.get("composite_safety_score", 0.75))
+                                candidates.append({
+                                    "event_id": eid,
+                                    "home_team": h_team,
+                                    "away_team": a_team,
+                                    "competition": f"{c_name} · {t_name}",
+                                    "competition_tier": tier_label,
+                                    "dominance_ratio": round(dominance_ratio, 2),
+                                    "is_juggernaut": fav_is_juggernaut,
+                                    "market_id": m_id,
+                                    "market_desc": f"{fav_team} Over/Under",
+                                    "outcome_id": oc_id,
+                                    "selection_desc": sel_desc,
+                                    "specifier": spec or "total=0.5",
+                                    "odds": odds,
+                                    "model_probability": prob,
+                                    "market_type": "TEAM_OVER_05",
+                                    "h2h_summary": stats_3p.get("h2h_summary") or f"H2H Coverage: {fav_team} Scoring Proof",
+                                    "form_summary": stats_3p.get("form_summary") or f"Form: {fav_team} Scoring Rate",
+                                    "composite_safety_score": c_sc,
+                                    "quality_score": (prob * 58.0) + (c_sc * 48.0) + (dominance_ratio * 3.0) + pedigree_bonus + juggernaut_bonus + 10.0,
+                                    "selection_rationale": f"{tier_label} · Favorite {fav_team} Dominance {dominance_ratio:.1f}x · {stats_3p.get('h2h_summary')} · {stats_3p.get('form_summary')}"
+                                })
 
                 # D. Heavy Favorite Win Either Half (Yes)
-                if ("win either half" in m_desc or "either half" in m_desc or m_id in ("61", "62", "73", "74", "111")) and dominance_ratio >= 1.80:
+                if ("win either half" in m_desc or "either half" in m_desc or m_id in ("61", "62", "73", "74", "111")) and dominance_ratio >= 1.45:
                     for oc in m.get("outcomes", []):
                         is_active = oc.get("isActive")
                         if is_active is not None and str(is_active) not in ("1", "True", "true"):
@@ -473,9 +482,9 @@ class EliteRolloverEngine:
 
                         fav_team = h_team if is_home_fav else a_team
                         is_fav_pick = False
-                        if is_home_fav and ("home" in oc_desc or "yes" in oc_desc or oc_id in ("1", "yes", "61")):
+                        if is_home_fav and ("home" in oc_desc or "yes" in oc_desc or oc_id in ("1", "yes", "61", "73", "9")):
                             is_fav_pick = True
-                        elif (not is_home_fav) and ("away" in oc_desc or "yes" in oc_desc or oc_id in ("2", "yes", "62")):
+                        elif (not is_home_fav) and ("away" in oc_desc or "yes" in oc_desc or oc_id in ("2", "yes", "62", "74", "11")):
                             is_fav_pick = True
                         elif "yes" in oc_desc:
                             is_fav_pick = True
@@ -505,7 +514,7 @@ class EliteRolloverEngine:
                                     "h2h_summary": stats_3p.get("h2h_summary") or f"H2H Coverage: {fav_team} Half Dominance",
                                     "form_summary": stats_3p.get("form_summary") or f"Form: {fav_team} Fast Start Metric",
                                     "composite_safety_score": c_sc,
-                                    "quality_score": (prob * 55.0) + (c_sc * 45.0) + (dominance_ratio * 3.0) + pedigree_bonus + juggernaut_bonus + 9.0,
+                                    "quality_score": (prob * 56.0) + (c_sc * 46.0) + (dominance_ratio * 3.0) + pedigree_bonus + juggernaut_bonus + 9.5,
                                     "selection_rationale": f"{tier_label} · {fav_team} Half Dominance ({dominance_ratio:.1f}x) · {stats_3p.get('h2h_summary')} · {stats_3p.get('form_summary')}"
                                 })
 
@@ -528,14 +537,18 @@ class EliteRolloverEngine:
         if not candidates:
             return []
 
-        # Deduplicate candidates so only the single best market per fixture is evaluated
-        best_per_fixture: Dict[str, Dict[str, Any]] = {}
+        # Collect distinct market candidates per fixture (up to 2 diverse markets per fixture)
+        fixture_map: Dict[str, List[Dict[str, Any]]] = collections.defaultdict(list)
         for c in candidates:
             fid = c["event_id"]
-            if fid not in best_per_fixture:
-                best_per_fixture[fid] = c
+            if not any(x.get("market_type") == c.get("market_type") for x in fixture_map[fid]):
+                fixture_map[fid].append(c)
 
-        ranked_pool = list(best_per_fixture.values())
+        ranked_pool = []
+        for fid, opts in fixture_map.items():
+            opts.sort(key=lambda x: (x.get("quality_score", 0), x.get("model_probability", 0)), reverse=True)
+            ranked_pool.extend(opts[:2])
+
         if not ranked_pool:
             return []
 
@@ -565,10 +578,14 @@ class EliteRolloverEngine:
         elif target <= 1.70:
             leg_options = (1, 2, 3)
         else:
-            leg_options = (3, 4, 2)
+            leg_options = (3, 4)
 
         for k in leg_options:
             for combo in itertools.combinations(top_slice, k):
+                # Strictly zero fixture repetition within the ticket
+                if len(set(leg["event_id"] for leg in combo)) != k:
+                    continue
+
                 tot_odds = 1.0
                 cum_prob = 1.0
                 quality_sum = 0.0
@@ -586,19 +603,35 @@ class EliteRolloverEngine:
                 if tot_odds < (target * 0.90) or tot_odds > (target * 1.15):
                     continue
 
-                # Objective: heavily weight joint probability, league/market quality score, and juggernaut first-dibs
+                # Objective: heavily weight joint probability, league/market quality score, juggernaut first-dibs, and market diversity
                 leg_penalty = (k - 1) * 2.0
-                obj = (cum_prob * 60.0) + (avg_quality * 1.80) + (juggernaut_count * 30.0) - (odds_diff * 12.0) - leg_penalty
+                unique_mkts = len(set(leg.get("market_type") for leg in combo))
+                diversity_bonus = (unique_mkts - 1) * 10.0
+                dc_count = sum(1 for leg in combo if leg.get("market_type") == "DOUBLE_CHANCE")
+                # Diversity incentive: penalize slips dominated purely by Double Chance
+                diversity_penalty = (dc_count - 1) * 10.0 if dc_count > 1 else 0.0
+                obj = (cum_prob * 60.0) + (avg_quality * 1.80) + (juggernaut_count * 30.0) + diversity_bonus - (odds_diff * 12.0) - leg_penalty - diversity_penalty
                 if obj > best_objective:
                     best_objective = obj
                     best_combo = list(combo)
 
-        # Fallback if no exact combination met strict window: pick top legs greedily up to target
+        # Fallback if no exact combination met strict window: pick top legs greedily up to target with diversity guard
         if not best_combo:
             curr_odds = 1.0
             max_legs = 2 if target <= 1.45 else (3 if target <= 1.70 else 4)
+            max_per_market = 1 if max_legs <= 3 else 2
+            market_counts = collections.defaultdict(int)
+            used_fids = set()
             for leg in ranked_pool:
+                fid = leg["event_id"]
+                if fid in used_fids:
+                    continue
+                m_type = leg.get("market_type") or "OTHER"
+                if market_counts[m_type] >= max_per_market:
+                    continue
                 best_combo.append(leg)
+                used_fids.add(fid)
+                market_counts[m_type] += 1
                 curr_odds *= leg["odds"]
                 if curr_odds >= (target * 0.95) or len(best_combo) >= max_legs:
                     break
@@ -769,65 +802,77 @@ class EliteRolloverEngine:
 
         excluded = excluded_event_ids or set()
 
-        # Deduplicate best market per fixture and exclude already claimed fixtures
-        best_per_fixture: Dict[str, Dict[str, Any]] = {}
+        # Group candidates by fixture so alternative markets can be selected if Double Chance quota is reached
+        fixture_candidates: Dict[str, List[Dict[str, Any]]] = {}
         for c in candidates:
             fid = c["event_id"]
             if fid in excluded:
                 continue
-            if fid not in best_per_fixture:
-                best_per_fixture[fid] = c
+            if fid not in fixture_candidates:
+                fixture_candidates[fid] = []
+            fixture_candidates[fid].append(c)
 
-        ranked_pool = list(best_per_fixture.values())
-        if not ranked_pool:
+        if not fixture_candidates:
             return []
 
-        # Sort pool strictly by quality_score descending
-        ranked_pool.sort(key=lambda x: (x.get("quality_score", 0), x.get("model_probability", 0)), reverse=True)
+        for fid in fixture_candidates:
+            fixture_candidates[fid].sort(
+                key=lambda x: (x.get("quality_score", 0), x.get("model_probability", 0)),
+                reverse=True
+            )
+
+        # Sort fixtures by their best candidate's quality score
+        sorted_fixtures = sorted(
+            fixture_candidates.keys(),
+            key=lambda fid: (
+                1 if fixture_candidates[fid][0].get("is_juggernaut") else 0,
+                fixture_candidates[fid][0].get("quality_score", 0),
+                fixture_candidates[fid][0].get("model_probability", 0)
+            ),
+            reverse=True
+        )
 
         target = float(target_odds)
 
-        # For smaller slips (target_odds <= 5.0 and max_legs <= 7), combination search
-        if target <= 5.0 and max_legs <= 7:
-            best_combo: List[Dict[str, Any]] = []
-            best_objective = -float("inf")
-            import itertools
-            pool_slice = ranked_pool[:25]
-            target_range = range(min_legs, min(max_legs + 1, len(pool_slice) + 1))
-            for k in target_range:
-                for combo in itertools.combinations(pool_slice, k):
-                    tot_odds = 1.0
-                    cum_prob = 1.0
-                    quality_sum = 0.0
-                    for leg in combo:
-                        tot_odds *= leg["odds"]
-                        cum_prob *= leg["model_probability"]
-                        quality_sum += leg.get("quality_score", 50.0)
+        # Market diversity cap:
+        # Active round-robin market quota ensures balanced mix:
+        # - Team to Score (Heavy Favorite Over 0.5 Goals)
+        # - Win Either Half (Yes)
+        # - Over 1.5 Total Goals
+        # - Double Chance (1X/X2 capped at max 30% of slip)
+        max_dc = max(1, int(min_legs * 0.30))
+        max_per_market = max(3, int(max_legs * 0.35))
+        market_counts: Dict[str, int] = collections.defaultdict(int)
 
-                    if tot_odds < (target * 0.88) or tot_odds > (target * 1.18):
-                        continue
-
-                    avg_quality = quality_sum / k
-                    odds_diff = abs(tot_odds - target)
-                    obj = (cum_prob * 60.0) + (avg_quality * 0.40) - (odds_diff * 20.0)
-                    if obj > best_objective:
-                        best_objective = obj
-                        best_combo = list(combo)
-            if best_combo:
-                return best_combo
-
-        # Dynamic high-precision accumulator assembly for 10x (12-14 legs, target 9.80x-10.50x)
-        # or 20x (15-18 legs, target 19.0x-22.0x):
         selected_legs: List[Dict[str, Any]] = []
         curr_odds = 1.0
 
         target_floor = (target * 0.98) if target >= 9.5 else (target * 0.92)
         target_ceiling = (target * 1.06) if target >= 9.5 else (target * 1.15)
 
-        for leg in ranked_pool:
-            selected_legs.append(leg)
-            curr_odds *= leg["odds"]
-            # Stop if reached target floor and within [min_legs, max_legs]
+        for fid in sorted_fixtures:
+            opts = fixture_candidates[fid]
+            chosen = None
+            for cand in opts:
+                m_type = cand.get("market_type") or "OTHER"
+                limit = max_dc if m_type == "DOUBLE_CHANCE" else max_per_market
+                if market_counts[m_type] < limit:
+                    chosen = cand
+                    break
+
+            if not chosen:
+                least_used = min(opts, key=lambda c: market_counts[c.get("market_type") or "OTHER"])
+                m_type = least_used.get("market_type") or "OTHER"
+                limit = max_dc if m_type == "DOUBLE_CHANCE" else max_per_market
+                if market_counts[m_type] >= limit:
+                    continue
+                chosen = least_used
+
+            m_type = chosen.get("market_type") or "OTHER"
+            market_counts[m_type] += 1
+            selected_legs.append(chosen)
+            curr_odds *= chosen["odds"]
+
             if len(selected_legs) >= min_legs and curr_odds >= target_floor:
                 break
             if len(selected_legs) >= max_legs:
@@ -1025,15 +1070,15 @@ class EliteRolloverEngine:
 
                 trio_result["rollover_ticket"] = ro_payload
 
-        # ── 2. SLIP 2: 10.0x MEGA MULTIPLIER (12–14 Matches, Target 9.80x–10.50x) ──
+        # ── 2. SLIP 2: 10.0x MEGA MULTIPLIER (10–12 Matches, Target 9.80x–10.50x) ──
         acca10_legs = []
         if enable_10odds:
             unclaimed_10x = [c for c in acca_candidates if c["event_id"] not in claimed_event_ids]
             acca10_legs = cls.assemble_optimal_accumulator_slip(
                 unclaimed_10x,
                 target_odds=10.00,
-                min_legs=12,
-                max_legs=14,
+                min_legs=10,
+                max_legs=12,
                 excluded_event_ids=claimed_event_ids
             )
             if acca10_legs:
@@ -1068,7 +1113,7 @@ class EliteRolloverEngine:
 
                 trio_result["acca_10x_ticket"] = acca10_payload
 
-        # ── 3. SLIP 3: 20.0x MONSTER ACCA (15–18 Matches, Target 19.0x–22.0x, Replacing Old 5.0x) ──
+        # ── 3. SLIP 3: 20.0x MONSTER ACCA (13–15 Matches Max, Target 19.0x–22.0x, Replacing Old 5.0x) ──
         if enable_20odds:
             pool_for_20x = [c for c in acca_candidates if c["event_id"] not in claimed_event_ids]
             
@@ -1077,7 +1122,7 @@ class EliteRolloverEngine:
             # 10.0x and 20.0x slips can share at most 2–3 Elite Giants (different markets only:
             # e.g., Over 1.5 on 10x, Win Either Half or Double Chance on 20x).
             # At least 80%+ of fixtures on each slip remain completely unique matches.
-            if not is_weekend and len(pool_for_20x) < 18 and acca10_legs:
+            if not is_weekend and len(pool_for_20x) < 15 and acca10_legs:
                 shared_count = 0
                 for leg10 in acca10_legs:
                     if shared_count >= 3:
@@ -1095,8 +1140,8 @@ class EliteRolloverEngine:
             acca20_legs = cls.assemble_optimal_accumulator_slip(
                 pool_for_20x,
                 target_odds=20.00,
-                min_legs=15,
-                max_legs=18,
+                min_legs=13,
+                max_legs=15,
                 excluded_event_ids=ro_event_ids # Zero contact with Rollover
             )
             if acca20_legs:
@@ -1208,26 +1253,78 @@ class EliteRolloverEngine:
                 break
 
             if target_games and target_games > 0:
-                # Group by event, pick top quality
-                best_per_fix = {}
+                # Group by event and respect market diversity quota
+                fixture_cands: Dict[str, List[Dict[str, Any]]] = {}
                 for c in unclaimed:
                     eid = c["event_id"]
-                    if eid not in best_per_fix:
-                        best_per_fix[eid] = c
-                ranked = list(best_per_fix.values())
-                ranked.sort(key=lambda x: (x.get("quality_score", 0), x.get("model_probability", 0)), reverse=True)
-                slip_legs = ranked[:target_games]
+                    if eid not in fixture_cands:
+                        fixture_cands[eid] = []
+                    fixture_cands[eid].append(c)
+
+                for eid in fixture_cands:
+                    fixture_cands[eid].sort(
+                        key=lambda x: (x.get("quality_score", 0), x.get("model_probability", 0)),
+                        reverse=True
+                    )
+
+                sorted_fids = sorted(
+                    fixture_cands.keys(),
+                    key=lambda eid: (
+                        1 if fixture_cands[eid][0].get("is_juggernaut") else 0,
+                        fixture_cands[eid][0].get("quality_score", 0),
+                        fixture_cands[eid][0].get("model_probability", 0)
+                    ),
+                    reverse=True
+                )
+
+                max_dc = max(1, int(target_games * 0.30))
+                max_per_market = max(3, int(target_games * 0.35))
+                market_counts: Dict[str, int] = collections.defaultdict(int)
+                slip_legs = []
+
+                for eid in sorted_fids:
+                    opts = fixture_cands[eid]
+                    chosen = None
+                    for cand in opts:
+                        m_type = cand.get("market_type") or "OTHER"
+                        limit = max_dc if m_type == "DOUBLE_CHANCE" else max_per_market
+                        if market_counts[m_type] < limit:
+                            chosen = cand
+                            break
+
+                    if not chosen:
+                        least_used = min(opts, key=lambda c: market_counts[c.get("market_type") or "OTHER"])
+                        m_type = least_used.get("market_type") or "OTHER"
+                        limit = max_dc if m_type == "DOUBLE_CHANCE" else max_per_market
+                        if market_counts[m_type] >= limit:
+                            continue
+                        chosen = least_used
+
+                    m_type = chosen.get("market_type") or "OTHER"
+                    market_counts[m_type] += 1
+                    slip_legs.append(chosen)
+                    if len(slip_legs) >= target_games:
+                        break
             else:
                 t_odds = float(target_odds or 5.0)
-                min_l = 3 if t_odds <= 2.5 else (6 if t_odds <= 6.0 else 10)
-                max_l = 4 if t_odds <= 2.5 else (8 if t_odds <= 6.0 else 16)
-                slip_legs = cls.assemble_optimal_accumulator_slip(
-                    unclaimed,
-                    target_odds=t_odds,
-                    min_legs=min_l,
-                    max_legs=max_l,
-                    excluded_event_ids=claimed
-                )
+                if t_odds <= 2.2:
+                    slip_legs = cls.assemble_optimal_rollover_slip(unclaimed, target_odds=t_odds)
+                else:
+                    if t_odds >= 18.0:
+                        min_l, max_l = 15, 20
+                    elif t_odds >= 9.0:
+                        min_l, max_l = 11, 15
+                    elif t_odds >= 4.5:
+                        min_l, max_l = 6, 9
+                    else:
+                        min_l, max_l = 3, 5
+                    slip_legs = cls.assemble_optimal_accumulator_slip(
+                        unclaimed,
+                        target_odds=t_odds,
+                        min_legs=min_l,
+                        max_legs=max_l,
+                        excluded_event_ids=claimed
+                    )
 
             if not slip_legs:
                 break

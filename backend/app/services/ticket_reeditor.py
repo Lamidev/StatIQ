@@ -256,10 +256,12 @@ def _is_expired_or_live(sel: Dict[str, Any]) -> Tuple[bool, str]:
 
     start_ms = sel.get("start_time_ms") or sel.get("startTime") or 0
     if isinstance(start_ms, (int, float)) and start_ms > 0:
+        if start_ms < 100000000000:
+            start_ms = start_ms * 1000.0
         now_ms = time.time() * 1000.0
-        # If match kickoff was in the past or begins within the next 5 minutes (300,000 ms)
-        if (now_ms - start_ms) > -300000:
-            return True, "Match kickoff has already passed or begins in < 5 minutes"
+        # If match kickoff was in the past or begins within the next 15 minutes (900,000 ms)
+        if (now_ms - start_ms) > -900000:
+            return True, "Match kickoff has already passed or begins in < 15 minutes"
 
     return False, ""
 

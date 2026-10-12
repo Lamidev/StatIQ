@@ -913,7 +913,11 @@ class SportyBetAdapter(BookmakerAdapter):
                 ev_market_ids = {str(m.get("id") or m.get("market_id") or "") for m in ev_markets if isinstance(m, dict)}
 
                 needs_fallback = False
-                if ev_market_ids and clean_mkt_id not in ev_market_ids and clean_mkt_id in ("73", "74", "62", "16", "19", "20"):
+                is_handicap_mkt = clean_mkt_id in ("14", "16", "60", "23") or ("handicap" in mkt_text.lower())
+                # If market is a Handicap or has pre-locked provider IDs from an audited ticket, NEVER corrupt into Double Chance!
+                if is_handicap_mkt:
+                    needs_fallback = False
+                elif ev_market_ids and clean_mkt_id not in ev_market_ids and clean_mkt_id in ("73", "74", "62", "19", "20"):
                     needs_fallback = True
                 elif ev_markets and clean_mkt_id in ("19", "20"):
                     req_spec = str(direct_spec or "").strip()
@@ -929,7 +933,7 @@ class SportyBetAdapter(BookmakerAdapter):
                     else:
                         needs_fallback = True
 
-                if needs_fallback and ev_markets:
+                if needs_fallback and ev_markets and not is_handicap_mkt:
                     m_id_fb, o_id_fb, spec_fb = self._resolve_market_payload(ev_markets, mkt_text, sel_text, home_target, away_target)
                     clean_mkt_id = m_id_fb
                     clean_oc_id = o_id_fb
@@ -991,16 +995,20 @@ class SportyBetAdapter(BookmakerAdapter):
                 if clean_spec:
                     item_payload["specifier"] = str(clean_spec)
 
-            # STRICT FILTER 1: Kickoff & Live/Suspended Protection
+            # STRICT FILTER 1: Kickoff & Live/Suspended Protection (Strict 15-minute buffer)
+            now_ms = time.time() * 1000.0
+            ev_start_ms = s.get("start_time_ms") or s.get("startTime") or (event_obj.get("start_time_ms") if event_obj else 0) or 0
+            if ev_start_ms > 0 and ev_start_ms < 100000000000:
+                ev_start_ms = ev_start_ms * 1000.0
+
+            if ev_start_ms > 0 and ev_start_ms <= (now_ms + 900000):
+                logger.warning(f"[SportyBetAdapter] Skipping {home_target} vs {away_target}: kickoff is in the past or within 15-minute lock cutoff.")
+                continue
+
             if event_obj:
                 ev_st = str(event_obj.get("status") or event_obj.get("matchStatus") or "").upper()
                 if ev_st in ["LIVE", "STARTED", "1H", "2H", "HT", "FINISHED", "ENDED", "CANCELLED", "POSTPONED", "ABANDONED", "CLOSED", "CONCLUDED", "SUSPENDED"]:
                     logger.warning(f"[SportyBetAdapter] Skipping {home_target} vs {away_target}: event is '{ev_st}'.")
-                    continue
-                ev_start_ms = event_obj.get("start_time_ms") or 0
-                now_ms = time.time() * 1000.0
-                if ev_start_ms > 0 and ev_start_ms <= (now_ms + 180000):
-                    logger.warning(f"[SportyBetAdapter] Skipping {home_target} vs {away_target}: kickoff within 3-minute lock cutoff.")
                     continue
 
             # STRICT FILTER 2: 1.15 Minimum Odds Floor Validation on Live SportyBet Odds
@@ -1021,9 +1029,9 @@ class SportyBetAdapter(BookmakerAdapter):
                                 break
 
             if outcome_live_odds is not None and outcome_live_odds < 1.15:
-                # If selection is already a Handicap pick (14 or 16), DO NOT corrupt it into Double Chance!
-                if str(item_payload.get("marketId")) in ("14", "16"):
-                    logger.warning(f"[SportyBetAdapter] Handicap pick {home_target} vs {away_target} odds {outcome_live_odds:.2f} are retained as Handicap.")
+                # If selection is already a Handicap pick or KEEP pick in REMOVE mode, DO NOT corrupt it into Double Chance!
+                if str(item_payload.get("marketId")) in ("14", "16", "60", "23") or is_handicap_mkt or s.get("action") == "KEEP":
+                    logger.warning(f"[SportyBetAdapter] Kept/Handicap pick {home_target} vs {away_target} (odds {outcome_live_odds:.2f}) is strictly retained as original bettor choice.")
                 else:
                     logger.warning(f"[SportyBetAdapter] Outcome {item_payload['marketId']}:{item_payload['outcomeId']} on {home_target} vs {away_target} live odds {outcome_live_odds:.2f} are below 1.15 floor.")
                     repaired = False

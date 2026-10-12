@@ -13,6 +13,7 @@ class ScheduleUpdateRequest(BaseModel):
     enable_rollover_2x: Optional[bool] = None
     enable_acca_5x: Optional[bool] = None
     enable_acca_10x: Optional[bool] = None
+    enable_acca_20x: Optional[bool] = None
     target_odds: Optional[float] = None
     max_leg_odds: Optional[float] = None      # e.g. 1.35, 1.40, 1.45, 1.50
     dispatch_time: Optional[str] = None
@@ -30,6 +31,7 @@ class RunNowRequest(BaseModel):
     enable_rollover_2x: Optional[bool] = None
     enable_acca_5x: Optional[bool] = None
     enable_acca_10x: Optional[bool] = None
+    enable_acca_20x: Optional[bool] = None
 
 class ChallengeResetRequest(BaseModel):
     challenge_days: int = 10
@@ -106,6 +108,8 @@ def update_schedule(req: ScheduleUpdateRequest):
         update_data["enable_acca_5x"] = req.enable_acca_5x
     if req.enable_acca_10x is not None:
         update_data["enable_acca_10x"] = req.enable_acca_10x
+    if req.enable_acca_20x is not None:
+        update_data["enable_acca_20x"] = req.enable_acca_20x
     if req.active_days is not None:
         valid_days = {"MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"}
         cleaned = [d.upper() for d in req.active_days if d.upper() in valid_days]
@@ -174,8 +178,9 @@ async def run_now(req: RunNowRequest = Body(default=RunNowRequest())):
             target_odds=req.target_odds,
             max_leg_odds=req.max_leg_odds,
             enable_rollover=req.enable_rollover_2x,
-            enable_5odds=req.enable_acca_5x,
-            enable_10odds=req.enable_acca_10x
+            enable_10odds=req.enable_acca_10x,
+            enable_20odds=req.enable_acca_20x,
+            enable_5odds=req.enable_acca_5x
         )
         return {
             "status": "SUCCESS",
@@ -193,6 +198,19 @@ def get_history():
         "history": cfg.get("run_history", []),
         "last_ticket": cfg.get("last_ticket"),
         "last_trio_result": cfg.get("last_trio_result")
+    }
+
+@router.post("/clear-last-slip")
+def clear_last_slip():
+    """Clears/dismisses the cached last dispatched VIP slip from the active view."""
+    cfg = rollover_scheduler.get_config()
+    cfg["last_ticket"] = None
+    cfg["last_trio_result"] = None
+    rollover_scheduler.save_config(cfg)
+    return {
+        "status": "SUCCESS",
+        "message": "Cached VIP slip dismissed successfully.",
+        "config": rollover_scheduler.get_config()
     }
 
 @router.post("/telegram-test")

@@ -755,6 +755,18 @@ export async function dismissCampaign() {
   return { status: "ERROR", message: "Failed to dismiss campaign" };
 }
 
+export async function clearRolloverLastSlip() {
+  try {
+    const res = await fetch(`${API_BASE_URL}/rollover-cron/clear-last-slip`, {
+      method: "POST"
+    });
+    if (res.ok) return await res.json();
+  } catch (err) {
+    console.error("Clear last slip error:", err);
+  }
+  return { status: "ERROR", message: "Failed to clear last slip" };
+}
+
 export async function startCampaign(challengeDays = 3, startingStake = 5000, targetOdds = 2.0) {
   try {
     const res = await fetch(`${API_BASE_URL}/rollover-cron/campaign/start`, {
