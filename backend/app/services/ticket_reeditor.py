@@ -415,11 +415,17 @@ def _estimate_prob_from_odds(market: str, selection: str, odds: float, status: s
     return min(0.82, base_implied * 1.00)
 
 
-async def score_selection(sel: Dict[str, Any], intel: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+async def score_selection(
+    sel: Dict[str, Any],
+    intel: Optional[Dict[str, Any]] = None,
+    mode: str = "REMOVE"
+) -> Dict[str, Any]:
     """
-    Evaluates an individual selection's risk rating, win probability, and conviction tier
-    using live SportyBet odds, Favorite vs Underdog vs Even-Strength dynamics, H2H, and Poisson signals.
+    Evaluates an individual selection's risk rating, win probability, and conviction tier.
+    - REMOVE mode: Strictly purges traps & risky legs without altering original bettor markets.
+    - EDIT mode: Upgrades risky straight wins & high-variance markets to verified live SportyBet safety markets (>= 1.15 odds).
     """
+    mode_upper = (mode or "REMOVE").upper().strip()
     is_expired, exp_msg = _is_expired_or_live(sel)
     if is_expired:
         return {
@@ -465,6 +471,7 @@ async def score_selection(sel: Dict[str, Any], intel: Optional[Dict[str, Any]] =
         dog_odds = intel.get("dog_odds", 2.0)
         fav_team = intel.get("fav_team", home)
         dog_team = intel.get("dog_team", away)
+        is_home_fav = intel.get("is_home_fav", (h_odds <= a_odds))
         is_even = intel.get("is_even_strength", False)
         draw_prob = intel.get("draw_probability", 0.28)
         tot_exp = intel.get("total_exp_goals", 2.6)
@@ -476,55 +483,103 @@ async def score_selection(sel: Dict[str, Any], intel: Optional[Dict[str, Any]] =
 
         # ── CHECK 1: EVEN-STRENGTH STRAIGHT WIN TRAP (50-50 COIN FLIP) ──
         if is_even and is_straight_win:
-            keep = False
-            prob = min(prob, 0.52)
-            drop_reason = f"Even-Strength Trap: {home} (@{h_odds:.2f}x) vs {away} (@{a_odds:.2f}x) are evenly matched. Straight win is a volatile 50-50 trap."
-            form_notes.append("Even-strength match: high draw & coin-flip risk")
+            if mode_upper == "EDIT":
+                over15_cand = intel.get("over_15")
+                if over15_cand and float(over15_cand.get("odds", 0)) >= 1.15 and tot_exp >= 2.4:
+                    fortified_pick = over15_cand
+                    action = "UPGRADED_SAFE"
+                    prob = 0.88
+                    form_notes.append("Even-strength match: Upgraded straight win to verified live SportyBet Over 1.5 Goals")
+                else:
+                    keep = False
+                    prob = min(prob, 0.52)
+                    drop_reason = f"Even-Strength Trap: {home} (@{h_odds:.2f}x) vs {away} (@{a_odds:.2f}x) are evenly matched. No safe verified market on SportyBet."
+            else:
+                keep = False
+                prob = min(prob, 0.52)
+                drop_reason = f"Even-Strength Trap: {home} (@{h_odds:.2f}x) vs {away} (@{a_odds:.2f}x) are evenly matched. Straight win is a volatile 50-50 trap."
+                form_notes.append("Even-strength match: high draw & coin-flip risk")
 
         # ── CHECK 2: UNDERDOG PICK AGAINST FAVORITE ──
-        elif is_straight_win and ((p_lower in ("2", "away", away.lower()) and not intel["is_home_fav"]) or (p_lower in ("1", "home", home.lower()) and intel["is_home_fav"])):
-            pass # Bettor picked favorite
-        elif is_straight_win and not is_even:
-            # Bettor picked the underdog straight win
-            keep = False
-            prob = min(prob, 0.45)
-            drop_reason = f"Underdog Risk: Picked {dog_team} (@{dog_odds:.2f}x) against clear favorite {fav_team} (@{fav_odds:.2f}x)."
-            form_notes.append(f"Underdog pick against {fav_team}")
+        elif is_straight_win and not is_even and ((p_lower in ("2", "away", away.lower()) and is_home_fav) or (p_lower in ("1", "home", home.lower()) and not is_home_fav)):
+            if mode_upper == "EDIT":
+                over15_cand = intel.get("over_15")
+                if over15_cand and float(over15_cand.get("odds", 0)) >= 1.15 and tot_exp >= 2.4:
+                    fortified_pick = over15_cand
+                    action = "UPGRADED_SAFE"
+                    prob = 0.88
+                    form_notes.append(f"Underdog risk: Upgraded to verified live SportyBet Over 1.5 Goals")
+                else:
+                    keep = False
+                    prob = min(prob, 0.45)
+                    drop_reason = f"Underdog Risk: Picked {dog_team} (@{dog_odds:.2f}x) against favorite {fav_team} (@{fav_odds:.2f}x)."
+            else:
+                keep = False
+                prob = min(prob, 0.45)
+                drop_reason = f"Underdog Risk: Picked {dog_team} (@{dog_odds:.2f}x) against clear favorite {fav_team} (@{fav_odds:.2f}x)."
+                form_notes.append(f"Underdog pick against {fav_team}")
 
         # ── CHECK 3: DOUBLE CHANCE '12' (HOME OR AWAY) ──
         elif "12" in p_lower and draw_prob >= 0.24:
-            keep = False
-            prob = min(prob, 0.62)
-            drop_reason = f"Volatile '12' Double Chance on {home} vs {away} is vulnerable to draws ({draw_prob*100:.0f}% draw rate)."
-
-        # ── CHECK 4: STRAIGHT WIN ON MODERATE FAVORITE (DRAW VULNERABILITY FORTIFICATION) ──
-        elif is_straight_win and 1.45 <= fav_odds <= 1.95 and draw_prob >= 0.25:
-            dc_cand = intel.get("double_chance_fav")
-            if dc_cand and float(dc_cand.get("odds", 0)) >= 1.15:
-                fortified_pick = dc_cand
-                action = "FORTIFIED_SAFE"
-                prob = dc_cand.get("probability", 0.90)
-                form_notes.append(f"Upgraded {fav_team} straight win to Double Chance (draw cushion)")
-            elif intel.get("team_over_fav"):
-                fortified_pick = intel.get("team_over_fav")
-                action = "FORTIFIED_SAFE"
-                prob = fortified_pick.get("probability", 0.88)
-                form_notes.append(f"Upgraded to {fav_team} Over 0.5 Goals")
+            if mode_upper == "EDIT":
+                dc_cand = intel.get("double_chance_fav")
+                if dc_cand and float(dc_cand.get("odds", 0)) >= 1.15:
+                    fortified_pick = dc_cand
+                    action = "UPGRADED_SAFE"
+                    prob = dc_cand.get("probability", 0.90)
+                    form_notes.append(f"Upgraded '12' to verified SportyBet {dc_cand.get('selection_name')}")
+                else:
+                    keep = False
+                    prob = min(prob, 0.62)
+                    drop_reason = f"Volatile '12' Double Chance on {home} vs {away} is vulnerable to draws ({draw_prob*100:.0f}% draw rate)."
             else:
                 keep = False
-                drop_reason = f"Straight win on {fav_team} (@{fav_odds:.2f}x) carries excessive draw risk ({draw_prob*100:.0f}%)."
+                prob = min(prob, 0.62)
+                drop_reason = f"Volatile '12' Double Chance on {home} vs {away} is vulnerable to draws ({draw_prob*100:.0f}% draw rate)."
+
+        # ── CHECK 4: STRAIGHT WIN ON FAVORITE WITH DRAW VULNERABILITY ──
+        elif is_straight_win and (fav_odds >= 1.40 or draw_prob >= 0.25):
+            if mode_upper == "EDIT":
+                dc_cand = intel.get("double_chance_fav")
+                team_cand = intel.get("team_over_fav")
+                over15_cand = intel.get("over_15")
+                if dc_cand and float(dc_cand.get("odds", 0)) >= 1.15:
+                    fortified_pick = dc_cand
+                    action = "UPGRADED_SAFE"
+                    prob = dc_cand.get("probability", 0.90)
+                    form_notes.append(f"Upgraded {fav_team} straight win to verified live SportyBet Double Chance")
+                elif team_cand and float(team_cand.get("odds", 0)) >= 1.15:
+                    fortified_pick = team_cand
+                    action = "UPGRADED_SAFE"
+                    prob = team_cand.get("probability", 0.88)
+                    form_notes.append(f"Upgraded {fav_team} straight win to verified live SportyBet Team Over 0.5 Goals")
+                elif over15_cand and float(over15_cand.get("odds", 0)) >= 1.15:
+                    fortified_pick = over15_cand
+                    action = "UPGRADED_SAFE"
+                    prob = 0.88
+                    form_notes.append("Upgraded straight win to verified live SportyBet Over 1.5 Goals")
+                else:
+                    keep = False
+                    drop_reason = f"No verified low-variance market (>= 1.15 odds) available on SportyBet for {home} vs {away}."
+            else:
+                keep = False
+                drop_reason = f"Straight win on {fav_team} (@{fav_odds:.2f}x) carries excessive draw risk ({draw_prob*100:.0f}%). Dropped in REMOVE mode (use /edit to upgrade)."
 
         # ── CHECK 5: OVER 2.5 IN LOW-SCORING MATCH ──
         elif ("over 2.5" in p_lower or "over 2.5" in m_lower) and tot_exp < 2.3:
-            over15_cand = intel.get("over_15")
-            if over15_cand and float(over15_cand.get("odds", 0)) >= 1.15:
-                fortified_pick = over15_cand
-                action = "FORTIFIED_SAFE"
-                prob = 0.88
-                form_notes.append(f"Upgraded Over 2.5 to Over 1.5 Goals (defensive fixture cushion)")
+            if mode_upper == "EDIT":
+                over15_cand = intel.get("over_15")
+                if over15_cand and float(over15_cand.get("odds", 0)) >= 1.15:
+                    fortified_pick = over15_cand
+                    action = "UPGRADED_SAFE"
+                    prob = 0.88
+                    form_notes.append("Upgraded Over 2.5 to verified live SportyBet Over 1.5 Goals")
+                else:
+                    keep = False
+                    drop_reason = f"Over 1.5 Goals not available on SportyBet with valid odds (>= 1.15) for {home} vs {away}."
             else:
                 keep = False
-                drop_reason = f"Low expected goals dynamic ({tot_exp} goals) makes Over 2.5 excessively risky."
+                drop_reason = f"Low expected goals dynamic ({tot_exp} goals) makes Over 2.5 excessively risky. Dropped in REMOVE mode (use /edit to upgrade)."
 
         # ── CHECK 6: ALREADY WINNABLE LOW-VARIANCE ANCHOR LINE ──
         elif (
@@ -532,8 +587,9 @@ async def score_selection(sel: Dict[str, Any], intel: Optional[Dict[str, Any]] =
             ("team" in m_lower and "over 0.5" in p_lower) or
             ("over 1.5" in p_lower or "over 1.5" in m_lower) or
             ("win either half" in m_lower) or
-            ("handicap" in m_lower and any(x in p_lower for x in ["+1.5", "+2.0", "(+1.5)", "(+2.0)"]))
-        ) and 1.15 <= odds <= 1.55 and prob >= SAFE_THRESHOLD:
+            ("handicap" in m_lower and any(x in p_lower for x in ["+1.5", "+2.0", "(+1.5)", "(+2.0)"])) or
+            (is_straight_win and fav_odds <= 1.35 and prob >= 0.75)
+        ) and 1.15 <= odds <= 1.65 and prob >= SAFE_THRESHOLD:
             is_anchor_candidate = True
             action = "KEEP"
             form_notes.append(f"Verified winnable pick backed by {fav_team} dominance & form")
@@ -562,17 +618,20 @@ async def score_selection(sel: Dict[str, Any], intel: Optional[Dict[str, Any]] =
             drop_reason = f"Model win probability of {prob*100:.1f}% fell below 70% safety threshold."
 
     result_sel = dict(sel)
-    if fortified_pick:
+    if fortified_pick and mode_upper == "EDIT":
         result_sel["market_name"] = fortified_pick["market_name"]
         result_sel["selection_name"] = fortified_pick["selection_name"]
         result_sel["odds"] = fortified_pick["odds"]
         result_sel["estimated_odds"] = fortified_pick["odds"]
-        result_sel["provider_market_id"] = fortified_pick["market_id"]
-        result_sel["provider_outcome_id"] = fortified_pick["outcome_id"]
+        result_sel["provider_market_id"] = str(fortified_pick["market_id"])
+        result_sel["provider_outcome_id"] = str(fortified_pick["outcome_id"])
         result_sel["provider_specifier"] = fortified_pick.get("specifier")
-        result_sel["_sportybet_market_id"] = fortified_pick["market_id"]
-        result_sel["_sportybet_outcome_id"] = fortified_pick["outcome_id"]
+        result_sel["_sportybet_market_id"] = str(fortified_pick["market_id"])
+        result_sel["_sportybet_outcome_id"] = str(fortified_pick["outcome_id"])
         result_sel["_sportybet_specifier"] = fortified_pick.get("specifier")
+        result_sel["marketId"] = str(fortified_pick["market_id"])
+        result_sel["outcomeId"] = str(fortified_pick["outcome_id"])
+        result_sel["specifier"] = fortified_pick.get("specifier")
         result_sel["replaced_original"] = {
             "market_name": mkt,
             "selection_name": pick,
@@ -689,7 +748,7 @@ async def re_edit_ticket(
     for sel in selections:
         raw_ev = str(sel.get("event_id") or sel.get("provider_event_id") or sel.get("_sportybet_event_id") or sel.get("external_fixture_id") or sel.get("fixture_id") or sel.get("game_id") or "").strip()
         intel = intel_map.get(raw_ev)
-        scored_tasks.append(score_selection(sel, intel=intel))
+        scored_tasks.append(score_selection(sel, intel=intel, mode=mode))
 
     scored = list(await asyncio.gather(*scored_tasks))
 

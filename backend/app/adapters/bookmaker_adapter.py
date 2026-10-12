@@ -1029,40 +1029,8 @@ class SportyBetAdapter(BookmakerAdapter):
                                 break
 
             if outcome_live_odds is not None and outcome_live_odds < 1.15:
-                # If selection is already a Handicap pick or KEEP pick in REMOVE mode, DO NOT corrupt it into Double Chance!
-                if str(item_payload.get("marketId")) in ("14", "16", "60", "23") or is_handicap_mkt or s.get("action") == "KEEP":
-                    logger.warning(f"[SportyBetAdapter] Kept/Handicap pick {home_target} vs {away_target} (odds {outcome_live_odds:.2f}) is strictly retained as original bettor choice.")
-                else:
-                    logger.warning(f"[SportyBetAdapter] Outcome {item_payload['marketId']}:{item_payload['outcomeId']} on {home_target} vs {away_target} live odds {outcome_live_odds:.2f} are below 1.15 floor.")
-                    repaired = False
-                    for em in ev_markets:
-                        em_id = str(em.get("id") or em.get("market_id") or "")
-                        if em_id in ("10", "18"):
-                            for eo in (em.get("outcomes") or []):
-                                eo_id = str(eo.get("id") or eo.get("outcome_id") or "")
-                                try:
-                                    eo_odds = float(eo.get("odds") or eo.get("oddsValue") or 0.0)
-                                except Exception:
-                                    eo_odds = 0.0
-                                if eo_odds >= 1.15 and eo_odds <= 1.45:
-                                    is_away_intent = "away" in sel_text or "2" in sel_text or (away_target and away_target in sel_text)
-                                    if em_id == "10" and ((is_away_intent and eo_id == "11") or (not is_away_intent and eo_id == "9")):
-                                        item_payload["marketId"] = "10"
-                                        item_payload["outcomeId"] = eo_id
-                                        item_payload.pop("specifier", None)
-                                        repaired = True
-                                        break
-                                    elif em_id == "18" and eo_id == "12" and "total=1.5" in str(em.get("specifier") or ""):
-                                        item_payload["marketId"] = "18"
-                                        item_payload["outcomeId"] = "12"
-                                        item_payload["specifier"] = "total=1.5"
-                                        repaired = True
-                                        break
-                            if repaired:
-                                break
-                    if not repaired and outcome_live_odds < 1.15:
-                        logger.warning(f"[SportyBetAdapter] Purged sub-1.15 pick ({outcome_live_odds:.2f}) from booking payload.")
-                        continue
+                logger.warning(f"[SportyBetAdapter] Outcome {item_payload['marketId']}:{item_payload['outcomeId']} on {home_target} vs {away_target} live odds {outcome_live_odds:.2f} are below 1.15 floor. Dropping from booking payload.")
+                continue
 
             # Update selection copy with repaired/verified market details
             s_copy = dict(s)
@@ -1184,19 +1152,7 @@ class SportyBetAdapter(BookmakerAdapter):
                         with httpx.Client(timeout=2.0, headers=self.HEADERS) as sc:
                             r_single = sc.post(url_share, json={"selections": [item]})
                             if r_single.status_code == 200 and r_single.json().get("bizCode") == 10000:
-                                return (idx, item, "ORIG")
-                            if is_away_pick:
-                                rep_x2 = {"eventId": item["eventId"], "marketId": "10", "outcomeId": "11"}
-                                if sc.post(url_share, json={"selections": [rep_x2]}).status_code == 200:
-                                    return (idx, rep_x2, "X2")
-                            elif is_goals_pick:
-                                rep_o15 = {"eventId": item["eventId"], "marketId": "18", "outcomeId": "12", "specifier": "total=1.5"}
-                                if sc.post(url_share, json={"selections": [rep_o15]}).status_code == 200:
-                                    return (idx, rep_o15, "O15")
-                            else:
-                                rep_1x = {"eventId": item["eventId"], "marketId": "10", "outcomeId": "9"}
-                                if sc.post(url_share, json={"selections": [rep_1x]}).status_code == 200:
-                                    return (idx, rep_1x, "1X")
+                                return (idx, item)
                     except Exception:
                         pass
                     return None
@@ -1204,27 +1160,9 @@ class SportyBetAdapter(BookmakerAdapter):
                 with concurrent.futures.ThreadPoolExecutor(max_workers=12) as tpool:
                     for res_it in tpool.map(_verify_single, enumerate(selections_payload)):
                         if res_it:
-                            it_idx, it_obj, it_kind = res_it
+                            it_idx, it_obj = res_it
                             valid_items.append(it_obj)
                             b_copy = dict(processed_selections[it_idx])
-                            if it_kind == "X2":
-                                b_copy["market_name"] = "Double Chance"
-                                b_copy["selection_name"] = f"Draw or {b_copy.get('away_team')} (X2)"
-                                b_copy["provider_market_id"] = "10"
-                                b_copy["provider_outcome_id"] = "11"
-                                b_copy.pop("provider_specifier", None)
-                            elif it_kind == "1X":
-                                b_copy["market_name"] = "Double Chance"
-                                b_copy["selection_name"] = f"{b_copy.get('home_team')} or Draw (1X)"
-                                b_copy["provider_market_id"] = "10"
-                                b_copy["provider_outcome_id"] = "9"
-                                b_copy.pop("provider_specifier", None)
-                            elif it_kind == "O15":
-                                b_copy["market_name"] = "Over/Under Goals"
-                                b_copy["selection_name"] = "Over 1.5 Goals"
-                                b_copy["provider_market_id"] = "18"
-                                b_copy["provider_outcome_id"] = "12"
-                                b_copy["provider_specifier"] = "total=1.5"
                             booked_selections.append(b_copy)
 
                 if valid_items and len(valid_items) >= 1:
