@@ -1499,6 +1499,12 @@ class StatIQTelegramBot:
 
     def start(self):
         """Starts the bot in a background thread with cross-process lock protection."""
+        from pathlib import Path
+        from dotenv import load_dotenv
+        env_file = Path(__file__).resolve().parent.parent.parent / ".env"
+        if env_file.exists():
+            load_dotenv(env_file)
+
         run_bot_env = os.getenv("RUN_TELEGRAM_BOT", "true").strip().lower()
         if run_bot_env in ("false", "0", "no", "disabled"):
             logger.info("[TelegramBot] RUN_TELEGRAM_BOT is disabled in environment. Polling worker will not start.")

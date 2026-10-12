@@ -1,7 +1,9 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pathlib import Path
+from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
+load_dotenv(BASE_DIR / ".env")
 
 class Settings(BaseSettings):
     FOOTBALL_DATA_API_KEY: str = "490d737d899046f5a464110569805d2b"
