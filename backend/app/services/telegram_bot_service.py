@@ -370,14 +370,27 @@ class StatIQTelegramBot:
 
     def handle_dispatch_command(self, chat_id: int | str):
         """Immediately executes and delivers the Daily VIP Trio tickets to Telegram."""
+        now_ts = time.time()
+        last_ts = getattr(self, "_last_dispatch_ts", 0)
+        if (now_ts - last_ts) < 30:
+            self.send_message(chat_id, "⏳ <b>Dispatch in progress or completed recently.</b> Please allow 30s between runs.")
+            return
+        self._last_dispatch_ts = now_ts
+
         self.send_chat_action(chat_id, "typing")
         self.send_message(
             chat_id,
-            "⏳ <b>StatIQ Daily VIP Automation:</b> Querying today's fixtures and generating 2.0x, 10.0x, and 20.0x slips with <b>Adaptive Calendar Engine</b>..."
+            "⏳ <b>StatIQ Daily VIP Automation:</b> Querying today's fixtures and generating 2.0x and 2x 10.0x slips with <b>Strict Zero-Overlap</b>..."
         )
 
         try:
             from app.services.rollover_cron_scheduler import rollover_scheduler
+            from app.services.rollover_telegram_notifier import RolloverTelegramNotifier
+
+            creds = RolloverTelegramNotifier.get_credentials()
+            vip_chat_id = str(creds.get("chat_id") or "")
+            is_same_channel = (str(chat_id) == vip_chat_id)
+
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             try:
@@ -393,99 +406,64 @@ class StatIQTelegramBot:
                 return
 
             dispatched_count = 0
-            # 1. Rollover slip (2.0x)
-            ro_ticket = trio_res.get("rollover_ticket")
-            if ro_ticket and ro_ticket.get("picks"):
-                self._dispatch_ticket_message(
-                    chat_id=chat_id,
-                    title="🎯 StatIQ 2.0x Rollover Slip",
-                    booking_code=ro_ticket.get("booking_code"),
-                    share_url=ro_ticket.get("share_url"),
-                    total_odds=ro_ticket.get("actual_odds", 2.0),
-                    confidence=ro_ticket.get("confidence_score", 88.0),
-                    picks=ro_ticket.get("picks", []),
-                    extra_note="Daily VIP Slip 1 of 3 · 🎯 2.0x Rollover (100% Isolated Banker Legs) · Min Odds ≥ 1.15x"
-                )
-                dispatched_count += 1
 
-            # 2. Daily 10.0x Mega Multiplier Slips (Slip #1 and Slip #2)
-            acca10 = trio_res.get("acca_10x_ticket")
-            acca10_2 = trio_res.get("acca_10x_ticket_2")
-            acca15 = trio_res.get("acca_15x_ticket")
-            if acca10 and acca10.get("picks"):
-                self._dispatch_ticket_message(
-                    chat_id=chat_id,
-                    title="⚡ StatIQ 10.0x Mega Multiplier — Slip #1",
-                    booking_code=acca10.get("booking_code"),
-                    share_url=acca10.get("share_url"),
-                    total_odds=acca10.get("actual_odds", 10.0),
-                    confidence=acca10.get("confidence_score", 52.0),
-                    picks=acca10.get("picks", []),
-                    extra_note="Daily VIP Slip 2 of 3 · ⚡ 10.0x Mega Multiplier Slip #1 · 🔒 Strict Zero-Overlap · Min Odds ≥ 1.15x"
-                )
-                dispatched_count += 1
+            # If this command was run outside the VIP main channel, also forward the slips to the requester's chat
+            if not is_same_channel:
+                # 1. Rollover slip (2.0x)
+                ro_ticket = trio_res.get("rollover_ticket")
+                if ro_ticket and ro_ticket.get("picks"):
+                    self._dispatch_ticket_message(
+                        chat_id=chat_id,
+                        title="🎯 StatIQ 2.0x Rollover Slip",
+                        booking_code=ro_ticket.get("booking_code"),
+                        share_url=ro_ticket.get("share_url"),
+                        total_odds=ro_ticket.get("actual_odds", 2.0),
+                        confidence=ro_ticket.get("confidence_score", 88.0),
+                        picks=ro_ticket.get("picks", []),
+                        extra_note="Daily VIP Slip 1 of 3 · 🎯 2.0x Rollover (100% Isolated Banker Legs) · Min Odds ≥ 1.15x"
+                    )
+                    dispatched_count += 1
 
-            if acca10_2 and acca10_2.get("picks"):
-                self._dispatch_ticket_message(
-                    chat_id=chat_id,
-                    title="⚡ StatIQ 10.0x Mega Multiplier — Slip #2",
-                    booking_code=acca10_2.get("booking_code"),
-                    share_url=acca10_2.get("share_url"),
-                    total_odds=acca10_2.get("actual_odds", 10.0),
-                    confidence=acca10_2.get("confidence_score", 52.0),
-                    picks=acca10_2.get("picks", []),
-                    extra_note="Daily VIP Slip 3 of 3 · ⚡ 10.0x Mega Multiplier Slip #2 · 🔒 Strict Zero-Overlap · Min Odds ≥ 1.15x"
-                )
-                dispatched_count += 1
-            elif acca15 and acca15.get("picks"):
-                self._dispatch_ticket_message(
-                    chat_id=chat_id,
-                    title="⚡ StatIQ 15.0x Mid-Week Multiplier Slip",
-                    booking_code=acca15.get("booking_code"),
-                    share_url=acca15.get("share_url"),
-                    total_odds=acca15.get("actual_odds", 15.0),
-                    confidence=acca15.get("confidence_score", 45.0),
-                    picks=acca15.get("picks", []),
-                    extra_note="Daily VIP Slip 2 of 2 (Mid-Week) · ⚡ 15.0x Multiplier (10–13 Legs Max) · 🔒 Zero-Overlap with Rollover · Min Odds ≥ 1.15x"
-                )
-                dispatched_count += 1
+                # 2. Daily 10.0x Mega Multiplier Slips (Slip #1 and Slip #2)
+                acca10 = trio_res.get("acca_10x_ticket")
+                acca10_2 = trio_res.get("acca_10x_ticket_2")
+                if acca10 and acca10.get("picks"):
+                    self._dispatch_ticket_message(
+                        chat_id=chat_id,
+                        title="⚡ StatIQ 10.0x Mega Multiplier — Slip #1",
+                        booking_code=acca10.get("booking_code"),
+                        share_url=acca10.get("share_url"),
+                        total_odds=acca10.get("actual_odds", 10.0),
+                        confidence=acca10.get("confidence_score", 52.0),
+                        picks=acca10.get("picks", []),
+                        extra_note="Daily VIP Slip 2 of 3 · ⚡ 10.0x Mega Multiplier Slip #1 · 🔒 Strict Zero-Overlap · Min Odds ≥ 1.15x"
+                    )
+                    dispatched_count += 1
 
-            # 3. Weekend 20.0x Monster Acca slip
-            acca20 = trio_res.get("acca_20x_ticket")
-            if acca20 and acca20.get("picks"):
-                self._dispatch_ticket_message(
-                    chat_id=chat_id,
-                    title="🚀 StatIQ 20.0x Monster Acca Slip",
-                    booking_code=acca20.get("booking_code"),
-                    share_url=acca20.get("share_url"),
-                    total_odds=acca20.get("actual_odds", 20.0),
-                    confidence=acca20.get("confidence_score", 35.0),
-                    picks=acca20.get("picks", []),
-                    extra_note="Daily VIP Slip 3 of 3 (Weekend) · 🚀 20.0x Monster Acca (13–15 Legs) · 🔒 Strict Zero-Overlap · Min Odds ≥ 1.15x"
+                if acca10_2 and acca10_2.get("picks"):
+                    self._dispatch_ticket_message(
+                        chat_id=chat_id,
+                        title="⚡ StatIQ 10.0x Mega Multiplier — Slip #2",
+                        booking_code=acca10_2.get("booking_code"),
+                        share_url=acca10_2.get("share_url"),
+                        total_odds=acca10_2.get("actual_odds", 10.0),
+                        confidence=acca10_2.get("confidence_score", 52.0),
+                        picks=acca10_2.get("picks", []),
+                        extra_note="Daily VIP Slip 3 of 3 · ⚡ 10.0x Mega Multiplier Slip #2 · 🔒 Strict Zero-Overlap · Min Odds ≥ 1.15x"
+                    )
+                    dispatched_count += 1
+            else:
+                # In VIP channel, RolloverTelegramNotifier already delivered all 3 slips directly
+                dispatched_count = (
+                    (1 if trio_res.get("rollover_ticket") else 0) +
+                    (1 if trio_res.get("acca_10x_ticket") else 0) +
+                    (1 if trio_res.get("acca_10x_ticket_2") else 0)
                 )
-                dispatched_count += 1
-
-            # Optional: 5.0x Value Acca if enabled
-            acca5 = trio_res.get("acca_5x_ticket")
-            if acca5 and acca5.get("picks"):
-                self._dispatch_ticket_message(
-                    chat_id=chat_id,
-                    title="🔥 StatIQ 5.0x Value Acca Slip",
-                    booking_code=acca5.get("booking_code"),
-                    share_url=acca5.get("share_url"),
-                    total_odds=acca5.get("actual_odds", 5.0),
-                    confidence=acca5.get("confidence_score", 65.0),
-                    picks=acca5.get("picks", []),
-                    extra_note="Optional Value Acca · Min Odds ≥ 1.15x"
-                )
-                dispatched_count += 1
 
             if dispatched_count > 0:
-                cal_mode = trio_res.get("calendar_mode", "STRICT_ZERO_OVERLAP")
-                cal_desc = "Strict 100% Zero-Overlap" if cal_mode == "STRICT_ZERO_OVERLAP" else "Smart Hybrid (Isolated Rollover + Shared Giants in Unique Markets)"
                 self.send_message(
                     chat_id,
-                    f"✅ <b>Daily VIP Automation Complete!</b> Dispatched {dispatched_count} slips with <b>{trio_res.get('total_unique_fixtures', 0)} unique fixtures</b> ({cal_desc})."
+                    f"✅ <b>Daily VIP Automation Complete!</b> Dispatched {dispatched_count} slips with <b>{trio_res.get('total_unique_fixtures', 0)} unique fixtures</b> (100% Strict Zero-Overlap)."
                 )
         except Exception as e:
             logger.error(f"[TelegramBot] Dispatch error: {e}", exc_info=True)
