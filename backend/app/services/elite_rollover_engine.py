@@ -454,8 +454,20 @@ class EliteRolloverEngine:
                                     "selection_rationale": f"{tier_label} · Poisson Scoring Profile · {stats_3p.get('h2h_summary')} · {stats_3p.get('form_summary')}"
                                 })
 
-                # C. Heavy Favorite Team Total Over 0.5 (Team to Score)
+                # C. Heavy Favorite Team Total Over 0.5 (Team to Score / Goal Bounds 1+)
                 if ("team" in m_desc or m_id in ("19", "20") or "home" in m_desc or "away" in m_desc) and ("over/under" in m_desc or "goals" in m_desc):
+                    # Discriminate Home vs Away markets (Market 19 = Home Team, Market 20 = Away Team)
+                    is_home_mkt = (m_id == "19" or "home" in m_desc or (h_team.lower() in m_desc and a_team.lower() not in m_desc))
+                    is_away_mkt = (m_id == "20" or "away" in m_desc or (a_team.lower() in m_desc and h_team.lower() not in m_desc))
+
+                    # Strictly bind to the team the data favors:
+                    if is_home_fav and not is_home_mkt:
+                        continue
+                    if (not is_home_fav) and not is_away_mkt:
+                        continue
+
+                    fav_team = h_team if is_home_fav else a_team
+
                     for oc in m.get("outcomes", []):
                         is_active = oc.get("isActive")
                         if is_active is not None and str(is_active) not in ("1", "True", "true"):
@@ -470,7 +482,6 @@ class EliteRolloverEngine:
                         is_line_05 = ("0.5" in spec) or ("0.5" in oc_desc) or ("total=0.5" in spec) or ("over 0.5" in oc_desc)
                         if is_line_05 and "over" in oc_desc and 1.15 <= odds <= min(max_leg_odds, 1.45):
                             prob = round(min(0.93, (1.0 / odds) * 0.97), 4)
-                            fav_team = h_team if is_home_fav else a_team
                             sel_desc = f"{fav_team} Over 0.5 Goals"
                             stats_3p = evaluate_fixture_3pillar_metrics(h_team, a_team, f"{fav_team} Team Goals", sel_desc, odds)
                             if prob >= 0.80 and dominance_ratio >= min_dominance and stats_3p.get("composite_safety_score", 0.7) >= 0.68:
