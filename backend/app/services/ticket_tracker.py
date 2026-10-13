@@ -100,53 +100,54 @@ def save_tracked_tickets(tickets: List[Dict[str, Any]], db: Optional[Session] = 
         db = SessionLocal()
         should_close = True
     try:
-        for data in tickets:
-            ticket_id = data.get("id")
-            if not ticket_id:
-                continue
-            existing = db.query(TrackedTicket).filter(TrackedTicket.id == ticket_id).first()
-            if existing:
-                existing.code = data.get("code", existing.code)
-                existing.mode = data.get("mode", existing.mode)
-                existing.target_odds = float(data.get("target_odds", existing.target_odds))
-                existing.total_odds = float(data.get("total_odds", existing.total_odds))
-                existing.stake = float(data.get("stake", existing.stake))
-                existing.flex_cut = data.get("flex_cut", existing.flex_cut)
-                existing.potential_win = float(data.get("potential_win", existing.potential_win))
-                existing.status = data.get("status", existing.status)
-                existing.created_at = data.get("created_at", existing.created_at)
-                existing.locked_at_unix = int(data.get("locked_at_unix", existing.locked_at_unix))
-                existing.selections = data.get("selections", existing.selections)
-                existing.settled_at = data.get("settled_at", existing.settled_at)
-                existing.flex_status_text = data.get("flex_status_text", existing.flex_status_text)
-                existing.allowed_losses = data.get("allowed_losses", existing.allowed_losses)
-                existing.loss_count = data.get("loss_count", existing.loss_count)
-                existing.is_live = data.get("is_live", existing.is_live)
-                existing.stale = data.get("stale", existing.stale)
-                existing.stale_reason = data.get("stale_reason", existing.stale_reason)
-            elif create_if_missing:
-                new_t = TrackedTicket(
-                    id=ticket_id,
-                    code=data.get("code", "CUSTOM"),
-                    mode=data.get("mode", "SWAP"),
-                    target_odds=float(data.get("target_odds", 1.5)),
-                    total_odds=float(data.get("total_odds", 1.5)),
-                    stake=float(data.get("stake", 100.0)),
-                    flex_cut=data.get("flex_cut"),
-                    potential_win=float(data.get("potential_win", 150.0)),
-                    status=data.get("status", "RUNNING"),
-                    created_at=data.get("created_at", time.strftime("%Y-%m-%d %H:%M:%S")),
-                    locked_at_unix=int(data.get("locked_at_unix", time.time())),
-                    selections=data.get("selections", []),
-                    settled_at=data.get("settled_at"),
-                    flex_status_text=data.get("flex_status_text"),
-                    allowed_losses=data.get("allowed_losses"),
-                    loss_count=data.get("loss_count"),
-                    is_live=data.get("is_live", False),
-                    stale=data.get("stale", False),
-                    stale_reason=data.get("stale_reason"),
-                )
-                db.add(new_t)
+        with db.no_autoflush:
+            for data in tickets:
+                ticket_id = data.get("id")
+                if not ticket_id:
+                    continue
+                existing = db.query(TrackedTicket).filter(TrackedTicket.id == ticket_id).first()
+                if existing:
+                    existing.code = data.get("code", existing.code)
+                    existing.mode = data.get("mode", existing.mode)
+                    existing.target_odds = float(data.get("target_odds", existing.target_odds))
+                    existing.total_odds = float(data.get("total_odds", existing.total_odds))
+                    existing.stake = float(data.get("stake", existing.stake))
+                    existing.flex_cut = data.get("flex_cut", existing.flex_cut)
+                    existing.potential_win = float(data.get("potential_win", existing.potential_win))
+                    existing.status = data.get("status", existing.status)
+                    existing.created_at = data.get("created_at", existing.created_at)
+                    existing.locked_at_unix = int(data.get("locked_at_unix", existing.locked_at_unix))
+                    existing.selections = data.get("selections", existing.selections)
+                    existing.settled_at = data.get("settled_at", existing.settled_at)
+                    existing.flex_status_text = data.get("flex_status_text", existing.flex_status_text)
+                    existing.allowed_losses = data.get("allowed_losses", existing.allowed_losses)
+                    existing.loss_count = data.get("loss_count", existing.loss_count)
+                    existing.is_live = data.get("is_live", existing.is_live)
+                    existing.stale = data.get("stale", existing.stale)
+                    existing.stale_reason = data.get("stale_reason", existing.stale_reason)
+                elif create_if_missing:
+                    new_t = TrackedTicket(
+                        id=ticket_id,
+                        code=data.get("code", "CUSTOM"),
+                        mode=data.get("mode", "SWAP"),
+                        target_odds=float(data.get("target_odds", 1.5)),
+                        total_odds=float(data.get("total_odds", 1.5)),
+                        stake=float(data.get("stake", 100.0)),
+                        flex_cut=data.get("flex_cut"),
+                        potential_win=float(data.get("potential_win", 150.0)),
+                        status=data.get("status", "RUNNING"),
+                        created_at=data.get("created_at", time.strftime("%Y-%m-%d %H:%M:%S")),
+                        locked_at_unix=int(data.get("locked_at_unix", time.time())),
+                        selections=data.get("selections", []),
+                        settled_at=data.get("settled_at"),
+                        flex_status_text=data.get("flex_status_text"),
+                        allowed_losses=data.get("allowed_losses"),
+                        loss_count=data.get("loss_count"),
+                        is_live=data.get("is_live", False),
+                        stale=data.get("stale", False),
+                        stale_reason=data.get("stale_reason"),
+                    )
+                    db.add(new_t)
 
         db.commit()
     except Exception as e:

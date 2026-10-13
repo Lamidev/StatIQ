@@ -12,7 +12,7 @@ connect_args = {}
 if "sqlite" in db_url:
     connect_args = {
         "check_same_thread": False,
-        "timeout": 30.0,
+        "timeout": 60.0,
     }
 elif "postgresql" in db_url:
     connect_args = {
@@ -25,7 +25,9 @@ try:
 except Exception as e:
     print(f"[Database] Warning: Failed to connect to {db_url} ({e}). Falling back to local SQLite.")
     fallback_url = "sqlite:///./matchiq.db"
-    engine = create_engine(fallback_url, echo=False, connect_args={"check_same_thread": False})
+    connect_args = {"check_same_thread": False, "timeout": 60.0}
+    engine = create_engine(fallback_url, echo=False, connect_args=connect_args)
+    db_url = fallback_url
 
 
 
@@ -35,10 +37,10 @@ if "sqlite" in db_url:
         cursor = dbapi_connection.cursor()
         cursor.execute("PRAGMA journal_mode=WAL")
         cursor.execute("PRAGMA synchronous=NORMAL")
-        cursor.execute("PRAGMA busy_timeout=30000")
+        cursor.execute("PRAGMA busy_timeout=60000")
         cursor.close()
 
-SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
+SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
 
 class Base(DeclarativeBase):
     pass
