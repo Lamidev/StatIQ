@@ -420,12 +420,14 @@ class EliteRolloverEngine:
                         oc_desc = (oc.get("desc") or "").lower()
                         odds = float(oc.get("odds") or 0)
                         
-                        # Match total=1.5 in specifier or description
+                        # Match total=1.5 or Asian total=2 in specifier or description
                         is_line_15 = ("1.5" in spec) or ("1.5" in oc_desc) or ("total=1.5" in spec) or ("over 1.5" in oc_desc)
-                        if is_line_15 and "over" in oc_desc and 1.15 <= odds <= max_leg_odds:
-                            prob = cls._calculate_poisson_over15_prob(h_odds, d_odds, a_odds)
-                            sel_desc = "Over 1.5 Goals"
-                            stats_3p = evaluate_fixture_3pillar_metrics(h_team, a_team, "Over/Under 1.5", sel_desc, odds)
+                        is_line_20 = ("total=2" in spec) or ("total=2.0" in spec) or ("over 2" in oc_desc and "2.5" not in oc_desc)
+                        if (is_line_15 or is_line_20) and "over" in oc_desc and 1.15 <= odds <= max_leg_odds:
+                            prob = cls._calculate_poisson_over15_prob(h_odds, d_odds, a_odds) if is_line_15 else round(min(0.88, (1.0 / odds) * 0.94), 4)
+                            sel_desc = "Over 1.5 Goals" if is_line_15 else "Over 2 Goals"
+                            m_type = "OVER_15" if is_line_15 else "OVER_20"
+                            stats_3p = evaluate_fixture_3pillar_metrics(h_team, a_team, f"Over/Under {1.5 if is_line_15 else 2.0}", sel_desc, odds)
                             if prob >= 0.78 and stats_3p.get("composite_safety_score", 0.7) >= 0.68:
                                 c_sc = float(stats_3p.get("composite_safety_score", 0.75))
                                 candidates.append({
@@ -437,17 +439,17 @@ class EliteRolloverEngine:
                                     "dominance_ratio": round(dominance_ratio, 2),
                                     "is_juggernaut": fav_is_juggernaut,
                                     "market_id": m_id,
-                                    "market_desc": "Over/Under 1.5",
+                                    "market_desc": sel_desc,
                                     "outcome_id": oc_id,
                                     "selection_desc": sel_desc,
-                                    "specifier": spec or "total=1.5",
+                                    "specifier": spec or ("total=1.5" if is_line_15 else "total=2.0"),
                                     "odds": odds,
                                     "model_probability": prob,
-                                    "market_type": "OVER_15",
+                                    "market_type": m_type,
                                     "h2h_summary": stats_3p.get("h2h_summary") or f"H2H Goal Index: {h_team} vs {a_team}",
                                     "form_summary": stats_3p.get("form_summary") or f"Form Goal Rate: {h_team} + {a_team}",
                                     "composite_safety_score": c_sc,
-                                    "quality_score": (prob * 55.0) + (c_sc * 45.0) + pedigree_bonus + (juggernaut_bonus * 0.9) + 8.0,
+                                    "quality_score": (prob * 55.0) + (c_sc * 45.0) + pedigree_bonus + (juggernaut_bonus * 0.9) + (8.0 if is_line_15 else 6.0),
                                     "selection_rationale": f"{tier_label} · Poisson Scoring Profile · {stats_3p.get('h2h_summary')} · {stats_3p.get('form_summary')}"
                                 })
 

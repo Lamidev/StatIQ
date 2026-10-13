@@ -185,26 +185,33 @@ async def _fetch_live_event_intelligence(
                         }
                         found_elite_candidates.append(dc_away_cand)
 
-            # 3. Market 18: Over 1.5 Total Goals
-            elif (m_id == "18" or "over/under" in m_desc) and "half" not in m_desc and "team" not in m_desc:
-                if spec and "1.5" in str(spec):
+            # 3. Market 18: Over 1.5 & Asian Over 2.0 Total Goals
+            elif (m_id == "18" or "over/under" in m_desc or "goals" in m_desc) and "half" not in m_desc and "team" not in m_desc:
+                is_line_15 = spec and "1.5" in str(spec)
+                is_line_20 = spec and ("total=2" in str(spec) or "total=2.0" in str(spec))
+                if is_line_15 or is_line_20:
                     for oc in m.get("outcomes", []):
                         if str(oc.get("isActive", "1")) not in ("1", "True", "true") or str(oc.get("status", "0")) != "0":
                             continue
                         oc_desc = (oc.get("desc") or "").lower()
                         odds = float(oc.get("odds") or 0)
                         if "over" in oc_desc and 1.15 <= odds <= 1.45:
-                            over15_cand = {
+                            line_label = "Over 1.5 Goals" if is_line_15 else "Over 2 Goals"
+                            cand_obj = {
                                 "market_name": "Over/Under Goals",
-                                "selection_name": "Over 1.5 Goals",
+                                "selection_name": line_label,
                                 "odds": odds,
-                                "probability": 0.88,
+                                "probability": 0.88 if is_line_15 else 0.84,
                                 "market_id": m_id,
                                 "outcome_id": str(oc.get("id")),
                                 "specifier": spec,
-                                "reason": f"Verified live SportyBet Over 1.5 Goals (@ {odds:.2f}x)"
+                                "reason": f"Verified live SportyBet {line_label} (@ {odds:.2f}x)"
                             }
-                            found_elite_candidates.append(over15_cand)
+                            if is_line_15 and not over15_cand:
+                                over15_cand = cand_obj
+                            elif is_line_20 and not over15_cand:
+                                over15_cand = cand_obj
+                            found_elite_candidates.append(cand_obj)
 
             # 4. Team Goals: Over 0.5
             elif "team" in m_desc and "over" in m_desc:
