@@ -16,6 +16,7 @@ import re
 import html
 import time
 import math
+import json
 import asyncio
 import logging
 import threading
@@ -1436,7 +1437,7 @@ class StatIQTelegramBot:
         cq_id = query.get("id")
         data = query.get("data", "")
         message = query.get("message", {})
-        chat_id = message.get("chat", {}).get("id")
+        chat_id = message.get("chat", {}).get("id") or query.get("from", {}).get("id")
 
         if not chat_id:
             return
@@ -1814,10 +1815,10 @@ class StatIQTelegramBot:
         """Infinite polling loop for Telegram updates."""
         logger.info("[TelegramBot] Polling loop started successfully.")
 
-        # Ensure no hanging webhook conflicts and flush any old pending backlog on startup
+        # Ensure no hanging webhook conflicts
         try:
             with httpx.Client(timeout=10.0) as client:
-                client.post(f"{self.base_url}/deleteWebhook", json={"drop_pending_updates": True})
+                client.post(f"{self.base_url}/deleteWebhook", json={"drop_pending_updates": False})
         except Exception:
             pass
 
@@ -1832,7 +1833,7 @@ class StatIQTelegramBot:
             params = {
                 "offset": self._last_update_id + 1,
                 "timeout": 20,
-                "allowed_updates": ["message", "callback_query"]
+                "allowed_updates": json.dumps(["message", "callback_query", "edited_message"])
             }
 
             try:
@@ -1850,15 +1851,27 @@ class StatIQTelegramBot:
 
                             if "message" in update:
                                 try:
-                                    self.process_message(update["message"])
+                                    threading.Thread(
+                                        target=self.process_message,
+                                        args=(update["message"],),
+                                        daemon=True
+                                    ).start()
                                 except Exception as me:
-                                    logger.error(f"[TelegramBot] Error handling message: {me}", exc_info=True)
+                                    logger.error(f"[TelegramBot] Error dispatching message thread: {me}", exc_info=True)
 
                             elif "callback_query" in update:
+                                cq = update["callback_query"]
                                 try:
-                                    self.handle_callback_query(update["callback_query"])
+                                    cq_id = cq.get("id")
+                                    if cq_id:
+                                        self.answer_callback_query(cq_id)
+                                    threading.Thread(
+                                        target=self.handle_callback_query,
+                                        args=(cq,),
+                                        daemon=True
+                                    ).start()
                                 except Exception as ce:
-                                    logger.error(f"[TelegramBot] Error handling callback: {ce}", exc_info=True)
+                                    logger.error(f"[TelegramBot] Error dispatching callback thread: {ce}", exc_info=True)
 
                     elif resp.status_code == 409:
                         # Temporary conflict during PM2 restart or overlapping connection
