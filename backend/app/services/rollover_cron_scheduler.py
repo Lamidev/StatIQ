@@ -16,9 +16,9 @@ CONFIG_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."
 DEFAULT_CONFIG = {
     "is_enabled": True,
     "active_days": ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"],  # Daily by default
-    "enable_rollover_2x": True,            # Slip 1: 2.0x Rollover
-    "enable_acca_10x": True,               # Slip 2: 10.0x Mega Multiplier (12–14 legs)
-    "enable_acca_20x": True,               # Slip 3: 20.0x Monster Acca (15–18 legs, replacing 5.0x)
+    "enable_rollover_2x": True,            # Slip 1: 2.0x Rollover (3–4 banker legs)
+    "enable_acca_10x": True,               # Slips 2 & 3: 2x 10.0x Mega Multipliers (10–13 legs each, 100% Zero-Overlap)
+    "enable_acca_20x": False,              # Disabled by default (Replaced by 2x 10.0x slips)
     "enable_acca_5x": False,               # Legacy 5.0x Value Acca (Disabled by default)
     "target_odds": 2.00,                   # 1.50 or 2.00
     "max_leg_odds": 1.45,                  # Upper safety bound per leg (1.15 to 1.45 corridor)
@@ -169,6 +169,7 @@ class RolloverCronScheduler:
                         cfg["last_trio_result"] = trio_res
                         primary_ticket = (trio_res.get("rollover_ticket") 
                                           or trio_res.get("acca_10x_ticket")
+                                          or trio_res.get("acca_10x_ticket_2")
                                           or trio_res.get("acca_20x_ticket")
                                           or trio_res.get("acca_5x_ticket"))
                         cfg["last_ticket"] = primary_ticket
@@ -180,10 +181,11 @@ class RolloverCronScheduler:
                             "unique_fixtures": trio_res.get("total_unique_fixtures", 0),
                             "rollover_code": trio_res.get("rollover_ticket", {}).get("booking_code") if trio_res.get("rollover_ticket") else None,
                             "acca_10x_code": trio_res.get("acca_10x_ticket", {}).get("booking_code") if trio_res.get("acca_10x_ticket") else None,
+                            "acca_10x_code_2": trio_res.get("acca_10x_ticket_2", {}).get("booking_code") if trio_res.get("acca_10x_ticket_2") else None,
                             "acca_20x_code": trio_res.get("acca_20x_ticket", {}).get("booking_code") if trio_res.get("acca_20x_ticket") else None,
                             "acca_5x_code": trio_res.get("acca_5x_ticket", {}).get("booking_code") if trio_res.get("acca_5x_ticket") else None,
                             "zero_overlap": trio_res.get("zero_overlap_guaranteed", True),
-                            "calendar_mode": trio_res.get("calendar_mode", "STRICT_ZERO_OVERLAP"),
+                            "calendar_mode": trio_res.get("calendar_mode", "DAILY_TRIO_2X_10X_10X"),
                             "campaign_mode": cfg.get("campaign_mode", "CONTINUOUS"),
                             "stake": current_stake
                         }
@@ -257,6 +259,7 @@ class RolloverCronScheduler:
         cfg["last_trio_result"] = trio_res
         primary_ticket = (trio_res.get("rollover_ticket") 
                           or trio_res.get("acca_10x_ticket")
+                          or trio_res.get("acca_10x_ticket_2")
                           or trio_res.get("acca_20x_ticket")
                           or trio_res.get("acca_5x_ticket"))
         cfg["last_ticket"] = primary_ticket
@@ -269,10 +272,11 @@ class RolloverCronScheduler:
             "unique_fixtures": trio_res.get("total_unique_fixtures", 0),
             "rollover_code": trio_res.get("rollover_ticket", {}).get("booking_code") if trio_res.get("rollover_ticket") else None,
             "acca_10x_code": trio_res.get("acca_10x_ticket", {}).get("booking_code") if trio_res.get("acca_10x_ticket") else None,
+            "acca_10x_code_2": trio_res.get("acca_10x_ticket_2", {}).get("booking_code") if trio_res.get("acca_10x_ticket_2") else None,
             "acca_20x_code": trio_res.get("acca_20x_ticket", {}).get("booking_code") if trio_res.get("acca_20x_ticket") else None,
             "acca_5x_code": trio_res.get("acca_5x_ticket", {}).get("booking_code") if trio_res.get("acca_5x_ticket") else None,
             "zero_overlap": trio_res.get("zero_overlap_guaranteed", True),
-            "calendar_mode": trio_res.get("calendar_mode", "STRICT_ZERO_OVERLAP"),
+            "calendar_mode": trio_res.get("calendar_mode", "DAILY_TRIO_2X_10X_10X"),
             "manual_trigger": True
         })
         cfg["run_history"] = history[:30]

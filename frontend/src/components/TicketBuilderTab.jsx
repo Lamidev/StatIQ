@@ -3201,8 +3201,8 @@ Slovakia vs Moldova`;
                       }`}
                     >
                       <div>
-                        <span className="text-xs font-black text-slate-900 block">🔥 10.0x Mega Acca</span>
-                        <span className="text-[10px] text-slate-500 font-medium">10–12 Vetted Legs (~10.0x Target)</span>
+                        <span className="text-xs font-black text-slate-900 block">🔥 10.0x Mega Accas (2 Slips)</span>
+                        <span className="text-[10px] text-slate-500 font-medium">2 Slips · 10–13 Legs Each (Zero-Overlap)</span>
                       </div>
                       <span className={`w-4 h-4 rounded-full border flex items-center justify-center ${
                         cronConfig.enable_acca_10x ? "bg-indigo-600 border-indigo-700 text-white" : "border-slate-300 bg-white"

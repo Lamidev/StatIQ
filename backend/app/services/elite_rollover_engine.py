@@ -1083,12 +1083,12 @@ class EliteRolloverEngine:
         trio_result = {
             "status": "SUCCESS",
             "date_str": today_str,
-            "is_midweek": is_midweek,
-            "schedule_mode": "MIDWEEK_DUO" if is_midweek else "WEEKEND_TRIO",
+            "schedule_mode": "DAILY_VIP_TRIO",
             "zero_overlap_guaranteed": True,
-            "calendar_mode": "MIDWEEK_2X_15X" if is_midweek else "WEEKEND_2X_10X_20X",
+            "calendar_mode": "DAILY_TRIO_2X_10X_10X",
             "rollover_ticket": None,
             "acca_10x_ticket": None,
+            "acca_10x_ticket_2": None,
             "acca_15x_ticket": None,
             "acca_20x_ticket": None,
             "acca_5x_ticket": None,
@@ -1134,47 +1134,91 @@ class EliteRolloverEngine:
 
                 trio_result["rollover_ticket"] = ro_payload
 
-        # ── 2. DAILY 10.0x MEGA MULTIPLIER SLIP (~10–13 Legs, Target ~10.00x, Max 13 Legs) ──
+        # ── 2. DAILY 10.0x MEGA MULTIPLIER SLIPS (2x Slips: Slip #1 & Slip #2, ~10–13 Legs each, 100% Zero-Overlap) ──
         if enable_10odds or enable_20odds:
-            unclaimed_10x = [c for c in acca_candidates if c["event_id"] not in claimed_event_ids]
-            acca10_legs = cls.assemble_optimal_accumulator_slip(
-                unclaimed_10x,
+            # ── 2A. 10.0x Mega Multiplier Slip #1 ──
+            unclaimed_10x_1 = [c for c in acca_candidates if c["event_id"] not in claimed_event_ids]
+            acca10_legs_1 = cls.assemble_optimal_accumulator_slip(
+                unclaimed_10x_1,
                 target_odds=10.00,
                 min_legs=10,
                 max_legs=13,
                 excluded_event_ids=claimed_event_ids
             )
-            if acca10_legs:
-                for leg in acca10_legs:
+            if acca10_legs_1:
+                for leg in acca10_legs_1:
                     claimed_event_ids.add(leg["event_id"])
 
-                acca10_odds = round(math.prod(leg["odds"] for leg in acca10_legs), 2)
-                acca10_prob = round(math.prod(leg["model_probability"] for leg in acca10_legs) * 100.0, 1)
-                acca10_code, acca10_url = await cls._request_sportybet_share_code(acca10_legs)
-                acca10_ticket_id = f"ACCA10X-{now_ts}"
+                acca10_odds_1 = round(math.prod(leg["odds"] for leg in acca10_legs_1), 2)
+                acca10_prob_1 = round(math.prod(leg["model_probability"] for leg in acca10_legs_1) * 100.0, 1)
+                acca10_code_1, acca10_url_1 = await cls._request_sportybet_share_code(acca10_legs_1)
+                acca10_ticket_id_1 = f"ACCA10X-1-{now_ts}"
 
-                cls._persist_ticket_record(acca10_ticket_id, acca10_code, "MEGA_10X", 10.00, acca10_odds, 1000.0, acca10_legs)
+                cls._persist_ticket_record(acca10_ticket_id_1, acca10_code_1, "MEGA_10X", 10.00, acca10_odds_1, 1000.0, acca10_legs_1)
 
-                acca10_payload = {
+                acca10_payload_1 = {
                     "status": "SUCCESS",
-                    "ticket_id": acca10_ticket_id,
-                    "title": "10.0x Mega Multiplier Slip",
-                    "booking_code": acca10_code or "N/A",
-                    "share_url": acca10_url,
+                    "ticket_id": acca10_ticket_id_1,
+                    "title": "10.0x Mega Multiplier — Slip #1",
+                    "variant_index": 1,
+                    "booking_code": acca10_code_1 or "N/A",
+                    "share_url": acca10_url_1,
                     "target_odds": 10.00,
-                    "actual_odds": acca10_odds,
-                    "confidence_score": acca10_prob,
+                    "actual_odds": acca10_odds_1,
+                    "confidence_score": acca10_prob_1,
                     "date_str": today_str,
-                    "leg_count": len(acca10_legs),
-                    "picks": acca10_legs,
+                    "leg_count": len(acca10_legs_1),
+                    "picks": acca10_legs_1,
                     "stake": 1000.0,
                     "telegram_dispatched": False
                 }
 
-                if send_telegram and acca10_code:
-                    acca10_payload["telegram_dispatched"] = RolloverTelegramNotifier.dispatch_mega_multiplier_slip(acca10_payload)
+                if send_telegram and acca10_code_1:
+                    acca10_payload_1["telegram_dispatched"] = RolloverTelegramNotifier.dispatch_mega_multiplier_slip(acca10_payload_1)
 
-                trio_result["acca_10x_ticket"] = acca10_payload
+                trio_result["acca_10x_ticket"] = acca10_payload_1
+
+            # ── 2B. 10.0x Mega Multiplier Slip #2 (100% Zero-Overlap with Slip #1 & Rollover) ──
+            unclaimed_10x_2 = [c for c in acca_candidates if c["event_id"] not in claimed_event_ids]
+            acca10_legs_2 = cls.assemble_optimal_accumulator_slip(
+                unclaimed_10x_2,
+                target_odds=10.00,
+                min_legs=10,
+                max_legs=13,
+                excluded_event_ids=claimed_event_ids
+            )
+            if acca10_legs_2:
+                for leg in acca10_legs_2:
+                    claimed_event_ids.add(leg["event_id"])
+
+                acca10_odds_2 = round(math.prod(leg["odds"] for leg in acca10_legs_2), 2)
+                acca10_prob_2 = round(math.prod(leg["model_probability"] for leg in acca10_legs_2) * 100.0, 1)
+                acca10_code_2, acca10_url_2 = await cls._request_sportybet_share_code(acca10_legs_2)
+                acca10_ticket_id_2 = f"ACCA10X-2-{now_ts}"
+
+                cls._persist_ticket_record(acca10_ticket_id_2, acca10_code_2, "MEGA_10X", 10.00, acca10_odds_2, 1000.0, acca10_legs_2)
+
+                acca10_payload_2 = {
+                    "status": "SUCCESS",
+                    "ticket_id": acca10_ticket_id_2,
+                    "title": "10.0x Mega Multiplier — Slip #2",
+                    "variant_index": 2,
+                    "booking_code": acca10_code_2 or "N/A",
+                    "share_url": acca10_url_2,
+                    "target_odds": 10.00,
+                    "actual_odds": acca10_odds_2,
+                    "confidence_score": acca10_prob_2,
+                    "date_str": today_str,
+                    "leg_count": len(acca10_legs_2),
+                    "picks": acca10_legs_2,
+                    "stake": 1000.0,
+                    "telegram_dispatched": False
+                }
+
+                if send_telegram and acca10_code_2:
+                    acca10_payload_2["telegram_dispatched"] = RolloverTelegramNotifier.dispatch_mega_multiplier_slip(acca10_payload_2)
+
+                trio_result["acca_10x_ticket_2"] = acca10_payload_2
 
         # ── 3. 20.0x MONSTER ACCA (If enabled) ──
         if enable_20odds:

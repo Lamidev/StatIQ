@@ -482,7 +482,8 @@ def _estimate_prob_from_odds(market: str, selection: str, odds: float, status: s
 async def score_selection(
     sel: Dict[str, Any],
     intel: Optional[Dict[str, Any]] = None,
-    mode: str = "REMOVE"
+    mode: str = "REMOVE",
+    allow_volatile_override: bool = False
 ) -> Dict[str, Any]:
     """
     Evaluates an individual selection's risk rating, win probability, and conviction tier.
@@ -505,7 +506,7 @@ async def score_selection(
         }
 
     is_volatile, vol_msg = _is_volatile_fixture(sel)
-    if is_volatile:
+    if is_volatile and not allow_volatile_override:
         return {
             **sel,
             "estimated_prob": 0.0,
@@ -673,7 +674,7 @@ async def score_selection(
             action = "KEEP"
             form_notes.append(f"Verified winnable pick backed by {fav_team} dominance & form")
 
-    if is_below_odds_floor:
+    if is_below_odds_floor and not allow_volatile_override:
         classification = "RISKY"
         conviction_tier = "RISKY"
         keep = False
@@ -773,6 +774,7 @@ async def re_edit_ticket(
     strict_mode: bool = False,
     num_tickets: int = 1,
     exclude_fixture_ids: Optional[List[str]] = None,
+    allow_volatile_override: bool = False,
 ) -> Dict[str, Any]:
     """
     StatIQ High-Precision Ticket Optimizer & Risk Purge Hub.
@@ -827,7 +829,7 @@ async def re_edit_ticket(
     for sel in selections:
         raw_ev = str(sel.get("event_id") or sel.get("provider_event_id") or sel.get("_sportybet_event_id") or sel.get("external_fixture_id") or sel.get("fixture_id") or sel.get("game_id") or "").strip()
         intel = intel_map.get(raw_ev)
-        scored_tasks.append(score_selection(sel, intel=intel, mode=mode))
+        scored_tasks.append(score_selection(sel, intel=intel, mode=mode, allow_volatile_override=allow_volatile_override))
 
     scored = list(await asyncio.gather(*scored_tasks))
 
@@ -915,6 +917,16 @@ async def re_edit_ticket(
         h = str(c.get("home_team") or "").strip().lower()
         a = str(c.get("away_team") or "").strip().lower()
         return f"{h}_{a}"
+
+    # Deduplicate fixtures in final_selections (prevents SportyBet rejection on identical matches)
+    seen_fkeys = set()
+    deduped_final = []
+    for s in final_selections:
+        fk = _get_f_key(s)
+        if fk not in seen_fkeys:
+            seen_fkeys.add(fk)
+            deduped_final.append(s)
+    final_selections = deduped_final
 
     # Split candidates into Anchors (high certainty, multi-ticket eligible) and Orbits (single-ticket isolation)
     anchors = [s for s in final_selections if s.get("conviction_tier") == "ANCHOR" or float(s.get("estimated_prob", 0.0)) >= 0.88]

@@ -11,7 +11,7 @@
   ],
   "enable_rollover_2x": true,
   "enable_acca_10x": true,
-  "enable_acca_20x": true,
+  "enable_acca_20x": false,
   "enable_acca_5x": false,
   "target_odds": 2.0,
   "max_leg_odds": 1.45,

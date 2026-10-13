@@ -702,25 +702,18 @@ class StatIQTelegramBot:
         mode: str = "REMOVE",
         target_mode: str = "GAMES",
         target_val: float = 15,
-        num_tickets: int = 1
+        num_tickets: int = 1,
+        confirmed_action: Optional[str] = None
     ):
         """
         Audits and purges an external SportyBet ticket using live odds, H2H, and match dynamics.
         Purges even-strength 50-50 traps, underdogs, and sub-1.15 legs. Preserves bettor's exact picks as-is.
+        Supports interactive audit alerts with 3 user directives (SINGLE, TOPUP, OVERRIDE).
         """
         code = code.strip().upper()
         self.send_chat_action(chat_id, "typing")
         mode_desc = f"{int(target_val)} games" if target_mode == "GAMES" else f"{target_val:.1f}x odds"
-        variant_desc = "2 separate slips (Zero Overlap)" if num_tickets == 2 else "1 core slip"
-
-        self.send_message(
-            chat_id,
-            f"🛡️ <b>Auditing SportyBet Code <code>{code}</code> (/remove Mode)...</b>\n"
-            f"➔ Checking SportyBet 1X2 odds, H2H, and form for every match\n"
-            f"➔ Purging Even-Strength 50-50 traps, Underdog risks & volatile legs\n"
-            f"➔ Preserving bettor's original picks as-is (Zero market modifications)\n"
-            f"➔ Extracting: <b>{variant_desc}</b> targeting <b>{mode_desc}</b> (Min Odds ≥ 1.15x)"
-        )
+        variant_desc = f"{num_tickets} separate slips (Zero Overlap)" if num_tickets > 1 else "1 core slip"
 
         try:
             from app.adapters.bookmaker_adapter import SportyBetAdapter
@@ -740,79 +733,219 @@ class StatIQTelegramBot:
                 return
 
             original_count = len(selections)
-
-            # Step 2: Run Re-Editor in REMOVE mode
             target_games = int(target_val) if target_mode == "GAMES" else 15
             target_odds = float(target_val) if target_mode == "ODDS" else 20.0
 
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             try:
+                # ── STEP 2: AUDIT SCAN ──
+                allow_override = (confirmed_action == "OVERRIDE")
+                eff_num_t = 1 if confirmed_action == "SINGLE" else num_tickets
+
                 res = loop.run_until_complete(
                     re_edit_ticket(
                         selections=selections,
                         target_odds=target_odds,
-                        mode="REMOVE",
+                        mode=mode,
                         target_mode=target_mode,
                         target_games=target_games,
-                        num_tickets=num_tickets
+                        num_tickets=eff_num_t,
+                        allow_volatile_override=allow_override
                     )
                 )
+
+                removed_selections = res.get("removed_selections") or []
+                final_selections = res.get("final_selections") or []
+                dropped_count = len(removed_selections)
+                safe_count = len(final_selections)
+
+                # Calculate required game count to fill the requested tickets cleanly
+                if target_mode == "GAMES":
+                    needed_games = target_games * num_tickets
+                else:
+                    needed_per_t = min(13, max(8, int(math.ceil(math.log(max(1.5, target_odds), 1.19)))))
+                    needed_games = needed_per_t * num_tickets
+
+                is_pool_constrained = (num_tickets > 1 and safe_count < needed_games)
+
+                # ── STEP 3: INTERACTIVE AUDIT CONFIRMATION IF GAMES ARE DROPPED & UNCONFIRMED ──
+                if confirmed_action is None and dropped_count > 0:
+                    # Categorize reasons for transparent breakdown
+                    youth_cnt = sum(1 for r in removed_selections if any(k in str(r.get("reason", "")).lower() for k in ["youth", "u21", "u20", "u19", "u18", "reserve"]))
+                    odds_cnt = sum(1 for r in removed_selections if "below 1.15" in str(r.get("reason", "")).lower())
+                    trap_cnt = sum(1 for r in removed_selections if "50-50" in str(r.get("reason", "")).lower() or "trap" in str(r.get("reason", "")).lower() or "underdog" in str(r.get("reason", "")).lower())
+
+                    reason_bits = []
+                    if youth_cnt > 0: reason_bits.append(f"{youth_cnt} U20/U21 Youth matches")
+                    if odds_cnt > 0: reason_bits.append(f"{odds_cnt} Sub-1.15 Odds")
+                    if trap_cnt > 0: reason_bits.append(f"{trap_cnt} Even/Underdog Traps")
+                    reason_str = f"({', '.join(reason_bits)})" if reason_bits else ""
+
+                    btn_val_str = f"{target_val:.1f}x" if target_mode == "ODDS" else f"{int(target_val)} Games"
+
+                    if is_pool_constrained:
+                        # 3-Option Streamlined Audit Menu
+                        audit_text = (
+                            f"🛡️ <b>StatIQ Ticket Audit: Code <code>{code}</code></b>\n\n"
+                            f"📊 <b>Input Breakdown:</b>\n"
+                            f"• Total Games Uploaded: <b>{original_count}</b>\n"
+                            f"• ⚠️ Flagged / Risky: <b>{dropped_count} Games</b> <i>{reason_str}</i>\n"
+                            f"• ✅ Verified Safe Matches: <b>{safe_count} Games</b>\n\n"
+                            f"⚠️ <b>Distribution Notice:</b>\n"
+                            f"You requested <b>{num_tickets} tickets targeting {mode_desc}</b> (requires {needed_games}+ games for zero overlap).\n"
+                            f"<b>{safe_count} safe matches</b> cannot cleanly fill two separate {mode_desc} slips without repeating games or lowering odds.\n\n"
+                            f"<b>How would you like to proceed?</b>"
+                        )
+                        keyboard = {
+                            "inline_keyboard": [
+                                [
+                                    {"text": f"🎯 Generate 1 Clean {btn_val_str} Slip (Recommended)", "callback_data": f"aud:sin:{code}:{mode}:{target_mode}:{target_val}"}
+                                ],
+                                [
+                                    {"text": f"🌐 Top-Up from Live Board ({num_tickets} Slips @ {btn_val_str})", "callback_data": f"aud:top:{code}:{mode}:{target_mode}:{target_val}:{num_tickets}"}
+                                ],
+                                [
+                                    {"text": f"⚡ Keep All {original_count} Games (Override)", "callback_data": f"aud:ovr:{code}:{mode}:{target_mode}:{target_val}:{num_tickets}"}
+                                ]
+                            ]
+                        }
+                        self.send_message(chat_id, audit_text, reply_markup=keyboard)
+                        return
+                    else:
+                        # 1 Ticket requested or safe matches sufficient: confirm safe vs override
+                        audit_text = (
+                            f"🛡️ <b>StatIQ Ticket Audit: Code <code>{code}</code></b>\n\n"
+                            f"📊 <b>Input Breakdown:</b>\n"
+                            f"• Total Games Uploaded: <b>{original_count}</b>\n"
+                            f"• ⚠️ Flagged / Risky: <b>{dropped_count} Games</b> <i>{reason_str}</i>\n"
+                            f"• ✅ Verified Safe Matches: <b>{safe_count} Games</b>\n\n"
+                            f"The remaining <b>{safe_count} safe matches</b> can cleanly build your requested {btn_val_str} slip with maximum win probability.\n\n"
+                            f"<b>Select your preference:</b>"
+                        )
+                        keyboard = {
+                            "inline_keyboard": [
+                                [
+                                    {"text": f"✅ Proceed with Safe Matches ({btn_val_str})", "callback_data": f"aud:sin:{code}:{mode}:{target_mode}:{target_val}"}
+                                ],
+                                [
+                                    {"text": f"⚡ Keep All {original_count} Games (Override)", "callback_data": f"aud:ovr:{code}:{mode}:{target_mode}:{target_val}:1"}
+                                ]
+                            ]
+                        }
+                        self.send_message(chat_id, audit_text, reply_markup=keyboard)
+                        return
+
+                # ── STEP 4: TOP-UP IMPLEMENTATION IF USER SELECTED TOPUP ──
+                if confirmed_action == "TOPUP":
+                    from app.services.elite_rollover_engine import EliteRolloverEngine
+                    live_events = loop.run_until_complete(EliteRolloverEngine.fetch_sportybet_today_events(max_pages=10))
+                    live_cands = EliteRolloverEngine.evaluate_elite_rollover_candidates(live_events, max_leg_odds=1.45)
+                    existing_eids = {str(s.get("event_id")).lower() for s in final_selections}
+
+                    needed_extra = max(0, needed_games - len(final_selections))
+                    added_bankers = []
+                    for c in live_cands:
+                        eid = str(c.get("event_id")).lower()
+                        if eid not in existing_eids and eid not in {x["event_id"].lower() for x in added_bankers}:
+                            added_bankers.append({
+                                "event_id": c["event_id"],
+                                "fixture_id": c["event_id"],
+                                "game_id": c["event_id"],
+                                "provider_event_id": c["event_id"],
+                                "home_team": c["home_team"],
+                                "away_team": c["away_team"],
+                                "competition": c["competition"],
+                                "market_name": c["market_desc"],
+                                "selection_name": c["selection_desc"],
+                                "odds": c["odds"],
+                                "estimated_odds": c["odds"],
+                                "estimated_prob": c["model_probability"],
+                                "provider_market_id": str(c["market_id"]),
+                                "provider_outcome_id": str(c["outcome_id"]),
+                                "provider_specifier": c.get("specifier") or "",
+                                "status": "UPCOMING"
+                            })
+                            if len(added_bankers) >= needed_extra:
+                                break
+
+                    topped_up_pool = final_selections + added_bankers
+                    res = loop.run_until_complete(
+                        re_edit_ticket(
+                            selections=topped_up_pool,
+                            target_odds=target_odds,
+                            mode=mode,
+                            target_mode=target_mode,
+                            target_games=target_games,
+                            num_tickets=num_tickets,
+                            allow_volatile_override=False
+                        )
+                    )
+
+                portfolio = res.get("portfolio_tickets") or []
+                if not portfolio and res.get("final_selections"):
+                    portfolio = [{
+                        "ticket_index": 1,
+                        "final_selections": res.get("final_selections"),
+                        "new_total_odds": res.get("new_total_odds"),
+                        "avg_win_prob": res.get("avg_win_prob")
+                    }]
+
+                if not portfolio:
+                    self.send_message(chat_id, "⚠️ <b>Audit Result:</b> None of the matches in this ticket met the safety cushion threshold.")
+                    return
+
+                # Book each slip on SportyBet and dispatch
+                for slip in portfolio:
+                    slip_idx = slip.get("ticket_index", 1)
+                    final_picks = slip.get("final_selections") or []
+                    if not final_picks:
+                        continue
+
+                    # Generate live booking code
+                    book_res = adapter.generate_booking_code(final_picks, "ng")
+                    booked_code = book_res.get("booking_code")
+                    booked_url = book_res.get("load_url") or (f"https://www.sportybet.com/ng/?shareCode={booked_code}" if booked_code else None)
+                    booked_picks = book_res.get("booked_selections") or final_picks
+
+                    acc_odd = 1.0
+                    for p in booked_picks:
+                        acc_odd *= float(p.get("odds") or 1.20)
+
+                    if confirmed_action == "SINGLE":
+                        slip_title = f"🎯 Purged Core Slip ({len(booked_picks)} Matches)"
+                        overlap_tag = f"Target: {mode_desc} · Safe Matches Only · Min Odds ≥ 1.15x"
+                    elif confirmed_action == "TOPUP":
+                        slip_title = f"🌐 Purged & Topped-Up Variant #{slip_idx} ({len(booked_picks)} Matches)"
+                        overlap_tag = "🔒 <b>Zero-Overlap Partition:</b> 100% Unique Fixtures (Safe Code Matches + Live Bankers)"
+                    elif confirmed_action == "OVERRIDE":
+                        slip_title = f"⚡ Bettor Override Variant #{slip_idx} ({len(booked_picks)} Matches)"
+                        overlap_tag = "⚠️ <b>User Override:</b> Original Picks Preserved (Includes Youth Matches)"
+                    else:
+                        slip_title = (
+                            f"🛡️ Purged Variant #{slip_idx} ({len(booked_picks)} Matches)"
+                            if eff_num_t > 1
+                            else f"🛡️ Purged Core Slip ({len(booked_picks)} of {original_count} Matches)"
+                        )
+                        overlap_tag = (
+                            "🔒 <b>Zero-Overlap Partition:</b> 100% Unique Fixtures"
+                            if eff_num_t > 1
+                            else "Even-Strength & Underdog Traps Purged (Original Picks Preserved)"
+                        )
+
+                    self._dispatch_ticket_message(
+                        chat_id=chat_id,
+                        title=slip_title,
+                        booking_code=booked_code,
+                        share_url=booked_url,
+                        total_odds=round(acc_odd, 2),
+                        confidence=round((slip.get("avg_win_prob") or 0.82) * 100.0, 1),
+                        picks=booked_picks,
+                        extra_note=f"{overlap_tag} · Min Odds ≥ 1.15x Strictly Enforced"
+                    )
+
             finally:
                 loop.close()
-
-            portfolio = res.get("portfolio_tickets") or []
-            if not portfolio and res.get("final_selections"):
-                portfolio = [{
-                    "ticket_index": 1,
-                    "final_selections": res.get("final_selections"),
-                    "new_total_odds": res.get("new_total_odds"),
-                    "avg_win_prob": res.get("avg_win_prob")
-                }]
-
-            if not portfolio:
-                self.send_message(chat_id, "⚠️ <b>Audit Result:</b> None of the matches in this ticket met the safety cushion threshold.")
-                return
-
-            # Book each slip on SportyBet and dispatch
-            for slip in portfolio:
-                slip_idx = slip.get("ticket_index", 1)
-                final_picks = slip.get("final_selections") or []
-                if not final_picks:
-                    continue
-
-                # Generate live booking code
-                book_res = adapter.generate_booking_code(final_picks, "ng")
-                booked_code = book_res.get("booking_code")
-                booked_url = book_res.get("load_url") or (f"https://www.sportybet.com/ng/?shareCode={booked_code}" if booked_code else None)
-                booked_picks = book_res.get("booked_selections") or final_picks
-
-                # Compute odds
-                acc_odd = 1.0
-                for p in booked_picks:
-                    acc_odd *= float(p.get("odds") or 1.20)
-
-                slip_title = (
-                    f"🛡️ Purged Variant #{slip_idx} ({len(booked_picks)} Matches)"
-                    if num_tickets > 1
-                    else f"🛡️ Purged Core Slip ({len(booked_picks)} of {original_count} Matches)"
-                )
-                overlap_tag = (
-                    "🔒 <b>Zero-Overlap Partition:</b> 100% Unique Fixtures"
-                    if num_tickets > 1
-                    else "Even-Strength & Underdog Traps Purged (Original Picks Preserved)"
-                )
-
-                self._dispatch_ticket_message(
-                    chat_id=chat_id,
-                    title=slip_title,
-                    booking_code=booked_code,
-                    share_url=booked_url,
-                    total_odds=round(acc_odd, 2),
-                    confidence=round((slip.get("avg_win_prob") or 0.82) * 100.0, 1),
-                    picks=booked_picks,
-                    extra_note=f"{overlap_tag} · Min Odds ≥ 1.15x Strictly Enforced"
-                )
 
         except Exception as e:
             logger.error(f"[TelegramBot] Remove error: {e}", exc_info=True)
@@ -825,29 +958,243 @@ class StatIQTelegramBot:
         mode: str = "EDIT",
         target_mode: str = "GAMES",
         target_val: float = 15,
-        num_tickets: int = 1
+        num_tickets: int = 1,
+        confirmed_action: Optional[str] = None
     ):
         """
         Upgrades risky fixtures in an external SportyBet ticket to verified live SportyBet safety markets
         (Double Chance, Over 1.5, Team Goals). Ensures every upgraded option is active on SportyBet.
+        Supports interactive audit alerts with 3 user directives (SINGLE, TOPUP, OVERRIDE).
         """
         code = code.strip().upper()
         self.send_chat_action(chat_id, "typing")
         mode_desc = f"{int(target_val)} games" if target_mode == "GAMES" else f"{target_val:.1f}x odds"
-        variant_desc = "2 separate slips (Zero Overlap)" if num_tickets == 2 else "1 core slip"
-
-        self.send_message(
-            chat_id,
-            f"⚡ <b>Upgrading SportyBet Code <code>{code}</code> (/edit Mode)...</b>\n"
-            f"➔ Checking active SportyBet markets & odds for every match\n"
-            f"➔ Upgrading risky straight wins to live SportyBet Double Chance / Team Goals\n"
-            f"➔ Upgrading Over 2.5 to verified live SportyBet Over 1.5 Goals\n"
-            f"➔ Extracting: <b>{variant_desc}</b> targeting <b>{mode_desc}</b> (Min Odds ≥ 1.15x)"
-        )
 
         try:
             from app.adapters.bookmaker_adapter import SportyBetAdapter
             from app.services.ticket_reeditor import re_edit_ticket
+
+            adapter = SportyBetAdapter()
+            decoded = adapter.fetch_booking_code_details(code, "ng")
+            selections = decoded.get("selections") or []
+
+            if not selections:
+                self.send_message(
+                    chat_id,
+                    f"⚠️ <b>Could not load SportyBet code <code>{code}</code>.</b>\n"
+                    f"Please confirm that the code is active on SportyBet Nigeria."
+                )
+                return
+
+            original_count = len(selections)
+            target_games = int(target_val) if target_mode == "GAMES" else 15
+            target_odds = float(target_val) if target_mode == "ODDS" else 20.0
+
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                allow_override = (confirmed_action == "OVERRIDE")
+                eff_num_t = 1 if confirmed_action == "SINGLE" else num_tickets
+
+                res = loop.run_until_complete(
+                    re_edit_ticket(
+                        selections=selections,
+                        target_odds=target_odds,
+                        mode="EDIT",
+                        target_mode=target_mode,
+                        target_games=target_games,
+                        num_tickets=eff_num_t,
+                        allow_volatile_override=allow_override
+                    )
+                )
+
+                removed_selections = res.get("removed_selections") or []
+                final_selections = res.get("final_selections") or []
+                dropped_count = len(removed_selections)
+                safe_count = len(final_selections)
+
+                if target_mode == "GAMES":
+                    needed_games = target_games * num_tickets
+                else:
+                    needed_per_t = min(13, max(8, int(math.ceil(math.log(max(1.5, target_odds), 1.19)))))
+                    needed_games = needed_per_t * num_tickets
+
+                is_pool_constrained = (num_tickets > 1 and safe_count < needed_games)
+
+                if confirmed_action is None and dropped_count > 0:
+                    youth_cnt = sum(1 for r in removed_selections if any(k in str(r.get("reason", "")).lower() for k in ["youth", "u21", "u20", "u19", "u18", "reserve"]))
+                    odds_cnt = sum(1 for r in removed_selections if "below 1.15" in str(r.get("reason", "")).lower())
+                    trap_cnt = sum(1 for r in removed_selections if "50-50" in str(r.get("reason", "")).lower() or "trap" in str(r.get("reason", "")).lower() or "underdog" in str(r.get("reason", "")).lower())
+
+                    reason_bits = []
+                    if youth_cnt > 0: reason_bits.append(f"{youth_cnt} U20/U21 Youth matches")
+                    if odds_cnt > 0: reason_bits.append(f"{odds_cnt} Sub-1.15 Odds")
+                    if trap_cnt > 0: reason_bits.append(f"{trap_cnt} Even/Underdog Traps")
+                    reason_str = f"({', '.join(reason_bits)})" if reason_bits else ""
+
+                    btn_val_str = f"{target_val:.1f}x" if target_mode == "ODDS" else f"{int(target_val)} Games"
+
+                    if is_pool_constrained:
+                        audit_text = (
+                            f"⚡ <b>StatIQ Upgrade Audit: Code <code>{code}</code></b>\n\n"
+                            f"📊 <b>Input Breakdown:</b>\n"
+                            f"• Total Games Uploaded: <b>{original_count}</b>\n"
+                            f"• ⚠️ Flagged / Risky: <b>{dropped_count} Games</b> <i>{reason_str}</i>\n"
+                            f"• ✅ Verified Upgradable Matches: <b>{safe_count} Games</b>\n\n"
+                            f"⚠️ <b>Distribution Notice:</b>\n"
+                            f"You requested <b>{num_tickets} tickets targeting {mode_desc}</b> (requires {needed_games}+ games for zero overlap).\n"
+                            f"<b>{safe_count} matches</b> cannot cleanly fill two separate {mode_desc} slips without repeating games or lowering odds.\n\n"
+                            f"<b>How would you like to proceed?</b>"
+                        )
+                        keyboard = {
+                            "inline_keyboard": [
+                                [
+                                    {"text": f"🎯 Generate 1 Clean {btn_val_str} Slip (Recommended)", "callback_data": f"aud:sin:{code}:EDIT:{target_mode}:{target_val}"}
+                                ],
+                                [
+                                    {"text": f"🌐 Top-Up from Live Board ({num_tickets} Slips @ {btn_val_str})", "callback_data": f"aud:top:{code}:EDIT:{target_mode}:{target_val}:{num_tickets}"}
+                                ],
+                                [
+                                    {"text": f"⚡ Keep All {original_count} Games (Override)", "callback_data": f"aud:ovr:{code}:EDIT:{target_mode}:{target_val}:{num_tickets}"}
+                                ]
+                            ]
+                        }
+                        self.send_message(chat_id, audit_text, reply_markup=keyboard)
+                        return
+                    else:
+                        audit_text = (
+                            f"⚡ <b>StatIQ Upgrade Audit: Code <code>{code}</code></b>\n\n"
+                            f"📊 <b>Input Breakdown:</b>\n"
+                            f"• Total Games Uploaded: <b>{original_count}</b>\n"
+                            f"• ⚠️ Flagged / Risky: <b>{dropped_count} Games</b> <i>{reason_str}</i>\n"
+                            f"• ✅ Verified Upgradable Matches: <b>{safe_count} Games</b>\n\n"
+                            f"The remaining <b>{safe_count} matches</b> can cleanly build your upgraded {btn_val_str} slip.\n\n"
+                            f"<b>Select your preference:</b>"
+                        )
+                        keyboard = {
+                            "inline_keyboard": [
+                                [
+                                    {"text": f"✅ Proceed with Safe Matches ({btn_val_str})", "callback_data": f"aud:sin:{code}:EDIT:{target_mode}:{target_val}"}
+                                ],
+                                [
+                                    {"text": f"⚡ Keep All {original_count} Games (Override)", "callback_data": f"aud:ovr:{code}:EDIT:{target_mode}:{target_val}:1"}
+                                ]
+                            ]
+                        }
+                        self.send_message(chat_id, audit_text, reply_markup=keyboard)
+                        return
+
+                if confirmed_action == "TOPUP":
+                    from app.services.elite_rollover_engine import EliteRolloverEngine
+                    live_events = loop.run_until_complete(EliteRolloverEngine.fetch_sportybet_today_events(max_pages=10))
+                    live_cands = EliteRolloverEngine.evaluate_elite_rollover_candidates(live_events, max_leg_odds=1.45)
+                    existing_eids = {str(s.get("event_id")).lower() for s in final_selections}
+
+                    needed_extra = max(0, needed_games - len(final_selections))
+                    added_bankers = []
+                    for c in live_cands:
+                        eid = str(c.get("event_id")).lower()
+                        if eid not in existing_eids and eid not in {x["event_id"].lower() for x in added_bankers}:
+                            added_bankers.append({
+                                "event_id": c["event_id"],
+                                "fixture_id": c["event_id"],
+                                "game_id": c["event_id"],
+                                "provider_event_id": c["event_id"],
+                                "home_team": c["home_team"],
+                                "away_team": c["away_team"],
+                                "competition": c["competition"],
+                                "market_name": c["market_desc"],
+                                "selection_name": c["selection_desc"],
+                                "odds": c["odds"],
+                                "estimated_odds": c["odds"],
+                                "estimated_prob": c["model_probability"],
+                                "provider_market_id": str(c["market_id"]),
+                                "provider_outcome_id": str(c["outcome_id"]),
+                                "provider_specifier": c.get("specifier") or "",
+                                "status": "UPCOMING"
+                            })
+                            if len(added_bankers) >= needed_extra:
+                                break
+
+                    topped_up_pool = final_selections + added_bankers
+                    res = loop.run_until_complete(
+                        re_edit_ticket(
+                            selections=topped_up_pool,
+                            target_odds=target_odds,
+                            mode="EDIT",
+                            target_mode=target_mode,
+                            target_games=target_games,
+                            num_tickets=num_tickets,
+                            allow_volatile_override=False
+                        )
+                    )
+
+                portfolio = res.get("portfolio_tickets") or []
+                if not portfolio and res.get("final_selections"):
+                    portfolio = [{
+                        "ticket_index": 1,
+                        "final_selections": res.get("final_selections"),
+                        "new_total_odds": res.get("new_total_odds"),
+                        "avg_win_prob": res.get("avg_win_prob")
+                    }]
+
+                if not portfolio:
+                    self.send_message(chat_id, "⚠️ <b>Audit Result:</b> None of the matches in this ticket met the safety cushion threshold.")
+                    return
+
+                for slip in portfolio:
+                    slip_idx = slip.get("ticket_index", 1)
+                    final_picks = slip.get("final_selections") or []
+                    if not final_picks:
+                        continue
+
+                    book_res = adapter.generate_booking_code(final_picks, "ng")
+                    booked_code = book_res.get("booking_code")
+                    booked_url = book_res.get("load_url") or (f"https://www.sportybet.com/ng/?shareCode={booked_code}" if booked_code else None)
+                    booked_picks = book_res.get("booked_selections") or final_picks
+
+                    acc_odd = 1.0
+                    for p in booked_picks:
+                        acc_odd *= float(p.get("odds") or 1.20)
+
+                    if confirmed_action == "SINGLE":
+                        slip_title = f"⚡ Upgraded Core Slip ({len(booked_picks)} Matches)"
+                        overlap_tag = f"Target: {mode_desc} · Verified Safe Upgrades · Min Odds ≥ 1.15x"
+                    elif confirmed_action == "TOPUP":
+                        slip_title = f"🌐 Upgraded & Topped-Up Variant #{slip_idx} ({len(booked_picks)} Matches)"
+                        overlap_tag = "🔒 <b>Zero-Overlap Partition:</b> 100% Unique Fixtures (Upgraded Matches + Live Bankers)"
+                    elif confirmed_action == "OVERRIDE":
+                        slip_title = f"⚡ Bettor Override Variant #{slip_idx} ({len(booked_picks)} Matches)"
+                        overlap_tag = "⚠️ <b>User Override:</b> Original Picks Preserved (Includes Youth Matches)"
+                    else:
+                        slip_title = (
+                            f"⚡ Upgraded Variant #{slip_idx} ({len(booked_picks)} Matches)"
+                            if eff_num_t > 1
+                            else f"⚡ Upgraded Core Slip ({len(booked_picks)} of {original_count} Matches)"
+                        )
+                        overlap_tag = (
+                            "🔒 <b>Zero-Overlap Partition:</b> 100% Unique Fixtures"
+                            if eff_num_t > 1
+                            else "Risky Markets Upgraded to Verified SportyBet Safety Lines"
+                        )
+
+                    self._dispatch_ticket_message(
+                        chat_id=chat_id,
+                        title=slip_title,
+                        booking_code=booked_code,
+                        share_url=booked_url,
+                        total_odds=round(acc_odd, 2),
+                        confidence=round((slip.get("avg_win_prob") or 0.82) * 100.0, 1),
+                        picks=booked_picks,
+                        extra_note=f"{overlap_tag} · Min Odds ≥ 1.15x Strictly Enforced"
+                    )
+
+            finally:
+                loop.close()
+
+        except Exception as e:
+            logger.error(f"[TelegramBot] Edit error: {e}", exc_info=True)
+            self.send_message(chat_id, f"❌ <b>Error upgrading ticket:</b> {_esc(str(e))}")
 
             # Step 1: Decode booking code
             adapter = SportyBetAdapter()
@@ -1226,6 +1573,40 @@ class StatIQTelegramBot:
                         target_mode=target_mode,
                         target_val=val,
                         num_tickets=num_tickets
+                    )
+
+        # Case 3: Interactive Audit Actions (aud:sin, aud:top, aud:ovr)
+        elif data.startswith("aud:"):
+            parts = data.split(":")
+            # format: aud:action:code:mode:target_mode:target_val[:num_tickets]
+            if len(parts) >= 6:
+                subaction = parts[1]
+                code = parts[2]
+                mode = parts[3]
+                target_mode = parts[4]
+                target_val = float(parts[5])
+                num_t = int(parts[6]) if len(parts) > 6 else 1
+
+                is_edit = (mode == "EDIT")
+                handler = self.handle_edit_command if is_edit else self.handle_remove_command
+
+                if subaction == "sin":
+                    handler(
+                        chat_id=chat_id, code=code, mode=mode,
+                        target_mode=target_mode, target_val=target_val,
+                        num_tickets=1, confirmed_action="SINGLE"
+                    )
+                elif subaction == "top":
+                    handler(
+                        chat_id=chat_id, code=code, mode=mode,
+                        target_mode=target_mode, target_val=target_val,
+                        num_tickets=num_t, confirmed_action="TOPUP"
+                    )
+                elif subaction == "ovr":
+                    handler(
+                        chat_id=chat_id, code=code, mode=mode,
+                        target_mode=target_mode, target_val=target_val,
+                        num_tickets=num_t, confirmed_action="OVERRIDE"
                     )
 
     # ─────────────────────────────────────────────────────────────────────────

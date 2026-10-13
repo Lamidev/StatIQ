@@ -151,9 +151,12 @@ class RolloverTelegramNotifier:
         picks = ticket_data.get("picks", [])
         date_str = ticket_data.get("date_str", "Today")
         share_url = ticket_data.get("share_url") or f"https://www.sportybet.com/ng/?shareCode={code}"
+        variant_idx = ticket_data.get("variant_index")
+
+        slip_title = f"⚡ <b>StatIQ 10.0x Mega Multiplier Slip #{variant_idx}</b>" if variant_idx else "⚡ <b>StatIQ 10.0x Mega Multiplier Slip</b>"
 
         lines = [
-            "⚡ <b>StatIQ 10.0x Mega Multiplier Slip</b>",
+            slip_title,
             "🔒 <b>Zero-Overlap Guarantee:</b> 100% Unique Fixtures (Zero Overlap across all 3 Slips)",
             f"📅 <b>Date:</b> {date_str} (10:00 AM WAT Dispatch)",
             f"⚡ <b>Total Multiplier:</b> {actual_odds:.2f}x | <b>Combined Confidence:</b> {confidence:.1f}%",
