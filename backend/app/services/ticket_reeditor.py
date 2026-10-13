@@ -317,12 +317,69 @@ def _classify(prob: float) -> str:
     return "RISKY"
 
 
+def _is_volatile_fixture(sel: Dict[str, Any]) -> Tuple[bool, str]:
+    """
+    Detects high-variance trap fixtures that must be purged from both REMOVE and EDIT slips:
+    - Youth academies and reserve leagues (U18, U19, U21, U23, Primavera, Reserves, Dev League)
+    - Lower-tier non-league/semi-pro divisions (Sweden Div 1/2 Ettan, Carioca B2, Oberliga, etc.)
+    - Simulated reality leagues (SRL) and friendlies
+    """
+    comp = str(sel.get("competition") or sel.get("tournament") or sel.get("_tournamentName") or sel.get("league") or "").lower()
+    cat = str(sel.get("category") or sel.get("_categoryName") or sel.get("country") or "").lower()
+    home = str(sel.get("home_team") or sel.get("homeTeamName") or "").lower()
+    away = str(sel.get("away_team") or sel.get("awayTeamName") or "").lower()
+    comb = f" {comp} {cat} {home} {away} "
+
+    # 1. Virtual / SRL / Friendlies
+    if any(t in comb for t in ["srl", "simulated reality", "simulated", "friendly", "friendlies"]):
+        return True, "Simulated Reality (SRL) or Friendly exhibition match"
+
+    # 2. Youth & Reserve competitions / teams
+    youth_tokens = [
+        "u23", "u21", "u20", "u19", "u18", "u17", "youth", "primavera",
+        "reserve", "reserves", "development league", "professional development", "premier league 2"
+    ]
+    for yt in youth_tokens:
+        if f" {yt} " in comb or f" {yt}" in comb or f"{yt} " in comb:
+            return True, f"Youth/Reserve match ({yt.upper().strip()})"
+
+    # Suffix check for reserve / youth teams
+    for t_str in [home.strip(), away.strip()]:
+        if "willem ii" in t_str:
+            continue
+        if any(t_str.endswith(s) for s in [" ii", " iii", " 2", " b", " u21", " u23", " u19", " u20"]):
+            return True, f"Reserve/B-team ({t_str})"
+
+    # 3. Scandinavian & Nordic Lower Tiers
+    if "ettan" in comb and "superettan" not in comb:
+        return True, "Swedish Ettan (Division 1 lower tier)"
+    if "sweden" in comb and any(d in comb for d in ["division 1", "division 2", "div 1", "div 2"]):
+        return True, "Swedish Division 1/2 lower tier"
+    if any(k in comb for k in ["kolmonen", "kakkonen"]):
+        return True, "Nordic lower regional tier"
+
+    # 4. South American volatile state / lower tiers
+    if any(k in comb for k in ["carioca", "serie b2", "serie c", "serie d", "copa rio", "paulista a3", "paulista a2", "primera c", "primera d", "torneo federal"]):
+        return True, "Volatile lower-tier regional league"
+
+    # 5. European Non-League / Regional Tiers
+    if any(k in comb for k in [
+        "tercera", "regionaliga", "regionalliga", "oberliga", "landesliga", "stadtliga",
+        "isthmian", "northern premier", "southern league", "national league north", "national league south",
+        "division 3", "division 4", "san marino", "armenia", "andorra", "gibraltar"
+    ]):
+        return True, "Low-tier regional/amateur competition"
+
+    return False, ""
+
+
 def _is_tier3_comp(comp_name: str) -> bool:
     c_lower = (comp_name or "").lower()
     return any(x in c_lower for x in [
         "u19", "u20", "u21", "u23", "u18", "u17", "youth", "reserve", "reserves", "amateur",
         "regional", "tercera", "division 2", "division 3", "division 4", "primera c", "primera d",
-        "kolmonen", "isthmian", "northern premier", "southern league", "promotion league"
+        "kolmonen", "isthmian", "northern premier", "southern league", "promotion league",
+        "ettan", "carioca", "serie b2", "serie c", "serie d", "copa rio", "development league"
     ])
 
 def _is_expired_or_live(sel: Dict[str, Any]) -> Tuple[bool, str]:
@@ -438,6 +495,21 @@ async def score_selection(
             "is_expired": True,
             "expired_reason": exp_msg,
             "action": "EXPIRED_PURGED"
+        }
+
+    is_volatile, vol_msg = _is_volatile_fixture(sel)
+    if is_volatile:
+        return {
+            **sel,
+            "estimated_prob": 0.0,
+            "composite_safety_score": 0.0,
+            "classification": "RISKY",
+            "conviction_tier": "TRAP_PURGED",
+            "keep": False,
+            "is_expired": False,
+            "drop_reason": f"Volatile Competition Trap: {vol_msg}. Purged to protect ticket from erratic squad variance.",
+            "action": "VOLATILE_LEAGUE_PURGED",
+            "form_summary": f"Banned volatile/youth fixture: {vol_msg}"
         }
 
     mkt = str(sel.get("market_name", "Match Result"))

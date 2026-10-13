@@ -166,26 +166,37 @@ class EliteRolloverEngine:
                 "srl", "simulated reality", "simulated", "friendly", "friendlies",
                 "u23", "u21", "u20", "u19", "u18", "u17", "youth", "primavera", "reserve", "reserves",
                 "amateur", "women", "wfc", "damen", "femenino", "feminin", "frauen", "vrouwen",
-                "tercera", "regional", "karntner", "landesliga", "stadtliga",
+                "tercera", "regional", "karntner", "landesliga", "stadtliga", "regionalliga", "oberliga",
+                "isthmian", "northern premier", "southern league", "national league north", "national league south",
                 # Banish lower-tier filler leagues (San Marino, Armenia, Serbian lower leagues, Andorra, Gibraltar)
-                "san marino", "armenia", "andorra", "gibraltar", "prva liga srbije", "division 3", "division 4"
+                "san marino", "armenia", "andorra", "gibraltar", "prva liga srbije", "division 3", "division 4",
+                # Banish lower-tier Brazil state/divisions & Swedish Ettan
+                "serie b2", "serie c", "serie d", "carioca", "copa rio",
+                "development league", "premier league 2", "professional development",
+                "kolmonen", "kakkonen", "primera c", "primera d"
             ]
             if any(t in comb_name_str for t in bad_tokens):
+                continue
+
+            # Strict Scandinavian lower tier check: ban Swedish Ettan and Division 1/2
+            if "ettan" in comb_name_str and "superettan" not in comb_name_str:
+                continue
+            if "sweden" in comb_name_str and any(k in comb_name_str for k in ["division 1", "division 2", "div 1", "div 2"]):
                 continue
 
             comp_clean = f"{c_name} {t_name}".lower().strip()
             if comp_clean.endswith(" w") or comp_clean.endswith("(w)") or " games w" in comp_clean or " women" in comp_clean:
                 continue
 
-            # Strict check for team name reserve suffixes (e.g. " ii", " b", " 2")
+            # Strict check for team name reserve suffixes (e.g. " ii", " b", " 2", " u21", " u23")
             is_noise_team = False
             for team_str in [h_team.lower(), a_team.lower()]:
                 padded = f" {team_str} "
-                if any(p in padded for p in [" ii ", " iii ", " b team ", " b-team ", " reserve ", " reserves ", " amateur "]):
+                if any(p in padded for p in [" ii ", " iii ", " b team ", " b-team ", " reserve ", " reserves ", " amateur ", " u21 ", " u23 ", " u19 ", " u20 "]):
                     if "willem ii" not in padded:
                         is_noise_team = True
                         break
-                if team_str.endswith(" b") or team_str.endswith(" ii"):
+                if any(team_str.endswith(s) for s in [" b", " ii", " u21", " u23", " u19", " u20"]) and "willem ii" not in team_str:
                     is_noise_team = True
                     break
             if is_noise_team:
@@ -214,7 +225,12 @@ class EliteRolloverEngine:
                 is_tier_1 = True
             elif "portugal" in c_lower and any(k in t_lower for k in ["liga portugal", "primeira liga"]) and "2" not in t_lower and "3" not in t_lower:
                 is_tier_1 = True
-            elif any(k in comp_full for k in ["champions league", "europa league", "conference league", "nations league"]):
+            elif any(k in comp_full for k in [
+                "champions league", "europa league", "conference league", "nations league",
+                "uefa champions league", "uefa europa league", "uefa conference league",
+                "uefa europa conference league", "copa libertadores", "copa sudamericana",
+                "afc champions league"
+            ]):
                 is_tier_1 = True
 
             if is_tier_1:
