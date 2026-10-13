@@ -15,6 +15,7 @@ import os
 import re
 import html
 import time
+import math
 import asyncio
 import logging
 import threading
@@ -745,8 +746,9 @@ class StatIQTelegramBot:
 
                 removed_selections = res.get("removed_selections") or []
                 final_selections = res.get("final_selections") or []
+                all_safe_selections = res.get("all_safe_selections") or final_selections
                 dropped_count = len(removed_selections)
-                safe_count = len(final_selections)
+                safe_count = len(all_safe_selections)
 
                 # Calculate required game count to fill the requested tickets cleanly
                 if target_mode == "GAMES":
@@ -802,22 +804,24 @@ class StatIQTelegramBot:
                         return
                     else:
                         # 1 Ticket requested or safe matches sufficient: confirm safe vs override
+                        slips_desc = f"{num_tickets} Slips ({btn_val_str} each)" if num_tickets > 1 else f"1 {btn_val_str} Slip"
                         audit_text = (
                             f"🛡️ <b>StatIQ Ticket Audit: Code <code>{code}</code></b>\n\n"
                             f"📊 <b>Input Breakdown:</b>\n"
                             f"• Total Games Uploaded: <b>{original_count}</b>\n"
                             f"• ⚠️ Flagged / Risky: <b>{dropped_count} Games</b> <i>{reason_str}</i>\n"
                             f"• ✅ Verified Safe Matches: <b>{safe_count} Games</b>\n\n"
-                            f"The remaining <b>{safe_count} safe matches</b> can cleanly build your requested {btn_val_str} slip with maximum win probability.\n\n"
+                            f"The remaining <b>{safe_count} safe matches</b> can cleanly build your requested <b>{slips_desc}</b> with <b>Strict Zero-Overlap</b>.\n\n"
                             f"<b>Select your preference:</b>"
                         )
+                        btn_action = "proc" if num_tickets > 1 else "sin"
                         keyboard = {
                             "inline_keyboard": [
                                 [
-                                    {"text": f"✅ Proceed with Safe Matches ({btn_val_str})", "callback_data": f"aud:sin:{code}:{mode}:{target_mode}:{target_val}"}
+                                    {"text": f"✅ Proceed with {slips_desc}", "callback_data": f"aud:{btn_action}:{code}:{mode}:{target_mode}:{target_val}:{num_tickets}"}
                                 ],
                                 [
-                                    {"text": f"⚡ Keep All {original_count} Games (Override)", "callback_data": f"aud:ovr:{code}:{mode}:{target_mode}:{target_val}:1"}
+                                    {"text": f"⚡ Keep All {original_count} Games (Override)", "callback_data": f"aud:ovr:{code}:{mode}:{target_mode}:{target_val}:{num_tickets}"}
                                 ]
                             ]
                         }
@@ -998,8 +1002,9 @@ class StatIQTelegramBot:
 
                 removed_selections = res.get("removed_selections") or []
                 final_selections = res.get("final_selections") or []
+                all_safe_selections = res.get("all_safe_selections") or final_selections
                 dropped_count = len(removed_selections)
-                safe_count = len(final_selections)
+                safe_count = len(all_safe_selections)
 
                 if target_mode == "GAMES":
                     needed_games = target_games * num_tickets
@@ -1050,22 +1055,24 @@ class StatIQTelegramBot:
                         self.send_message(chat_id, audit_text, reply_markup=keyboard)
                         return
                     else:
+                        slips_desc = f"{num_tickets} Slips ({btn_val_str} each)" if num_tickets > 1 else f"1 {btn_val_str} Slip"
                         audit_text = (
                             f"⚡ <b>StatIQ Upgrade Audit: Code <code>{code}</code></b>\n\n"
                             f"📊 <b>Input Breakdown:</b>\n"
                             f"• Total Games Uploaded: <b>{original_count}</b>\n"
                             f"• ⚠️ Flagged / Risky: <b>{dropped_count} Games</b> <i>{reason_str}</i>\n"
                             f"• ✅ Verified Upgradable Matches: <b>{safe_count} Games</b>\n\n"
-                            f"The remaining <b>{safe_count} matches</b> can cleanly build your upgraded {btn_val_str} slip.\n\n"
+                            f"The remaining <b>{safe_count} matches</b> can cleanly build your upgraded <b>{slips_desc}</b> with <b>Strict Zero-Overlap</b>.\n\n"
                             f"<b>Select your preference:</b>"
                         )
+                        btn_action = "proc" if num_tickets > 1 else "sin"
                         keyboard = {
                             "inline_keyboard": [
                                 [
-                                    {"text": f"✅ Proceed with Safe Matches ({btn_val_str})", "callback_data": f"aud:sin:{code}:EDIT:{target_mode}:{target_val}"}
+                                    {"text": f"✅ Proceed with {slips_desc}", "callback_data": f"aud:{btn_action}:{code}:EDIT:{target_mode}:{target_val}:{num_tickets}"}
                                 ],
                                 [
-                                    {"text": f"⚡ Keep All {original_count} Games (Override)", "callback_data": f"aud:ovr:{code}:EDIT:{target_mode}:{target_val}:1"}
+                                    {"text": f"⚡ Keep All {original_count} Games (Override)", "callback_data": f"aud:ovr:{code}:EDIT:{target_mode}:{target_val}:{num_tickets}"}
                                 ]
                             ]
                         }
@@ -1583,6 +1590,12 @@ class StatIQTelegramBot:
                         chat_id=chat_id, code=code, mode=mode,
                         target_mode=target_mode, target_val=target_val,
                         num_tickets=1, confirmed_action="SINGLE"
+                    )
+                elif subaction == "proc":
+                    handler(
+                        chat_id=chat_id, code=code, mode=mode,
+                        target_mode=target_mode, target_val=target_val,
+                        num_tickets=num_t, confirmed_action="PROCEED"
                     )
                 elif subaction == "top":
                     handler(

@@ -556,10 +556,14 @@ async def score_selection(
         draw_prob = intel.get("draw_probability", 0.28)
         tot_exp = intel.get("total_exp_goals", 2.6)
 
-        is_straight_win = (
-            ("1x2" in m_lower or "match result" in m_lower or p_lower in ("1", "2") or p_lower in (home.lower(), away.lower()))
-            and not ("double chance" in m_lower or "handicap" in m_lower)
+        is_1x2_market = (
+            any(k in m_lower for k in ["1x2", "match result", "winner", "3-way", "full time result"])
+            or m_lower in ("1x2", "match result")
         )
+        is_straight_win = (
+            (is_1x2_market and (p_lower in ("1", "2") or p_lower in (home.lower(), away.lower())))
+            or (not is_1x2_market and p_lower in (home.lower(), away.lower()) and not any(k in m_lower for k in ["double chance", "handicap", "over", "under", "goals", "corner", "booking", "half", "excluded", "score"]))
+        ) and not ("double chance" in m_lower or "handicap" in m_lower)
 
         # ── CHECK 1: EVEN-STRENGTH STRAIGHT WIN TRAP (50-50 COIN FLIP) ──
         if is_even and is_straight_win:
@@ -1361,6 +1365,8 @@ async def re_edit_ticket(
         "kept": primary_slip["final_count"],
         "removed": len(removed_selections),
         "swapped": 0,
+        "all_safe_selections": final_selections,
+        "total_safe_count": len(final_selections),
         "final_selections": primary_slip["final_selections"],
         "removed_selections": removed_selections,
         "new_total_odds": primary_slip["new_total_odds"],
