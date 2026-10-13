@@ -412,22 +412,10 @@ class StatIQTelegramBot:
                 )
                 dispatched_count += 1
 
-            # 2. Mid-Week 15.0x Multiplier or Weekend 10.0x Mega slip
-            acca15 = trio_res.get("acca_15x_ticket")
+            # 2. Daily 10.0x Mega Multiplier Slip (10–13 Legs Max) or Mid-Week Multiplier
             acca10 = trio_res.get("acca_10x_ticket")
-            if acca15 and acca15.get("picks"):
-                self._dispatch_ticket_message(
-                    chat_id=chat_id,
-                    title="⚡ StatIQ 15.0x Mid-Week Multiplier Slip",
-                    booking_code=acca15.get("booking_code"),
-                    share_url=acca15.get("share_url"),
-                    total_odds=acca15.get("actual_odds", 15.0),
-                    confidence=acca15.get("confidence_score", 45.0),
-                    picks=acca15.get("picks", []),
-                    extra_note="Daily VIP Slip 2 of 2 (Mid-Week) · ⚡ 15.0x Multiplier (11–14 Legs) · 🔒 Zero-Overlap with Rollover · Min Odds ≥ 1.15x"
-                )
-                dispatched_count += 1
-            elif acca10 and acca10.get("picks"):
+            acca15 = trio_res.get("acca_15x_ticket")
+            if acca10 and acca10.get("picks"):
                 self._dispatch_ticket_message(
                     chat_id=chat_id,
                     title="⚡ StatIQ 10.0x Mega Multiplier Slip",
@@ -436,7 +424,19 @@ class StatIQTelegramBot:
                     total_odds=acca10.get("actual_odds", 10.0),
                     confidence=acca10.get("confidence_score", 52.0),
                     picks=acca10.get("picks", []),
-                    extra_note="Daily VIP Slip 2 of 3 (Weekend) · ⚡ 10.0x Mega Multiplier (10–12 Legs) · 🔒 Strict Zero-Overlap · Min Odds ≥ 1.15x"
+                    extra_note="Daily VIP Slip 2 of 3 · ⚡ 10.0x Mega Multiplier (10–13 Legs Max) · 🔒 Strict Zero-Overlap · Min Odds ≥ 1.15x"
+                )
+                dispatched_count += 1
+            elif acca15 and acca15.get("picks"):
+                self._dispatch_ticket_message(
+                    chat_id=chat_id,
+                    title="⚡ StatIQ 15.0x Mid-Week Multiplier Slip",
+                    booking_code=acca15.get("booking_code"),
+                    share_url=acca15.get("share_url"),
+                    total_odds=acca15.get("actual_odds", 15.0),
+                    confidence=acca15.get("confidence_score", 45.0),
+                    picks=acca15.get("picks", []),
+                    extra_note="Daily VIP Slip 2 of 2 (Mid-Week) · ⚡ 15.0x Multiplier (10–13 Legs Max) · 🔒 Zero-Overlap with Rollover · Min Odds ≥ 1.15x"
                 )
                 dispatched_count += 1
 
