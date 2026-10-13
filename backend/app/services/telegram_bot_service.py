@@ -249,14 +249,10 @@ class StatIQTelegramBot:
             f"⏰ <b>Dispatch Time:</b> <b>{disp_time} AM WAT</b>\n"
             f"📅 <b>Active Days:</b> <b>{days_label}</b>\n"
             "🔒 <b>Zero-Overlap Guarantee:</b> 100% Unique Fixtures Across All Daily Slips\n\n"
-            "<b>📅 Adaptive Calendar Dispatch:</b>\n"
-            "• 🗓️ <b>Mon–Thu (Mid-Week Duo):</b>\n"
-            f"   ➔ 🎯 <b>2.0x Rollover:</b> {ro_icon} (3–4 Banker Legs, 100% Isolated)\n"
-            f"   ➔ ⚡ <b>15.0x Mid-Week Multiplier:</b> {acca10_icon} (11–14 High-Dominance Legs)\n"
-            "• 🗓️ <b>Fri–Sun (Weekend Trio):</b>\n"
-            f"   ➔ 🎯 <b>2.0x Rollover:</b> {ro_icon} (3–4 Banker Legs)\n"
-            f"   ➔ ⚡ <b>10.0x Mega Slip:</b> {acca10_icon} (10–12 High-Dominance Legs)\n"
-            f"   ➔ 🚀 <b>20.0x Monster Acca:</b> {acca20_icon} (13–15 Dominance Legs, 15 Max)\n\n"
+            "<b>📅 Daily VIP Slips (100% Zero-Overlap):</b>\n"
+            f"• 🎯 <b>2.0x Rollover:</b> {ro_icon} (3–4 Banker Legs, 100% Isolated)\n"
+            f"• ⚡ <b>10.0x Mega Slip #1:</b> {acca10_icon} (10–13 High-Dominance Legs)\n"
+            f"• ⚡ <b>10.0x Mega Slip #2:</b> {acca10_icon} (10–13 High-Dominance Legs, 100% Unique)\n\n"
             "<i>Tap any button below to toggle tickets on/off, cycle active days, or dispatch today's slips instantly:</i>"
         )
 
@@ -412,19 +408,33 @@ class StatIQTelegramBot:
                 )
                 dispatched_count += 1
 
-            # 2. Daily 10.0x Mega Multiplier Slip (10–13 Legs Max) or Mid-Week Multiplier
+            # 2. Daily 10.0x Mega Multiplier Slips (Slip #1 and Slip #2)
             acca10 = trio_res.get("acca_10x_ticket")
+            acca10_2 = trio_res.get("acca_10x_ticket_2")
             acca15 = trio_res.get("acca_15x_ticket")
             if acca10 and acca10.get("picks"):
                 self._dispatch_ticket_message(
                     chat_id=chat_id,
-                    title="⚡ StatIQ 10.0x Mega Multiplier Slip",
+                    title="⚡ StatIQ 10.0x Mega Multiplier — Slip #1",
                     booking_code=acca10.get("booking_code"),
                     share_url=acca10.get("share_url"),
                     total_odds=acca10.get("actual_odds", 10.0),
                     confidence=acca10.get("confidence_score", 52.0),
                     picks=acca10.get("picks", []),
-                    extra_note="Daily VIP Slip 2 of 3 · ⚡ 10.0x Mega Multiplier (10–13 Legs Max) · 🔒 Strict Zero-Overlap · Min Odds ≥ 1.15x"
+                    extra_note="Daily VIP Slip 2 of 3 · ⚡ 10.0x Mega Multiplier Slip #1 · 🔒 Strict Zero-Overlap · Min Odds ≥ 1.15x"
+                )
+                dispatched_count += 1
+
+            if acca10_2 and acca10_2.get("picks"):
+                self._dispatch_ticket_message(
+                    chat_id=chat_id,
+                    title="⚡ StatIQ 10.0x Mega Multiplier — Slip #2",
+                    booking_code=acca10_2.get("booking_code"),
+                    share_url=acca10_2.get("share_url"),
+                    total_odds=acca10_2.get("actual_odds", 10.0),
+                    confidence=acca10_2.get("confidence_score", 52.0),
+                    picks=acca10_2.get("picks", []),
+                    extra_note="Daily VIP Slip 3 of 3 · ⚡ 10.0x Mega Multiplier Slip #2 · 🔒 Strict Zero-Overlap · Min Odds ≥ 1.15x"
                 )
                 dispatched_count += 1
             elif acca15 and acca15.get("picks"):
