@@ -112,8 +112,8 @@ class RolloverTelegramNotifier:
         share_url = ticket_data.get("share_url") or f"https://www.sportybet.com/ng/?shareCode={code}"
 
         lines = [
-            "🔥 <b>StatIQ 5.0x Value Acca Slip</b>",
-            "🔒 <b>Zero-Overlap Guarantee:</b> 100% Unique Fixtures (No clash with Rollover)",
+            "🎯 <b>StatIQ 5.0x Precision Multiplier Slip</b>",
+            "🔒 <b>Elite Selection:</b> High-Assurance Cushions (Zero Obscure Leagues)",
             f"📅 <b>Date:</b> {date_str} (10:00 AM WAT Dispatch)",
             f"⚡ <b>Target Multiplier:</b> {actual_odds:.2f}x | <b>Combined Confidence:</b> {confidence:.1f}%",
             f"📊 <b>Leg Count:</b> {len(picks)} Vetted Matches\n"

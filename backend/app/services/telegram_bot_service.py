@@ -426,19 +426,36 @@ class StatIQTelegramBot:
                     )
                     dispatched_count += 1
 
-                # 2. Daily 10.0x Mega Multiplier Slips (Slip #1 and Slip #2)
+                # 2. Midweek 5.0x Precision Multiplier (if present)
+                acca5 = trio_res.get("acca_5x_ticket")
+                if acca5 and acca5.get("picks"):
+                    self._dispatch_ticket_message(
+                        chat_id=chat_id,
+                        title="🎯 StatIQ 5.0x Precision Multiplier Slip",
+                        booking_code=acca5.get("booking_code"),
+                        share_url=acca5.get("share_url"),
+                        total_odds=acca5.get("actual_odds", 5.0),
+                        confidence=acca5.get("confidence_score", 65.0),
+                        picks=acca5.get("picks", []),
+                        extra_note="Daily VIP Slip 2 of 3 · 🎯 5.0x Precision Acca (Elite European Selections) · Min Odds ≥ 1.15x"
+                    )
+                    dispatched_count += 1
+
+                # 3. Daily 10.0x Mega Multiplier Slips (Slip #1 and optional Slip #2)
                 acca10 = trio_res.get("acca_10x_ticket")
                 acca10_2 = trio_res.get("acca_10x_ticket_2")
                 if acca10 and acca10.get("picks"):
+                    title_10x = "⚡ StatIQ 10.0x Mega Multiplier Slip" if acca5 else "⚡ StatIQ 10.0x Mega Multiplier — Slip #1"
+                    note_10x = "Daily VIP Slip 3 of 3 · ⚡ 10.0x Mega Multiplier · Min Odds ≥ 1.15x" if acca5 else "Daily VIP Slip 2 of 3 · ⚡ 10.0x Mega Slip #1 · 🔒 Strict Zero-Overlap · Min Odds ≥ 1.15x"
                     self._dispatch_ticket_message(
                         chat_id=chat_id,
-                        title="⚡ StatIQ 10.0x Mega Multiplier — Slip #1",
+                        title=title_10x,
                         booking_code=acca10.get("booking_code"),
                         share_url=acca10.get("share_url"),
                         total_odds=acca10.get("actual_odds", 10.0),
                         confidence=acca10.get("confidence_score", 52.0),
                         picks=acca10.get("picks", []),
-                        extra_note="Daily VIP Slip 2 of 3 · ⚡ 10.0x Mega Multiplier Slip #1 · 🔒 Strict Zero-Overlap · Min Odds ≥ 1.15x"
+                        extra_note=note_10x
                     )
                     dispatched_count += 1
 
@@ -451,21 +468,23 @@ class StatIQTelegramBot:
                         total_odds=acca10_2.get("actual_odds", 10.0),
                         confidence=acca10_2.get("confidence_score", 52.0),
                         picks=acca10_2.get("picks", []),
-                        extra_note="Daily VIP Slip 3 of 3 · ⚡ 10.0x Mega Multiplier Slip #2 · 🔒 Strict Zero-Overlap · Min Odds ≥ 1.15x"
+                        extra_note="Daily VIP Slip 3 of 3 · ⚡ 10.0x Mega Slip #2 · 🔒 Strict Zero-Overlap · Min Odds ≥ 1.15x"
                     )
                     dispatched_count += 1
             else:
-                # In VIP channel, RolloverTelegramNotifier already delivered all 3 slips directly
+                # In VIP channel, RolloverTelegramNotifier already delivered all slips directly
                 dispatched_count = (
                     (1 if trio_res.get("rollover_ticket") else 0) +
+                    (1 if trio_res.get("acca_5x_ticket") else 0) +
                     (1 if trio_res.get("acca_10x_ticket") else 0) +
                     (1 if trio_res.get("acca_10x_ticket_2") else 0)
                 )
 
             if dispatched_count > 0:
+                cal_mode = "Midweek Mode (2.0x + 5.0x + 10.0x)" if trio_res.get("acca_5x_ticket") else "Weekend Mode (2.0x + 10.0x #1 + 10.0x #2)"
                 self.send_message(
                     chat_id,
-                    f"✅ <b>Daily VIP Automation Complete!</b> Dispatched {dispatched_count} slips with <b>{trio_res.get('total_unique_fixtures', 0)} unique fixtures</b> (100% Strict Zero-Overlap)."
+                    f"✅ <b>Daily VIP Automation Complete!</b> Dispatched {dispatched_count} slips via <b>{cal_mode}</b> with <b>{trio_res.get('total_unique_fixtures', 0)} unique fixtures</b>."
                 )
         except Exception as e:
             logger.error(f"[TelegramBot] Dispatch error: {e}", exc_info=True)

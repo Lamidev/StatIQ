@@ -19,7 +19,7 @@ DEFAULT_CONFIG = {
     "enable_rollover_2x": True,            # Slip 1: 2.0x Rollover (3–4 banker legs)
     "enable_acca_10x": True,               # Slips 2 & 3: 2x 10.0x Mega Multipliers (10–13 legs each, 100% Zero-Overlap)
     "enable_acca_20x": False,              # Disabled by default (Replaced by 2x 10.0x slips)
-    "enable_acca_5x": False,               # Legacy 5.0x Value Acca (Disabled by default)
+    "enable_acca_5x": True,                # Midweek 5.0x Precision Multiplier (Enabled Mon–Fri)
     "target_odds": 2.00,                   # 1.50 or 2.00
     "max_leg_odds": 1.45,                  # Upper safety bound per leg (1.15 to 1.45 corridor)
     "dispatch_time": "10:00",              # 10:00 AM WAT sharp
@@ -145,8 +145,8 @@ class RolloverCronScheduler:
 
                         en_ro = bool(cfg.get("enable_rollover_2x", True))
                         en_10x = bool(cfg.get("enable_acca_10x", True))
-                        en_20x = bool(cfg.get("enable_acca_20x", True))
-                        en_5x = bool(cfg.get("enable_acca_5x", False))
+                        en_20x = bool(cfg.get("enable_acca_20x", False))
+                        en_5x = bool(cfg.get("enable_acca_5x", True))
 
                         # Execute async run in dedicated event loop
                         loop = asyncio.new_event_loop()
@@ -230,8 +230,8 @@ class RolloverCronScheduler:
         cfg = self.get_config()
         en_ro = enable_rollover if enable_rollover is not None else bool(cfg.get("enable_rollover_2x", True))
         en_10x = enable_10odds if enable_10odds is not None else bool(cfg.get("enable_acca_10x", True))
-        en_20x = enable_20odds if enable_20odds is not None else bool(cfg.get("enable_acca_20x", True))
-        en_5x = enable_5odds if enable_5odds is not None else bool(cfg.get("enable_acca_5x", False))
+        en_20x = enable_20odds if enable_20odds is not None else bool(cfg.get("enable_acca_20x", False))
+        en_5x = enable_5odds if enable_5odds is not None else bool(cfg.get("enable_acca_5x", True))
 
         challenge_info = None
         current_stake = float(cfg.get("starting_stake", 5000))
