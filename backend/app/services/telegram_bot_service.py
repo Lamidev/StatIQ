@@ -751,14 +751,25 @@ class StatIQTelegramBot:
                 dropped_count = len(removed_selections)
                 safe_count = len(all_safe_selections)
 
+                portfolio_slips = res.get("portfolio_tickets") or []
+
                 # Calculate required game count to fill the requested tickets cleanly
                 if target_mode == "GAMES":
                     needed_games = target_games * num_tickets
+                    is_pool_constrained = (num_tickets > 1 and safe_count < needed_games)
                 else:
-                    needed_per_t = min(13, max(8, int(math.ceil(math.log(max(1.5, target_odds), 1.19)))))
-                    needed_games = needed_per_t * num_tickets
-
-                is_pool_constrained = (num_tickets > 1 and safe_count < needed_games)
+                    # Dynamic Capacity Check:
+                    # 1. If re_edit_ticket already cleanly assembled the requested number of tickets meeting target odds
+                    if len(portfolio_slips) >= num_tickets and all(s.get("new_total_odds", 0) >= (target_odds * 0.80) for s in portfolio_slips):
+                        is_pool_constrained = False
+                        needed_games = sum(len(s.get("final_selections", [])) for s in portfolio_slips)
+                    else:
+                        # 2. Calculate based on the ACTUAL average odds of the uploaded safe matches
+                        avg_odds = (sum(float(s.get("odds") or 1.25) for s in all_safe_selections) / max(1, len(all_safe_selections))) if all_safe_selections else 1.25
+                        effective_base = max(1.18, min(1.45, avg_odds))
+                        needed_per_t = max(4, int(math.ceil(math.log(max(1.5, target_odds), effective_base))))
+                        needed_games = needed_per_t * num_tickets
+                        is_pool_constrained = (num_tickets > 1 and safe_count < needed_games)
 
                 # ── STEP 3: INTERACTIVE AUDIT CONFIRMATION IF GAMES ARE DROPPED & UNCONFIRMED ──
                 if confirmed_action is None and dropped_count > 0:
@@ -1007,13 +1018,21 @@ class StatIQTelegramBot:
                 dropped_count = len(removed_selections)
                 safe_count = len(all_safe_selections)
 
+                portfolio_slips = res.get("portfolio_tickets") or []
+
                 if target_mode == "GAMES":
                     needed_games = target_games * num_tickets
+                    is_pool_constrained = (num_tickets > 1 and safe_count < needed_games)
                 else:
-                    needed_per_t = min(13, max(8, int(math.ceil(math.log(max(1.5, target_odds), 1.19)))))
-                    needed_games = needed_per_t * num_tickets
-
-                is_pool_constrained = (num_tickets > 1 and safe_count < needed_games)
+                    if len(portfolio_slips) >= num_tickets and all(s.get("new_total_odds", 0) >= (target_odds * 0.80) for s in portfolio_slips):
+                        is_pool_constrained = False
+                        needed_games = sum(len(s.get("final_selections", [])) for s in portfolio_slips)
+                    else:
+                        avg_odds = (sum(float(s.get("odds") or 1.25) for s in all_safe_selections) / max(1, len(all_safe_selections))) if all_safe_selections else 1.25
+                        effective_base = max(1.18, min(1.45, avg_odds))
+                        needed_per_t = max(4, int(math.ceil(math.log(max(1.5, target_odds), effective_base))))
+                        needed_games = needed_per_t * num_tickets
+                        is_pool_constrained = (num_tickets > 1 and safe_count < needed_games)
 
                 if confirmed_action is None and dropped_count > 0:
                     youth_cnt = sum(1 for r in removed_selections if any(k in str(r.get("reason", "")).lower() for k in ["youth", "u21", "u20", "u19", "u18", "reserve"]))
