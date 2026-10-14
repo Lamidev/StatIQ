@@ -379,10 +379,11 @@ class StatIQTelegramBot:
             return
         self._last_dispatch_ts = now_ts
 
-        self.send_chat_action(chat_id, "typing")
+        wat_now = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=1)))
+        mode_text = "2.0x, 5.0x Precision, and 10.0x Mega slips" if wat_now.weekday() in (0, 1, 2, 3, 4) else "2.0x Rollover and 2x 10.0x Mega slips"
         self.send_message(
             chat_id,
-            "⏳ <b>StatIQ Daily VIP Automation:</b> Querying today's fixtures and generating 2.0x and 2x 10.0x slips with <b>Strict Zero-Overlap</b>..."
+            f"⏳ <b>StatIQ Daily VIP Automation:</b> Querying today's fixtures and generating {mode_text} with <b>Strict Zero-Overlap</b>..."
         )
 
         try:
