@@ -150,10 +150,20 @@ class EliteRolloverEngine:
             if isinstance(start_ms, (int, float)) and 0 < start_ms < 100000000000:
                 start_ms = start_ms * 1000.0
 
-            # Strict 15-Minute Pre-Match Cutoff across all hours of day:
-            # Prevents odds-removal or in-play lockouts when user books tickets
-            if start_ms > 0 and start_ms <= (now_ms + 15 * 60 * 1000):
-                continue
+            # Strict Kickoff Timing Gates (WAT Timezone):
+            # 1. At least 45 minutes after now (avoids 10:30am/11:00am in-play rush & gives user time to place bets)
+            # 2. Concludes strictly before 22:30 WAT (10:30 PM) on the same day (eliminates midnight / 1am rollover delays)
+            wat_tz = datetime.timezone(datetime.timedelta(hours=1))
+            now_wat = datetime.datetime.now(wat_tz)
+            end_of_day_wat = now_wat.replace(hour=22, minute=30, second=0, microsecond=0)
+            end_of_day_ms = end_of_day_wat.timestamp() * 1000.0
+            min_kickoff_ms = now_ms + (45 * 60 * 1000.0)
+
+            if start_ms > 0:
+                if start_ms < min_kickoff_ms:
+                    continue
+                if start_ms > end_of_day_ms:
+                    continue
 
             h_team = ev.get("homeTeamName") or "Home"
             a_team = ev.get("awayTeamName") or "Away"
@@ -181,13 +191,18 @@ class EliteRolloverEngine:
                 "thailand", "thai league", "thai", "vietnam", "v-league", "malaysia", "indonesia",
                 "lebanon", "jordan", "kuwait", "bahrain", "oman", "iraq", "syria", "yemen",
                 "india", "indian super", "i-league",
+                # Obscure South American lower tiers & preliminary domestic cups (Torneo DIMAYOR, Copa Colombia, etc.)
+                "dimayor", "torneo dimayor", "copa dimayor", "copa colombia", "colombia b", "primera b", "venezuela", "bolivia",
+                # Secondary Asian regional cups & volatile clubs (Cambodia, Malaysia, Singapore, Hong Kong)
+                "afc champions league two", "afc champions league 2", "afc challenge league", "afc cup",
+                "phnom penh", "lion city", "kitchee", "kuching city", "tai po", "cambodia", "malaysia", "singapore", "hong kong", "macau", "philippines",
                 # Japan domestic cups & lower tiers (where J1 clubs rotate reserve/youth squads: Yamaga, Mito, etc.)
                 "j.league cup", "j-league cup", "emperor cup", "emperor's cup", "j2 league", "j3 league",
                 # Obscure European lower tiers / domestic preliminary cups
                 "northern ireland", "wales", "cymru", "cyprus cup", "slovensky pohar", "slovakia cup",
                 "kosovo", "albania", "macedonia", "montenegro", "bosnia", "latvia", "lithuania", "estonia",
                 "belarus", "moldova", "luxembourg", "malta", "faroe islands",
-                "3. liga", "norway 1.", "norway 2.", "1. divisjon", "sweden division 1", "colombia b", "primera b", "venezuela", "bolivia"
+                "3. liga", "norway 1.", "norway 2.", "1. divisjon", "sweden division 1"
             ]
             if any(t in comb_name_str for t in bad_tokens):
                 continue
@@ -338,6 +353,11 @@ class EliteRolloverEngine:
             fav_is_juggernaut = any(jg in fav_team_name.lower() for jg in JUGGERNAUTS)
             juggernaut_bonus = 45.0 if (fav_is_juggernaut and dominance_ratio >= 1.45) else 0.0
 
+            # Strict Dominant Favorite Gate:
+            # Prevents 50-50 / coin-toss traps where home team is priced 2.10-2.40 just due to home ground.
+            # A genuine banker favorite MUST have outright match odds <= 1.85 (and dominance ratio >= 1.40).
+            fav_is_genuine_banker = (fav_odds <= 1.85 and dominance_ratio >= 1.40) or (fav_is_juggernaut and dominance_ratio >= 1.30)
+
             # Tier-Weighted League Quality Shield:
             # - Tier 1: Top flights have elite depth (min dominance 1.30)
             # - Tier 2: Recognized national flights (min dominance 1.35)
@@ -380,8 +400,8 @@ class EliteRolloverEngine:
                         if odds < 1.15 or odds > max_leg_odds:
                             continue
 
-                        # 1X on Home favorite (dominance ratio >= min_dominance)
-                        if (oc_id == "9" or "home or draw" in oc_desc.lower() or "1x" in oc_desc.lower()) and is_home_fav and dominance_ratio >= min_dominance:
+                        # 1X on Home favorite (dominance ratio >= min_dominance and genuine banker favorite)
+                        if (oc_id == "9" or "home or draw" in oc_desc.lower() or "1x" in oc_desc.lower()) and is_home_fav and dominance_ratio >= min_dominance and fav_is_genuine_banker:
                             prob = round(min(0.92, (1.0 / odds) * 0.96), 4)
                             sel_desc = f"{h_team} or Draw (1X)"
                             stats_3p = evaluate_fixture_3pillar_metrics(h_team, a_team, "Double Chance", sel_desc, odds)
@@ -410,8 +430,8 @@ class EliteRolloverEngine:
                                     "selection_rationale": f"{tier_label} · {stats_3p.get('h2h_summary')} · {stats_3p.get('form_summary')}"
                                 })
 
-                        # X2 on Away favorite (dominance ratio >= min_dominance)
-                        elif (oc_id == "11" or "draw or away" in oc_desc.lower() or "x2" in oc_desc.lower()) and (not is_home_fav) and dominance_ratio >= min_dominance:
+                        # X2 on Away favorite (dominance ratio >= min_dominance and genuine banker favorite)
+                        elif (oc_id == "11" or "draw or away" in oc_desc.lower() or "x2" in oc_desc.lower()) and (not is_home_fav) and dominance_ratio >= min_dominance and fav_is_genuine_banker:
                             prob = round(min(0.90, (1.0 / odds) * 0.96), 4)
                             sel_desc = f"Draw or {a_team} (X2)"
                             stats_3p = evaluate_fixture_3pillar_metrics(h_team, a_team, "Double Chance", sel_desc, odds)
@@ -593,49 +613,10 @@ class EliteRolloverEngine:
                                     "selection_rationale": f"{tier_label} · {fav_team} Half Dominance ({dominance_ratio:.1f}x) · {stats_3p.get('h2h_summary')} · {stats_3p.get('form_summary')}"
                                 })
 
-                # E. High-Ceiling Unders (Under 3.5 / Under 4.5 Goals)
-                if (m_id == "18" or "over/under" in m_desc or "total goals" in m_desc) and "half" not in m_desc and "corner" not in m_desc and "team" not in m_desc:
-                    for oc in m.get("outcomes", []):
-                        is_active = oc.get("isActive")
-                        if is_active is not None and str(is_active) not in ("1", "True", "true"):
-                            continue
-                        oc_st = oc.get("status")
-                        if oc_st is not None and str(oc_st) != "0":
-                            continue
-                        oc_id = str(oc.get("id"))
-                        oc_desc = (oc.get("desc") or "").lower()
-                        odds = float(oc.get("odds") or 0)
-                        is_line_35 = ("3.5" in spec) or ("3.5" in oc_desc) or ("total=3.5" in spec)
-                        is_line_45 = ("4.5" in spec) or ("4.5" in oc_desc) or ("total=4.5" in spec)
-                        if (is_line_35 or is_line_45) and "under" in oc_desc and 1.15 <= odds <= max_leg_odds:
-                            prob = round(min(0.92, (1.0 / odds) * 0.95), 4)
-                            sel_desc = "Under 3.5 Goals" if is_line_35 else "Under 4.5 Goals"
-                            m_type = "UNDER_35" if is_line_35 else "UNDER_45"
-                            stats_3p = evaluate_fixture_3pillar_metrics(h_team, a_team, f"Over/Under {3.5 if is_line_35 else 4.5}", sel_desc, odds)
-                            if prob >= 0.78 and stats_3p.get("composite_safety_score", 0.7) >= 0.68:
-                                c_sc = float(stats_3p.get("composite_safety_score", 0.75))
-                                candidates.append({
-                                    "event_id": eid,
-                                    "home_team": h_team,
-                                    "away_team": a_team,
-                                    "competition": f"{c_name} · {t_name}",
-                                    "competition_tier": tier_label,
-                                    "dominance_ratio": round(dominance_ratio, 2),
-                                    "is_juggernaut": fav_is_juggernaut,
-                                    "market_id": m_id,
-                                    "market_desc": sel_desc,
-                                    "outcome_id": oc_id,
-                                    "selection_desc": sel_desc,
-                                    "specifier": spec or ("total=3.5" if is_line_35 else "total=4.5"),
-                                    "odds": odds,
-                                    "model_probability": prob,
-                                    "market_type": m_type,
-                                    "h2h_summary": stats_3p.get("h2h_summary") or f"H2H Defensive Index: {h_team} vs {a_team}",
-                                    "form_summary": stats_3p.get("form_summary") or f"Form Defensive Stability: {h_team} + {a_team}",
-                                    "composite_safety_score": c_sc,
-                                    "quality_score": (prob * 55.0) + (c_sc * 45.0) + pedigree_bonus + 5.0,
-                                    "selection_rationale": f"{tier_label} · Tactical Defensive Shield · {stats_3p.get('h2h_summary')} · {stats_3p.get('form_summary')}"
-                                })
+                # E. [PERMANENTLY BANNED] High-Ceiling Unders (Under 3.5 / Under 4.5 Goals)
+                # Banned across all tickets by user directive: Unders expose tickets to 90-minute anxiety,
+                # stoppage-time deflections, penalty shootouts, and European red-card chaos.
+                # Only positive outcome markets (Team Over, Match Over, Double Chance, Handicap) are permitted.
 
                 # F. 1st Half Over 0.5 Goals (Strictly Gated to High-Pace, High-xG Leagues)
                 is_high_pace_league = any(k in comp_full for k in [
@@ -1133,9 +1114,9 @@ class EliteRolloverEngine:
         selected_fids = set()
         curr_odds = 1.0
 
-        target_floor = (target * 0.98) if target >= 9.5 else (target * 0.92)
+        target_floor = (target * 0.95) if target >= 9.5 else (target * 0.92)
         target_ceiling = (target * 1.08) if target >= 9.5 else (target * 1.15)
-        effective_max_legs = max_legs + (2 if target >= 9.5 else 0)
+        effective_max_legs = max_legs + (3 if target >= 9.5 else 2)
 
         for fid in sorted_fixtures:
             opts = fixture_candidates[fid]
@@ -1376,13 +1357,13 @@ class EliteRolloverEngine:
 
                 trio_result["rollover_ticket"] = ro_payload
 
-        # ── 2. SLIP 2: 5.0x PRECISION MULTIPLIER (6–8 Pure Banker Legs, Compounding Rollover Acca) ──
+        # ── 2. SLIP 2: 5.0x PRECISION MULTIPLIER (8–11 Pure Banker Legs, Compounding Rollover Acca) ──
         unclaimed_5x = [c for c in banker_candidates if c["event_id"] not in ro_event_ids]
         acca5_legs = cls.assemble_optimal_accumulator_slip(
             unclaimed_5x,
             target_odds=5.00,
-            min_legs=6,
-            max_legs=8,
+            min_legs=8,
+            max_legs=11,
             excluded_event_ids=ro_event_ids
         )
         acca5_fids = set()
@@ -1419,9 +1400,9 @@ class EliteRolloverEngine:
 
             trio_result["acca_5x_ticket"] = acca5_payload
 
-        # ── 3. SLIP 3: 10.0x MEGA MULTIPLIER (10–13 Pure Banker Legs, Rollover-Grade Sniper) ──
+        # ── 3. SLIP 3: 10.0x MEGA MULTIPLIER (12–15 Pure Banker Legs, Rollover-Grade Sniper) ──
         unclaimed_10x = [c for c in banker_candidates if c["event_id"] not in ro_event_ids and c["event_id"] not in acca5_fids]
-        if len(unclaimed_10x) >= 11:
+        if len(unclaimed_10x) >= 12:
             pool_for_10x = unclaimed_10x
             excl_fids = ro_event_ids | acca5_fids
         else:
@@ -1432,9 +1413,9 @@ class EliteRolloverEngine:
         acca10_legs = cls.assemble_optimal_accumulator_slip(
             pool_for_10x,
             target_odds=10.00,
-            min_legs=10,
-            max_legs=13,
-            excluded_event_ids=excl_fids if len(unclaimed_10x) >= 11 else ro_event_ids
+            min_legs=12,
+            max_legs=15,
+            excluded_event_ids=excl_fids if len(unclaimed_10x) >= 12 else ro_event_ids
         )
         if acca10_legs:
             for leg in acca10_legs:

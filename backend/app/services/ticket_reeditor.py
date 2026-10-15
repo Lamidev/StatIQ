@@ -382,7 +382,9 @@ def _is_volatile_fixture(sel: Dict[str, Any]) -> Tuple[bool, str]:
         "j.league cup", "j-league cup", "emperor cup", "emperor's cup", "j2 league", "j3 league",
         "kenya", "kakamega", "tanzania", "uganda", "nigeria", "ghana", "algeria", "temouchent", "rouissat",
         "kosovo", "albania", "macedonia", "montenegro", "bosnia", "cyprus cup", "slovensky pohar", "slovakia cup",
-        "norway 1.", "norway 2.", "1. divisjon", "thailand", "thai league", "vietnam", "malaysia", "indonesia"
+        "norway 1.", "norway 2.", "1. divisjon", "thailand", "thai league", "vietnam", "malaysia", "indonesia",
+        "dimayor", "torneo dimayor", "copa dimayor", "copa colombia", "colombia b", "primera b",
+        "afc champions league two", "afc champions league 2", "afc challenge league", "phnom penh", "lion city", "kitchee", "kuching city", "tai po"
     ]):
         return True, "Obscure/volatile lower tier or domestic preliminary cup"
 
