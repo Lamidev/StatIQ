@@ -440,34 +440,18 @@ class StatIQTelegramBot:
                     )
                     dispatched_count += 1
 
-                # 3. Daily 10.0x Mega Multiplier Slips (Slip #1 and optional Slip #2)
+                # 3. Daily 10.0x Mega Multiplier Slip (Slip #3)
                 acca10 = trio_res.get("acca_10x_ticket")
-                acca10_2 = trio_res.get("acca_10x_ticket_2")
                 if acca10 and acca10.get("picks"):
-                    title_10x = "⚡ StatIQ 10.0x Mega Multiplier Slip" if acca5 else "⚡ StatIQ 10.0x Mega Multiplier — Slip #1"
-                    note_10x = "Daily VIP Slip 3 of 3 · ⚡ 10.0x Mega Multiplier · Min Odds ≥ 1.15x" if acca5 else "Daily VIP Slip 2 of 3 · ⚡ 10.0x Mega Slip #1 · 🔒 Strict Zero-Overlap · Min Odds ≥ 1.15x"
                     self._dispatch_ticket_message(
                         chat_id=chat_id,
-                        title=title_10x,
+                        title="⚡ StatIQ 10.0x Mega Multiplier Slip",
                         booking_code=acca10.get("booking_code"),
                         share_url=acca10.get("share_url"),
                         total_odds=acca10.get("actual_odds", 10.0),
                         confidence=acca10.get("confidence_score", 52.0),
                         picks=acca10.get("picks", []),
-                        extra_note=note_10x
-                    )
-                    dispatched_count += 1
-
-                if acca10_2 and acca10_2.get("picks"):
-                    self._dispatch_ticket_message(
-                        chat_id=chat_id,
-                        title="⚡ StatIQ 10.0x Mega Multiplier — Slip #2",
-                        booking_code=acca10_2.get("booking_code"),
-                        share_url=acca10_2.get("share_url"),
-                        total_odds=acca10_2.get("actual_odds", 10.0),
-                        confidence=acca10_2.get("confidence_score", 52.0),
-                        picks=acca10_2.get("picks", []),
-                        extra_note="Daily VIP Slip 3 of 3 · ⚡ 10.0x Mega Slip #2 · 🔒 Strict Zero-Overlap · Min Odds ≥ 1.15x"
+                        extra_note="Daily VIP Slip 3 of 3 · ⚡ 10.0x Mega Multiplier · 🔒 Zero-Overlap · Min Odds ≥ 1.15x"
                     )
                     dispatched_count += 1
             else:
@@ -476,7 +460,7 @@ class StatIQTelegramBot:
                     (1 if trio_res.get("rollover_ticket") else 0) +
                     (1 if trio_res.get("acca_5x_ticket") else 0) +
                     (1 if trio_res.get("acca_10x_ticket") else 0) +
-                    (1 if trio_res.get("acca_10x_ticket_2") else 0)
+                    (1 if trio_res.get("acca_20x_ticket") else 0)
                 )
 
             if dispatched_count > 0:

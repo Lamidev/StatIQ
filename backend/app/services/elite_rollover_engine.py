@@ -1333,7 +1333,6 @@ class EliteRolloverEngine:
             "rollover_ticket": None,
             "acca_5x_ticket": None,
             "acca_10x_ticket": None,
-            "acca_10x_ticket_2": None,
             "acca_20x_ticket": None,
             "total_unique_fixtures": 0
         }
