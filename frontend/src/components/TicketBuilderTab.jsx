@@ -507,11 +507,11 @@ export default function TicketBuilderTab() {
     is_enabled: true,
     active_days: ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"],
     enable_rollover_2x: true,
+    enable_acca_5x: true,
     enable_acca_10x: true,
-    enable_acca_20x: true,
-    enable_acca_5x: false,
+    enable_acca_20x: false,
     target_odds: 2.00,
-    max_leg_odds: 1.45,
+    max_leg_odds: 1.35,
     dispatch_time: "10:00",
     campaign_mode: "CONTINUOUS", // "CHALLENGE" or "CONTINUOUS"
     challenge_days: 10,
@@ -525,7 +525,7 @@ export default function TicketBuilderTab() {
     last_trio_result: null
   });
   const [trioResult, setTrioResult] = useState(null);
-  const [activeTrioTab, setActiveTrioTab] = useState("ROLLOVER"); // "ROLLOVER", "ACCA_10X", "ACCA_20X"
+  const [activeTrioTab, setActiveTrioTab] = useState("ROLLOVER"); // "ROLLOVER", "ACCA_5X", "ACCA_10X", "ACCA_20X"
   const [cronLoading, setCronLoading] = useState(false);
   const [cronRunningNow, setCronRunningNow] = useState(false);
   const [cronNotice, setCronNotice] = useState(null);
@@ -549,7 +549,7 @@ export default function TicketBuilderTab() {
         setCronConfig(prev => ({ ...prev, ...res.config }));
         if (res.config.last_trio_result) {
           setTrioResult(res.config.last_trio_result);
-          const primary = res.config.last_trio_result.rollover_ticket || res.config.last_trio_result.acca_15x_ticket || res.config.last_trio_result.acca_10x_ticket || res.config.last_trio_result.acca_20x_ticket || res.config.last_trio_result.acca_5x_ticket;
+          const primary = res.config.last_trio_result.rollover_ticket || res.config.last_trio_result.acca_5x_ticket || res.config.last_trio_result.acca_10x_ticket || res.config.last_trio_result.acca_20x_ticket;
           if (primary) {
             setCronTicketResult(primary);
           }
@@ -723,9 +723,9 @@ export default function TicketBuilderTab() {
       });
       if (res && res.status === "SUCCESS" && res.result) {
         setTrioResult(res.result);
-        const primary = res.result.rollover_ticket || res.result.acca_15x_ticket || res.result.acca_10x_ticket || res.result.acca_20x_ticket || res.result.acca_5x_ticket;
+        const primary = res.result.rollover_ticket || res.result.acca_5x_ticket || res.result.acca_10x_ticket || res.result.acca_20x_ticket;
         if (primary) setCronTicketResult(primary);
-        setCronNotice(`Daily VIP Slips generated! Dispatched to Telegram (${res.result.total_unique_fixtures || 0} unique fixtures, ${res.result.calendar_mode || "Adaptive Calendar"})!`);
+        setCronNotice(`Daily VIP Slips generated! Dispatched to Telegram (${res.result.total_unique_fixtures || 0} unique fixtures, ${res.result.calendar_mode || "VIP Suite"})!`);
         const histRes = await fetchRolloverHistory();
         if (histRes && histRes.history) {
           setCronHistory(histRes.history);
@@ -3375,15 +3375,16 @@ Slovakia vs Moldova`;
             )}
           </div>
 
-          {/* LIVE DISPATCHED VIP SLIPS (TRIO WITH ADAPTIVE CALENDAR ENGINE) */}
+          {/* LIVE DISPATCHED VIP SLIPS (UNIFIED 2.0x + 5.0x + 10.0x VIP SUITE) */}
           {(() => {
             const activeTrio = trioResult || cronConfig.last_trio_result;
-            const midWeekTicket = activeTrio?.acca_15x_ticket;
             const currentTicket = (activeTrioTab === "ROLLOVER" 
               ? (activeTrio?.rollover_ticket || cronTicketResult)
-              : activeTrioTab === "ACCA_10X" || activeTrioTab === "ACCA_15X"
-              ? (midWeekTicket || activeTrio?.acca_10x_ticket || activeTrio?.acca_5x_ticket)
-              : (activeTrio?.acca_20x_ticket || midWeekTicket || activeTrio?.acca_10x_ticket)) || cronTicketResult;
+              : activeTrioTab === "ACCA_5X"
+              ? (activeTrio?.acca_5x_ticket || cronTicketResult)
+              : activeTrioTab === "ACCA_10X"
+              ? (activeTrio?.acca_10x_ticket || cronTicketResult)
+              : (activeTrio?.acca_20x_ticket || cronTicketResult)) || cronTicketResult;
 
             if (!currentTicket && !activeTrio) {
               return (
@@ -3446,22 +3447,39 @@ Slovakia vs Moldova`;
                         )}
                       </button>
 
-                      <button
-                        type="button"
-                        onClick={() => setActiveTrioTab("ACCA_10X")}
-                        className={`px-3.5 py-2 rounded-xl text-xs font-black transition-all flex items-center gap-1.5 cursor-pointer whitespace-nowrap ${
-                          activeTrioTab === "ACCA_10X" || activeTrioTab === "ACCA_15X"
-                            ? "bg-white text-indigo-800 shadow-sm border border-slate-200/80"
-                            : "text-slate-600 hover:text-slate-900"
-                        }`}
-                      >
-                        <span>{midWeekTicket ? "⚡ 15.0x Mid-Week Acca" : "🔥 10.0x Mega Acca"}</span>
-                        {(midWeekTicket || activeTrio.acca_10x_ticket || activeTrio.acca_5x_ticket) && (
-                          <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-indigo-100 text-indigo-800 font-extrabold">
-                            {(midWeekTicket || activeTrio.acca_10x_ticket || activeTrio.acca_5x_ticket).actual_odds}x
+                      {activeTrio.acca_5x_ticket && (
+                        <button
+                          type="button"
+                          onClick={() => setActiveTrioTab("ACCA_5X")}
+                          className={`px-3.5 py-2 rounded-xl text-xs font-black transition-all flex items-center gap-1.5 cursor-pointer whitespace-nowrap ${
+                            activeTrioTab === "ACCA_5X"
+                              ? "bg-white text-purple-800 shadow-sm border border-slate-200/80"
+                              : "text-slate-600 hover:text-slate-900"
+                          }`}
+                        >
+                          <span>🎯 5.0x Precision Acca</span>
+                          <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-purple-100 text-purple-800 font-extrabold">
+                            {activeTrio.acca_5x_ticket.actual_odds}x
                           </span>
-                        )}
-                      </button>
+                        </button>
+                      )}
+
+                      {activeTrio.acca_10x_ticket && (
+                        <button
+                          type="button"
+                          onClick={() => setActiveTrioTab("ACCA_10X")}
+                          className={`px-3.5 py-2 rounded-xl text-xs font-black transition-all flex items-center gap-1.5 cursor-pointer whitespace-nowrap ${
+                            activeTrioTab === "ACCA_10X"
+                              ? "bg-white text-indigo-800 shadow-sm border border-slate-200/80"
+                              : "text-slate-600 hover:text-slate-900"
+                          }`}
+                        >
+                          <span>⚡ 10.0x Mega Acca</span>
+                          <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-indigo-100 text-indigo-800 font-extrabold">
+                            {activeTrio.acca_10x_ticket.actual_odds}x
+                          </span>
+                        </button>
+                      )}
 
                       {activeTrio.acca_20x_ticket && (
                         <button
@@ -3485,11 +3503,7 @@ Slovakia vs Moldova`;
                       <span className="px-3 py-1 rounded-full text-[10px] font-black bg-emerald-50 text-emerald-800 border border-emerald-200 flex items-center gap-1.5">
                         <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
                         <span>
-                          {activeTrio.is_midweek || activeTrio.schedule_mode === "MIDWEEK_DUO"
-                            ? `Mid-Week Duo Mode (2.0x + 15.0x • Zero Overlap • ${activeTrio.total_unique_fixtures || 0} Fixtures)`
-                            : activeTrio.calendar_mode === "SMART_HYBRID"
-                            ? `Smart Hybrid Mode (2.0x Sacred • ${activeTrio.total_unique_fixtures || 0} Fixtures)`
-                            : `Strict Zero Overlap (${activeTrio.total_unique_fixtures || 0} Unique Fixtures)`}
+                          {`Daily VIP Banker Suite (Strict Zero Overlap • ${activeTrio.total_unique_fixtures || 0} Fixtures)`}
                         </span>
                       </span>
                     </div>
