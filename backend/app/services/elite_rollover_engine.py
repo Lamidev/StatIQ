@@ -320,6 +320,11 @@ class EliteRolloverEngine:
                         pedigree_bonus = 30.0
                         tier_label = "Tier 3 Professional"
 
+            # HARD-BLOCK UNRANKED / OBSCURE TOURNAMENTS
+            # Prevents obscure lower leagues (e.g. Egyptian 2nd tier, filler cups) from contaminating VIP slips
+            if pedigree_bonus < 0:
+                continue
+
             # Check 1X2 baseline odds for favorite dominance
             h_odds = 2.5
             d_odds = 3.2
@@ -354,21 +359,27 @@ class EliteRolloverEngine:
             juggernaut_bonus = 45.0 if (fav_is_juggernaut and dominance_ratio >= 1.45) else 0.0
 
             # Strict Dominant Favorite Gate:
-            # Prevents 50-50 / coin-toss traps where home team is priced 2.10-2.40 just due to home ground.
-            # A genuine banker favorite MUST have outright match odds <= 1.85 (and dominance ratio >= 1.40).
-            fav_is_genuine_banker = (fav_odds <= 1.85 and dominance_ratio >= 1.40) or (fav_is_juggernaut and dominance_ratio >= 1.30)
+            # - Tier 1 (UEFA Europa, Conference, Champions, EPL, etc.): Home favorites up to 2.20 with dominance >= 1.25
+            #   are genuine European contenders with high home-ground unbeaten rates (>80%).
+            # - Tier 2: Established top flights (odds <= 1.95, dominance >= 1.35)
+            # - Tier 3: Strict outright match odds <= 1.85 and dominance ratio >= 1.40.
+            if is_tier_1:
+                fav_is_genuine_banker = (fav_odds <= 2.20 and dominance_ratio >= 1.25) or fav_is_juggernaut
+            elif is_tier_2:
+                fav_is_genuine_banker = (fav_odds <= 1.95 and dominance_ratio >= 1.35) or (fav_is_juggernaut and dominance_ratio >= 1.25)
+            else:
+                fav_is_genuine_banker = (fav_odds <= 1.85 and dominance_ratio >= 1.40) or (fav_is_juggernaut and dominance_ratio >= 1.30)
 
             # Tier-Weighted League Quality Shield:
-            # - Tier 1: Top flights have elite depth (min dominance 1.30)
-            # - Tier 2: Recognized national flights (min dominance 1.35)
-            # - Tier 3 / Regional: Lower obscure divisions must have clear runaway dominance (min dominance 1.65 or juggernaut)
-            #   Prevents 50-50 amateur traps (Padova, Bursaspor) while preserving runaway lower-league favorites for multi-ticket variants.
+            # - Tier 1: Top flights have elite depth (min dominance 1.25)
+            # - Tier 2: Recognized national flights (min dominance 1.30)
+            # - Tier 3 / Regional: Lower obscure divisions must have clear runaway dominance (min dominance 1.55 or juggernaut)
             if is_tier_1:
-                min_dominance = 1.30
+                min_dominance = 1.25
             elif is_tier_2:
-                min_dominance = 1.35
+                min_dominance = 1.30
             else:
-                min_dominance = 1.65 if not fav_is_juggernaut else 1.35
+                min_dominance = 1.55 if not fav_is_juggernaut else 1.30
 
             # Evaluate each eligible low-variance market in the fixture
             for m in markets:
@@ -533,6 +544,8 @@ class EliteRolloverEngine:
                         odds = float(oc.get("odds") or 0)
                         
                         is_line_05 = ("0.5" in spec) or ("0.5" in oc_desc) or ("total=0.5" in spec) or ("over 0.5" in oc_desc)
+                        is_line_15 = ("1.5" in spec) or ("1.5" in oc_desc) or ("total=1.5" in spec) or ("over 1.5" in oc_desc)
+
                         if is_line_05 and "over" in oc_desc and 1.15 <= odds <= min(max_leg_odds, 1.45):
                             prob = round(min(0.93, (1.0 / odds) * 0.97), 4)
                             sel_desc = f"{fav_team} Over 0.5 Goals"
@@ -560,6 +573,35 @@ class EliteRolloverEngine:
                                     "composite_safety_score": c_sc,
                                     "quality_score": (prob * 58.0) + (c_sc * 48.0) + (dominance_ratio * 3.0) + pedigree_bonus + juggernaut_bonus + 10.0,
                                     "selection_rationale": f"{tier_label} · Favorite {fav_team} Dominance {dominance_ratio:.1f}x · {stats_3p.get('h2h_summary')} · {stats_3p.get('form_summary')}"
+                                })
+
+                        elif is_line_15 and "over" in oc_desc and 1.15 <= odds <= min(max_leg_odds, 1.45):
+                            prob = round(min(0.88, (1.0 / odds) * 0.94), 4)
+                            sel_desc = f"{fav_team} Over 1.5 Goals"
+                            stats_3p = evaluate_fixture_3pillar_metrics(h_team, a_team, f"{fav_team} Team Goals 1.5", sel_desc, odds)
+                            if prob >= 0.75 and dominance_ratio >= max(1.30, min_dominance) and fav_is_genuine_banker and stats_3p.get("composite_safety_score", 0.7) >= 0.65:
+                                c_sc = float(stats_3p.get("composite_safety_score", 0.75))
+                                candidates.append({
+                                    "event_id": eid,
+                                    "home_team": h_team,
+                                    "away_team": a_team,
+                                    "competition": f"{c_name} · {t_name}",
+                                    "competition_tier": tier_label,
+                                    "dominance_ratio": round(dominance_ratio, 2),
+                                    "is_juggernaut": fav_is_juggernaut,
+                                    "market_id": m_id,
+                                    "market_desc": f"{fav_team} Over/Under",
+                                    "outcome_id": oc_id,
+                                    "selection_desc": sel_desc,
+                                    "specifier": spec or "total=1.5",
+                                    "odds": odds,
+                                    "model_probability": prob,
+                                    "market_type": "TEAM_OVER_15",
+                                    "h2h_summary": stats_3p.get("h2h_summary") or f"H2H Coverage: {fav_team} Multiple Goals",
+                                    "form_summary": stats_3p.get("form_summary") or f"Form: {fav_team} Attack Index",
+                                    "composite_safety_score": c_sc,
+                                    "quality_score": (prob * 56.0) + (c_sc * 46.0) + (dominance_ratio * 3.0) + pedigree_bonus + juggernaut_bonus + 8.5,
+                                    "selection_rationale": f"{tier_label} · Heavy Favorite {fav_team} Multiple Goals Cushion · {stats_3p.get('form_summary')}"
                                 })
 
                 # D. Heavy Favorite Win Either Half (Yes)
@@ -1285,8 +1327,8 @@ class EliteRolloverEngine:
                 "message": "SportyBet today endpoint returned 0 active fixtures."
             }
 
-        # Evaluate candidate pool strictly with pure banker odds floor & ceiling (1.15 to 1.32, 80%+ win probability)
-        banker_candidates = cls.evaluate_elite_rollover_candidates(raw_events, max_leg_odds=1.32)
+        # Evaluate candidate pool strictly with pure banker odds floor & ceiling (1.15 to 1.45, 78%+ win probability)
+        banker_candidates = cls.evaluate_elite_rollover_candidates(raw_events, max_leg_odds=1.45)
 
         if not banker_candidates:
             return {
@@ -1396,22 +1438,24 @@ class EliteRolloverEngine:
 
             trio_result["acca_5x_ticket"] = acca5_payload
 
-        # ── 3. SLIP 3: 10.0x MEGA MULTIPLIER (12–15 Pure Banker Legs, Rollover-Grade Sniper) ──
+        # ── 3. SLIP 3: 10.0x MEGA MULTIPLIER (11–14 Pure Banker Legs, Rollover-Grade Sniper) ──
         unclaimed_10x = [c for c in banker_candidates if c["event_id"] not in ro_event_ids and c["event_id"] not in acca5_fids]
-        if len(unclaimed_10x) >= 12:
+        if len(unclaimed_10x) >= 10:
             pool_for_10x = unclaimed_10x
             excl_fids = ro_event_ids | acca5_fids
         else:
-            # Multi-Market Anchor Technique: share elite European anchors using alternate low-variance cushions
-            pool_for_10x = unclaimed_10x + [c for c in banker_candidates if c["event_id"] in acca5_fids]
+            # Multi-Market Anchor Technique: share elite European anchors using strictly ALTERNATE low-variance cushions
+            acca5_keys = set(f"{leg['event_id']}:{leg.get('market_type')}" for leg in (acca5_legs or []))
+            alt_candidates = [c for c in banker_candidates if c["event_id"] in acca5_fids and f"{c['event_id']}:{c.get('market_type')}" not in acca5_keys]
+            pool_for_10x = unclaimed_10x + alt_candidates
             excl_fids = ro_event_ids
 
         acca10_legs = cls.assemble_optimal_accumulator_slip(
             pool_for_10x,
             target_odds=10.00,
-            min_legs=12,
-            max_legs=15,
-            excluded_event_ids=excl_fids if len(unclaimed_10x) >= 12 else ro_event_ids
+            min_legs=11,
+            max_legs=14,
+            excluded_event_ids=excl_fids if len(unclaimed_10x) >= 10 else ro_event_ids
         )
         if acca10_legs:
             for leg in acca10_legs:

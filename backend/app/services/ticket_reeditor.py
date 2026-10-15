@@ -1389,3 +1389,167 @@ async def re_edit_ticket(
             "diversification_mode": "ZERO_OVERLAP"
         }
     }
+
+
+async def split_ticket_into_portfolio(
+    selections: List[Dict[str, Any]],
+    target_portfolio: str = "4_SLIPS",
+    filter_risky: bool = False,
+    allow_volatile_override: bool = True
+) -> Dict[str, Any]:
+    """
+    Intelligently distributes and permutes fixtures from an incoming bettor's mega slip
+    (e.g., 20-50 matches) into a diversified multi-ticket investment portfolio:
+    - 4_SLIPS: 2x 5.0x Precision Multipliers (A & B) + 2x 10.0x Mega Multipliers (1 & 2)
+    - 2_SLIPS: 1x 5.0x Precision Multiplier + 1x 10.0x Mega Multiplier
+
+    Pure mathematical knapsack distribution:
+    - Unfiltered Mode (default): Retains 100% of bettor's unexpired fixtures.
+    - Filtered Mode: Purges volatile/high-risk legs (<70% confidence) before distribution.
+    - Dynamically compounds actual real odds from the ticket.
+    - Shuffles and balances fixture usage frequency so games are distributed across all slips.
+    """
+    from app.adapters.bookmaker_adapter import SportyBetAdapter
+
+    if not selections:
+        return {
+            "status": "ERROR",
+            "message": "Input ticket contains 0 selections.",
+            "portfolio_tickets": []
+        }
+
+    # Step 1: Filter out concluded/expired matches
+    active_selections = []
+    for s in selections:
+        is_exp, _ = _is_expired_or_live(s)
+        if not is_exp:
+            active_selections.append(s)
+
+    if len(active_selections) < 5:
+        return {
+            "status": "ERROR",
+            "message": f"Only {len(active_selections)} unstarted matches available. At least 5 required.",
+            "portfolio_tickets": []
+        }
+
+    # Step 2: Quality Filtering vs Full Unfiltered Distribution
+    if filter_risky:
+        audit_res = await re_edit_ticket(
+            selections=active_selections,
+            target_odds=50.0,
+            mode="REMOVE",
+            target_mode="ODDS",
+            num_tickets=1,
+            allow_volatile_override=allow_volatile_override
+        )
+        working_pool = audit_res.get("all_safe_selections") or audit_res.get("final_selections") or active_selections
+    else:
+        working_pool = list(active_selections)
+
+    if len(working_pool) < 5:
+        working_pool = list(active_selections)
+
+    # Step 3: Define Portfolio Configurations
+    if str(target_portfolio).upper() in ("2", "2_SLIPS", "TWO", "SINGLE"):
+        slip_configs = [
+            {"id": 1, "title": "5.0x Precision Multiplier (Variant A)", "target_odds": 5.00, "floor": 4.60, "ceiling": 5.80, "max_legs": 10},
+            {"id": 2, "title": "10.0x Mega Multiplier (Variant 1)", "target_odds": 10.00, "floor": 9.20, "ceiling": 12.00, "max_legs": 15},
+        ]
+    else:
+        slip_configs = [
+            {"id": 1, "title": "5.0x Precision Multiplier (Variant A)", "target_odds": 5.00, "floor": 4.60, "ceiling": 5.80, "max_legs": 10},
+            {"id": 2, "title": "5.0x Precision Multiplier (Variant B)", "target_odds": 5.00, "floor": 4.60, "ceiling": 5.80, "max_legs": 10},
+            {"id": 3, "title": "10.0x Mega Multiplier (Variant 1)", "target_odds": 10.00, "floor": 9.20, "ceiling": 12.00, "max_legs": 15},
+            {"id": 4, "title": "10.0x Mega Multiplier (Variant 2)", "target_odds": 10.00, "floor": 9.20, "ceiling": 12.00, "max_legs": 15},
+        ]
+
+    # Step 4: Permutation and Dynamic Knapsack Distribution
+    fixture_usage: Dict[str, int] = collections.defaultdict(int)
+    portfolio_tickets = []
+    adapter = SportyBetAdapter()
+
+    for cfg in slip_configs:
+        t_id = cfg["id"]
+        t_title = cfg["title"]
+        t_target = cfg["target_odds"]
+        t_floor = cfg["floor"]
+        t_ceiling = cfg["ceiling"]
+        t_max_legs = cfg["max_legs"]
+
+        # Sort working pool prioritizing least-used fixtures for maximum dispersion across slips
+        def _sort_key(item, idx, slip_idx=t_id):
+            f_key = str(item.get("event_id") or item.get("game_id") or item.get("home_team", ""))
+            usage = fixture_usage[f_key]
+            # Deterministic offset rotation based on slip index
+            pseudo_hash = (hash(f_key) + (slip_idx * 17)) % 100
+            odds_v = float(item.get("odds") or item.get("estimated_odds") or 1.25)
+            # Favour matches between 1.15 and 1.45
+            odds_penalty = 0.0 if 1.15 <= odds_v <= 1.45 else 20.0
+            return (usage * 100.0) + odds_penalty + (pseudo_hash * 0.1)
+
+        candidate_pool = sorted(working_pool, key=lambda x: _sort_key(x, 0, t_id))
+
+        chosen_legs = []
+        chosen_f_keys = set()
+        curr_multiplier = 1.0
+
+        for cand in candidate_pool:
+            f_key = str(cand.get("event_id") or cand.get("game_id") or cand.get("home_team", ""))
+            if f_key in chosen_f_keys:
+                continue
+
+            leg_odd = float(cand.get("odds") or cand.get("estimated_odds") or 1.25)
+            if leg_odd < 1.05:
+                continue
+
+            # Don't blow past ceiling if already past floor
+            if curr_multiplier * leg_odd > t_ceiling and curr_multiplier >= t_floor:
+                continue
+
+            chosen_legs.append(cand)
+            chosen_f_keys.add(f_key)
+            curr_multiplier *= leg_odd
+
+            if curr_multiplier >= t_floor and len(chosen_legs) >= 3:
+                break
+            if len(chosen_legs) >= t_max_legs:
+                break
+
+        if not chosen_legs:
+            continue
+
+        # Mark usage for chosen fixtures
+        for cand in chosen_legs:
+            f_key = str(cand.get("event_id") or cand.get("game_id") or cand.get("home_team", ""))
+            fixture_usage[f_key] += 1
+
+        final_odds = round(curr_multiplier, 2)
+        avg_prob = round(sum(float(x.get("estimated_prob", 0.80)) for x in chosen_legs) / len(chosen_legs) * 100.0, 1)
+
+        # Generate live booking code via SportyBet
+        book_res = adapter.generate_booking_code(chosen_legs, "ng")
+        b_code = book_res.get("booking_code")
+        b_url = book_res.get("load_url") or (f"https://www.sportybet.com/ng/?shareCode={b_code}" if b_code else None)
+        booked_picks = book_res.get("booked_selections") or chosen_legs
+
+        portfolio_tickets.append({
+            "ticket_index": t_id,
+            "title": t_title,
+            "target_odds": t_target,
+            "actual_odds": final_odds,
+            "confidence_score": avg_prob,
+            "leg_count": len(booked_picks),
+            "picks": booked_picks,
+            "booking_code": b_code or "N/A",
+            "share_url": b_url
+        })
+
+    return {
+        "status": "SUCCESS",
+        "original_count": len(selections),
+        "active_count": len(active_selections),
+        "working_pool_count": len(working_pool),
+        "portfolio_mode": target_portfolio,
+        "is_filtered": filter_risky,
+        "portfolio_tickets": portfolio_tickets
+    }

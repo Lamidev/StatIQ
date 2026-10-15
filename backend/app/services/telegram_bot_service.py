@@ -1309,8 +1309,103 @@ class StatIQTelegramBot:
     handle_trim_command = handle_remove_command
     handle_reedit_command = handle_edit_command
 
+    def handle_portfolio_command(
+        self,
+        chat_id: int | str,
+        code: str,
+        target_portfolio: str = "4_SLIPS",
+        filter_risky: bool = False
+    ):
+        """
+        Splits a bettor's mega slip into a diversified 4-slip or 2-slip investment portfolio.
+        Can run unfiltered (using 100% of bettor's original picks) or filtered (purging risky legs first).
+        """
+        code = code.strip().upper()
+        self.send_chat_action(chat_id, "typing")
+        is_4_slips = str(target_portfolio).upper() in ("4", "4_SLIPS", "FOUR")
+        mode_desc = "4 Diversified Slips (2x 5.0x + 2x 10.0x)" if is_4_slips else "2 Slips (1x 5.0x + 1x 10.0x)"
+        filter_desc = "🛡️ Filtered: Risky picks purged" if filter_risky else "⚡ Unfiltered: 100% Original picks permuted"
+
+        self.send_message(
+            chat_id,
+            f"⏳ <b>StatIQ Portfolio Splitter:</b> Decoding code <code>{code}</code> and generating {mode_desc} ({filter_desc})..."
+        )
+
+        try:
+            from app.adapters.bookmaker_adapter import SportyBetAdapter
+            from app.services.ticket_reeditor import split_ticket_into_portfolio
+
+            adapter = SportyBetAdapter()
+            decoded = adapter.fetch_booking_code_details(code, "ng")
+            selections = decoded.get("selections") or []
+
+            if not selections:
+                self.send_message(
+                    chat_id,
+                    f"⚠️ <b>Could not load SportyBet code <code>{code}</code>.</b> Please verify that the code is active on SportyBet Nigeria."
+                )
+                return
+
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                res = loop.run_until_complete(
+                    split_ticket_into_portfolio(
+                        selections=selections,
+                        target_portfolio="4_SLIPS" if is_4_slips else "2_SLIPS",
+                        filter_risky=filter_risky
+                    )
+                )
+            finally:
+                loop.close()
+
+            status = res.get("status")
+            if status != "SUCCESS":
+                self.send_message(chat_id, f"⚠️ <b>Notice:</b> {res.get('message', 'Could not assemble portfolio slips.')}")
+                return
+
+            slips = res.get("portfolio_tickets") or []
+            if not slips:
+                self.send_message(chat_id, "⚠️ <b>Notice:</b> Not enough unstarted matches in this ticket to construct portfolio.")
+                return
+
+            orig_cnt = res.get("original_count", len(selections))
+            pool_cnt = res.get("working_pool_count", len(selections))
+
+            header_msg = (
+                f"🚀 <b>StatIQ Portfolio Permutation Complete!</b>\n"
+                f"📊 <b>Source:</b> <code>{code}</code> ({orig_cnt} Matches ➔ {pool_cnt} Used)\n"
+                f"🛡️ <b>Mode:</b> {filter_desc}\n"
+                f"🔒 <b>Structure:</b> {mode_desc} with Strategic Leg Distribution"
+            )
+            self.send_message(chat_id, header_msg)
+
+            for s in slips:
+                idx = s.get("ticket_index", 1)
+                title = s.get("title", f"Portfolio Slip #{idx}")
+                b_code = s.get("booking_code")
+                s_url = s.get("share_url")
+                odds = s.get("actual_odds", 5.0)
+                conf = s.get("confidence_score", 75.0)
+                picks = s.get("picks", [])
+
+                self._dispatch_ticket_message(
+                    chat_id=chat_id,
+                    title=f"🎟️ {title}",
+                    booking_code=b_code,
+                    share_url=s_url,
+                    total_odds=odds,
+                    confidence=conf,
+                    picks=picks,
+                    extra_note=f"Portfolio Slip {idx} of {len(slips)} · Shuffled Permutation Matrix · Min Odds ≥ 1.05x"
+                )
+
+        except Exception as e:
+            logger.error(f"[TelegramBot] Portfolio split error: {e}", exc_info=True)
+            self.send_message(chat_id, f"❌ <b>Error generating portfolio:</b> {_esc(str(e))}")
+
     def handle_raw_code_detected(self, chat_id: int | str, code: str):
-        """When user pastes a booking code, inspect it and offer 1-tap action buttons for /remove and /edit."""
+        """When user pastes a booking code, inspect it and offer 1-tap action buttons for /remove, /edit, and /portfolio."""
         code = code.strip().upper()
         self.send_chat_action(chat_id, "typing")
 
@@ -1335,27 +1430,31 @@ class StatIQTelegramBot:
                 f"🎟️ <b>SportyBet Slip Detected: <code>{code}</code></b>\n\n"
                 f"📊 <b>Total Matches:</b> {n_matches} Matches\n"
                 f"⚡ <b>Original Multiplier:</b> {total_odds:.2f}x\n\n"
-                f"Select an option below to optimize this slip:\n"
+                f"Select an optimization mode below:\n"
+                f"• <b>PORTFOLIO SPLIT:</b> Permutes games into 2x 5x + 2x 10x or 1x 5x + 1x 10x\n"
                 f"• <b>REMOVE:</b> Purges risky legs, keeping bettor's picks as-is\n"
                 f"• <b>EDIT:</b> Upgrades risky lines to verified SportyBet safety markets"
             )
 
-            keyboard = {
-                "inline_keyboard": [
-                    [
-                        {"text": "🗑️ /remove (15 Games)", "callback_data": f"rem:{code}:15:games:1"},
-                        {"text": "🗑️ /remove (2 Variants)", "callback_data": f"rem:{code}:15:games:2"}
-                    ],
-                    [
-                        {"text": "⚡ /edit (15 Games)", "callback_data": f"edt:{code}:15:games:1"},
-                        {"text": "⚡ /edit (2 Variants)", "callback_data": f"edt:{code}:15:games:2"}
-                    ],
-                    [
-                        {"text": "🎯 /remove (20x Odds)", "callback_data": f"rem:{code}:20.0:odds:1"},
-                        {"text": "⚡ /edit (20x Odds)", "callback_data": f"edt:{code}:20.0:odds:1"}
-                    ]
+            keyboard_rows = [
+                [
+                    {"text": "🚀 Split 4 Slips (2x 5x + 2x 10x)", "callback_data": f"port:{code}:4:unfiltered"},
+                    {"text": "⚡ Split 2 Slips (1x 5x + 1x 10x)", "callback_data": f"port:{code}:2:unfiltered"}
+                ],
+                [
+                    {"text": "🛡️ Split 4 Slips (Risk Filtered)", "callback_data": f"port:{code}:4:filtered"},
+                ],
+                [
+                    {"text": "🗑️ /remove (15 Games)", "callback_data": f"rem:{code}:15:games:1"},
+                    {"text": "🗑️ /remove (2 Variants)", "callback_data": f"rem:{code}:15:games:2"}
+                ],
+                [
+                    {"text": "⚡ /edit (15 Games)", "callback_data": f"edt:{code}:15:games:1"},
+                    {"text": "⚡ /edit (2 Variants)", "callback_data": f"edt:{code}:15:games:2"}
                 ]
-            }
+            ]
+
+            keyboard = {"inline_keyboard": keyboard_rows}
             self.send_message(chat_id, msg, reply_markup=keyboard)
 
         except Exception as e:
@@ -1592,6 +1691,20 @@ class StatIQTelegramBot:
                         num_tickets=num_tickets
                     )
 
+        # Case 2b: Portfolio Splitter
+        elif data.startswith("port:"):
+            parts = data.split(":")
+            if len(parts) >= 4:
+                code = parts[1]
+                num_slips = parts[2]
+                filt_mode = parts[3]
+                self.handle_portfolio_command(
+                    chat_id=chat_id,
+                    code=code,
+                    target_portfolio="4_SLIPS" if num_slips == "4" else "2_SLIPS",
+                    filter_risky=(filt_mode == "filtered")
+                )
+
         # Case 3: Interactive Audit Actions (aud:sin, aud:top, aud:ovr)
         elif data.startswith("aud:"):
             parts = data.split(":")
@@ -1712,6 +1825,17 @@ class StatIQTelegramBot:
             is_two = any(k in rest for k in ["2 ticket", "2 variant", "2 slip", "two ticket", "two variant", "two slip", " 2 "]) or rest.startswith("2")
             num_tickets = 2 if is_two else 1
             self.handle_games_command(chat_id, cnt, num_tickets=num_tickets)
+            return
+
+        # 5. /portfolio (or alias /split, /permute, /distribute): Multi-ticket investment portfolio
+        # Examples: /portfolio CODE | /portfolio CODE 2 | /portfolio CODE 4 | /portfolio CODE filtered
+        port_match = re.match(r"^/(?:portfolio|split|permute|distribute)\s+([A-Za-z0-9]+)(.*)", text, re.IGNORECASE)
+        if port_match:
+            code = port_match.group(1).upper()
+            rest = port_match.group(2).lower()
+            target_port = "2_SLIPS" if any(k in rest for k in ["2", "single", "two", "1x"]) else "4_SLIPS"
+            filter_r = any(k in rest for k in ["filter", "safe", "clean", "purge"])
+            self.handle_portfolio_command(chat_id, code=code, target_portfolio=target_port, filter_risky=filter_r)
             return
 
         # 5a. /remove (or alias /trim): Risk purge preserving original picks as-is
