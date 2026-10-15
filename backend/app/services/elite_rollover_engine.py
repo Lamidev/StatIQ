@@ -177,6 +177,7 @@ class EliteRolloverEngine:
                 "kolmonen", "kakkonen", "primera c", "primera d",
                 # Banish obscure leagues with high upset rates and erratic data (proven bet-killers)
                 "kenya", "kakamega", "tanzania", "uganda", "nigeria", "ghana", "ethiopia",
+                "algeria", "algerian", "temouchent", "rouissat",
                 "thailand", "thai league", "thai", "vietnam", "v-league", "malaysia", "indonesia",
                 "lebanon", "jordan", "kuwait", "bahrain", "oman", "iraq", "syria", "yemen",
                 "india", "indian super", "i-league",
@@ -186,7 +187,7 @@ class EliteRolloverEngine:
                 "northern ireland", "wales", "cymru", "cyprus cup", "slovensky pohar", "slovakia cup",
                 "kosovo", "albania", "macedonia", "montenegro", "bosnia", "latvia", "lithuania", "estonia",
                 "belarus", "moldova", "luxembourg", "malta", "faroe islands",
-                "3. liga", "norway 2.", "sweden division 1", "colombia b", "primera b", "venezuela", "bolivia"
+                "3. liga", "norway 1.", "norway 2.", "1. divisjon", "sweden division 1", "colombia b", "primera b", "venezuela", "bolivia"
             ]
             if any(t in comb_name_str for t in bad_tokens):
                 continue
@@ -636,8 +637,12 @@ class EliteRolloverEngine:
                                     "selection_rationale": f"{tier_label} · Tactical Defensive Shield · {stats_3p.get('h2h_summary')} · {stats_3p.get('form_summary')}"
                                 })
 
-                # F. 1st Half Over 0.5 Goals
-                if (m_id == "68" or "1st half - over/under" in m_desc or ("1st half" in m_desc and "over" in m_desc)):
+                # F. 1st Half Over 0.5 Goals (Strictly Gated to High-Pace, High-xG Leagues)
+                is_high_pace_league = any(k in comp_full for k in [
+                    "champions league", "bundesliga", "eredivisie", "premier league", "championship",
+                    "mls", "copa libertadores", "serie a", "la liga", "ligue 1"
+                ])
+                if (m_id == "68" or "1st half - over/under" in m_desc or ("1st half" in m_desc and "over" in m_desc)) and is_high_pace_league:
                     for oc in m.get("outcomes", []):
                         is_active = oc.get("isActive")
                         if is_active is not None and str(is_active) not in ("1", "True", "true"):
@@ -678,54 +683,65 @@ class EliteRolloverEngine:
                                     "selection_rationale": f"{tier_label} · First Half Fast-Tempo Index · {stats_3p.get('h2h_summary')}"
                                 })
 
-                # G. European Handicap Cushion (+1:0 / +2:0)
-                if m_id == "14" or "handicap" in m_desc:
-                    for oc in m.get("outcomes", []):
-                        is_active = oc.get("isActive")
-                        if is_active is not None and str(is_active) not in ("1", "True", "true"):
-                            continue
-                        oc_st = oc.get("status")
-                        if oc_st is not None and str(oc_st) != "0":
-                            continue
-                        oc_id = str(oc.get("id"))
-                        oc_desc = (oc.get("desc") or "").lower()
-                        odds = float(oc.get("odds") or 0)
-                        if odds < 1.15 or odds > max_leg_odds:
-                            continue
+                # G. Asian Handicap Cushion (+1.5) & European +1:0 Goal Cushions (Strictly Ban 3-Way 0:2/2:0 Draw Traps)
+                is_hcp_mkt = (m_id in ("14", "60", "390", "154") or "handicap" in m_desc or "asian handicap" in m_desc)
+                if is_hcp_mkt:
+                    # In 3-way European Handicap (m_id == "14"), strictly BAN 0:2 and 2:0 because exact 2-goal margins settle as a Draw loss
+                    is_3way_trap = (m_id == "14" and ("0:2" in spec or "2:0" in spec))
+                    if not is_3way_trap:
+                        for oc in m.get("outcomes", []):
+                            is_active = oc.get("isActive")
+                            if is_active is not None and str(is_active) not in ("1", "True", "true"):
+                                continue
+                            oc_st = oc.get("status")
+                            if oc_st is not None and str(oc_st) != "0":
+                                continue
+                            oc_id = str(oc.get("id"))
+                            oc_desc = (oc.get("desc") or "").lower()
+                            odds = float(oc.get("odds") or 0)
+                            if odds < 1.15 or odds > max_leg_odds:
+                                continue
 
-                        is_plus_home = ("1:0" in spec or "2:0" in spec) and (oc_id in ("1", "1711") or "home" in oc_desc or "1" in oc_desc)
-                        is_plus_away = ("0:1" in spec or "0:2" in spec) and (oc_id in ("3", "1713") or "away" in oc_desc or "2" in oc_desc)
+                            # Support Asian Handicap (+1.5) and European Handicap (+1)
+                            is_plus_home = (
+                                ("1:0" in spec or "1.5" in spec or "+1.5" in oc_desc or "+1" in oc_desc)
+                                and (oc_id in ("1", "1711", "home") or "home" in oc_desc or "1" in oc_desc)
+                            )
+                            is_plus_away = (
+                                ("0:1" in spec or "1.5" in spec or "+1.5" in oc_desc or "+1" in oc_desc)
+                                and (oc_id in ("3", "1713", "away") or "away" in oc_desc or "2" in oc_desc)
+                            )
 
-                        if is_plus_home or is_plus_away:
-                            beneficiary = h_team if is_plus_home else a_team
-                            hcp_val = "+1" if ("1:0" in spec or "0:1" in spec) else "+2"
-                            sel_desc = f"{beneficiary} ({hcp_val})"
-                            prob = round(min(0.93, (1.0 / odds) * 0.96), 4)
-                            stats_3p = evaluate_fixture_3pillar_metrics(h_team, a_team, f"Handicap {hcp_val}", sel_desc, odds)
-                            if prob >= 0.80 and stats_3p.get("composite_safety_score", 0.7) >= 0.68:
-                                c_sc = float(stats_3p.get("composite_safety_score", 0.75))
-                                candidates.append({
-                                    "event_id": eid,
-                                    "home_team": h_team,
-                                    "away_team": a_team,
-                                    "competition": f"{c_name} · {t_name}",
-                                    "competition_tier": tier_label,
-                                    "dominance_ratio": round(dominance_ratio, 2),
-                                    "is_juggernaut": fav_is_juggernaut,
-                                    "market_id": m_id,
-                                    "market_desc": f"Handicap {hcp_val}",
-                                    "outcome_id": oc_id,
-                                    "selection_desc": sel_desc,
-                                    "specifier": spec,
-                                    "odds": odds,
-                                    "model_probability": prob,
-                                    "market_type": "HANDICAP_CUSHION",
-                                    "h2h_summary": stats_3p.get("h2h_summary") or f"Goal Cushion Margin: {beneficiary} ({hcp_val})",
-                                    "form_summary": stats_3p.get("form_summary") or f"Form Resilience: {beneficiary}",
-                                    "composite_safety_score": c_sc,
-                                    "quality_score": (prob * 56.0) + (c_sc * 46.0) + pedigree_bonus + 7.0,
-                                    "selection_rationale": f"{tier_label} · Handicap Goal Cushion ({hcp_val}) · {stats_3p.get('h2h_summary')}"
-                                })
+                            if is_plus_home or is_plus_away:
+                                beneficiary = h_team if is_plus_home else a_team
+                                hcp_val = "+1.5" if ("1.5" in spec or "+1.5" in oc_desc) else "+1"
+                                sel_desc = f"{beneficiary} ({hcp_val})"
+                                prob = round(min(0.93, (1.0 / odds) * 0.96), 4)
+                                stats_3p = evaluate_fixture_3pillar_metrics(h_team, a_team, f"Handicap {hcp_val}", sel_desc, odds)
+                                if prob >= 0.80 and stats_3p.get("composite_safety_score", 0.7) >= 0.68:
+                                    c_sc = float(stats_3p.get("composite_safety_score", 0.75))
+                                    candidates.append({
+                                        "event_id": eid,
+                                        "home_team": h_team,
+                                        "away_team": a_team,
+                                        "competition": f"{c_name} · {t_name}",
+                                        "competition_tier": tier_label,
+                                        "dominance_ratio": round(dominance_ratio, 2),
+                                        "is_juggernaut": fav_is_juggernaut,
+                                        "market_id": m_id,
+                                        "market_desc": f"Asian Handicap {hcp_val}" if "1.5" in hcp_val else f"Handicap {hcp_val}",
+                                        "outcome_id": oc_id,
+                                        "selection_desc": sel_desc,
+                                        "specifier": spec,
+                                        "odds": odds,
+                                        "model_probability": prob,
+                                        "market_type": "HANDICAP_CUSHION",
+                                        "h2h_summary": stats_3p.get("h2h_summary") or f"Goal Cushion Margin: {beneficiary} ({hcp_val})",
+                                        "form_summary": stats_3p.get("form_summary") or f"Form Resilience: {beneficiary}",
+                                        "composite_safety_score": c_sc,
+                                        "quality_score": (prob * 56.0) + (c_sc * 46.0) + pedigree_bonus + 7.0,
+                                        "selection_rationale": f"{tier_label} · Handicap Goal Cushion ({hcp_val}) · {stats_3p.get('h2h_summary')}"
+                                    })
 
                 # H. Chance Mix / Double Chance Combo: Favorite or Over 2.5 (STRICTLY for dominant favorites)
                 if ("or over" in m_desc or "win or over" in m_desc or m_id == "62") and dominance_ratio >= max(1.40, min_dominance):
@@ -1292,11 +1308,10 @@ class EliteRolloverEngine:
                 "message": "SportyBet today endpoint returned 0 active fixtures."
             }
 
-        # Evaluate candidate pool
-        rollover_candidates = cls.evaluate_elite_rollover_candidates(raw_events, max_leg_odds=1.45)
-        acca_candidates = cls.evaluate_elite_rollover_candidates(raw_events, max_leg_odds=1.65)
+        # Evaluate candidate pool strictly with pure banker odds floor & ceiling (1.15 to 1.32, 80%+ win probability)
+        banker_candidates = cls.evaluate_elite_rollover_candidates(raw_events, max_leg_odds=1.32)
 
-        if not rollover_candidates and not acca_candidates:
+        if not banker_candidates:
             return {
                 "status": "NO_QUALIFIED_PICKS",
                 "message": "No fixtures met the strict probability & safety cushion threshold today."
@@ -1304,11 +1319,6 @@ class EliteRolloverEngine:
 
         wat_tz = datetime.timezone(datetime.timedelta(hours=1))
         wat_now = datetime.datetime.now(wat_tz)
-        # Monday=0, Tuesday=1, Wednesday=2, Thursday=3, Friday=4, Saturday=5, Sunday=6
-        # Weekdays: Monday through Friday (0, 1, 2, 3, 4) ➔ Slip 1: 2.0x Rollover | Slip 2: 5.0x Precision | Slip 3: 10.0x Mega
-        # Weekends: Saturday & Sunday (5, 6) ➔ Slip 1: 2.0x Rollover | Slip 2: 10.0x Mega Slip #1 | Slip 3: 10.0x Mega Slip #2
-        is_midweek = wat_now.weekday() in (0, 1, 2, 3, 4)
-        is_weekend = wat_now.weekday() in (5, 6)
         claimed_event_ids = set()
         ro_event_ids = set()
         today_str = wat_now.strftime("%A, %b %d, %Y")
@@ -1319,7 +1329,7 @@ class EliteRolloverEngine:
             "date_str": today_str,
             "schedule_mode": "DAILY_VIP_TRIO",
             "zero_overlap_guaranteed": True,
-            "calendar_mode": "MIDWEEK_2X_5X_10X" if is_midweek else "WEEKEND_2X_10X_10X",
+            "calendar_mode": "DAILY_2X_5X_10X_BANKER_SUITE",
             "rollover_ticket": None,
             "acca_5x_ticket": None,
             "acca_10x_ticket": None,
@@ -1330,7 +1340,7 @@ class EliteRolloverEngine:
 
         # ── 1. SLIP 1: 2.0x ROLLOVER (Highest Assurance Banker Legs - 100% SACRED & ISOLATED) ──
         if enable_rollover:
-            unclaimed_ro = [c for c in rollover_candidates if c["event_id"] not in claimed_event_ids]
+            unclaimed_ro = [c for c in banker_candidates if c["event_id"] not in claimed_event_ids]
             ro_legs = cls.assemble_optimal_rollover_slip(unclaimed_ro, target_odds=2.00)
             if ro_legs:
                 for leg in ro_legs:
@@ -1367,191 +1377,101 @@ class EliteRolloverEngine:
 
                 trio_result["rollover_ticket"] = ro_payload
 
-        # ── 2. ADAPTIVE DISPATCH: MIDWEEK (2x + 5x + 10x) vs WEEKEND (2x + 10x + 10x) ──
-        if is_midweek:
-            # ── 2A. MIDWEEK SLIP 2: 5.0x Precision Multiplier (5–7 Vetted Legs) ──
-            unclaimed_5x = [c for c in acca_candidates if c["event_id"] not in ro_event_ids]
-            acca5_legs = cls.assemble_optimal_accumulator_slip(
-                unclaimed_5x,
-                target_odds=5.00,
-                min_legs=6,
-                max_legs=9,
-                excluded_event_ids=ro_event_ids
-            )
-            acca5_fids = set()
-            if acca5_legs:
-                for leg in acca5_legs:
-                    claimed_event_ids.add(leg["event_id"])
-                    acca5_fids.add(leg["event_id"])
+        # ── 2. SLIP 2: 5.0x PRECISION MULTIPLIER (6–8 Pure Banker Legs, Compounding Rollover Acca) ──
+        unclaimed_5x = [c for c in banker_candidates if c["event_id"] not in ro_event_ids]
+        acca5_legs = cls.assemble_optimal_accumulator_slip(
+            unclaimed_5x,
+            target_odds=5.00,
+            min_legs=6,
+            max_legs=8,
+            excluded_event_ids=ro_event_ids
+        )
+        acca5_fids = set()
+        if acca5_legs:
+            for leg in acca5_legs:
+                claimed_event_ids.add(leg["event_id"])
+                acca5_fids.add(leg["event_id"])
 
-                acca5_odds = round(math.prod(leg["odds"] for leg in acca5_legs), 2)
-                acca5_prob = round(math.prod(leg["model_probability"] for leg in acca5_legs) * 100.0, 1)
-                acca5_code, acca5_url = await cls._request_sportybet_share_code(acca5_legs)
-                acca5_ticket_id = f"ACCA5X-{now_ts}"
+            acca5_odds = round(math.prod(leg["odds"] for leg in acca5_legs), 2)
+            acca5_prob = round(math.prod(leg["model_probability"] for leg in acca5_legs) * 100.0, 1)
+            acca5_code, acca5_url = await cls._request_sportybet_share_code(acca5_legs)
+            acca5_ticket_id = f"ACCA5X-{now_ts}"
 
-                cls._persist_ticket_record(acca5_ticket_id, acca5_code, "VALUE_ACCA", 5.00, acca5_odds, 2000.0, acca5_legs)
+            cls._persist_ticket_record(acca5_ticket_id, acca5_code, "VALUE_ACCA", 5.00, acca5_odds, 2000.0, acca5_legs)
 
-                acca5_payload = {
-                    "status": "SUCCESS",
-                    "ticket_id": acca5_ticket_id,
-                    "title": "5.0x Precision Multiplier Slip",
-                    "booking_code": acca5_code or "N/A",
-                    "share_url": acca5_url,
-                    "target_odds": 5.00,
-                    "actual_odds": acca5_odds,
-                    "confidence_score": acca5_prob,
-                    "date_str": today_str,
-                    "leg_count": len(acca5_legs),
-                    "picks": acca5_legs,
-                    "stake": 2000.0,
-                    "telegram_dispatched": False
-                }
+            acca5_payload = {
+                "status": "SUCCESS",
+                "ticket_id": acca5_ticket_id,
+                "title": "5.0x Precision Multiplier Slip",
+                "booking_code": acca5_code or "N/A",
+                "share_url": acca5_url,
+                "target_odds": 5.00,
+                "actual_odds": acca5_odds,
+                "confidence_score": acca5_prob,
+                "date_str": today_str,
+                "leg_count": len(acca5_legs),
+                "picks": acca5_legs,
+                "stake": 2000.0,
+                "telegram_dispatched": False
+            }
 
-                if send_telegram and acca5_code:
-                    acca5_payload["telegram_dispatched"] = RolloverTelegramNotifier.dispatch_value_acca_slip(acca5_payload)
+            if send_telegram and acca5_code:
+                acca5_payload["telegram_dispatched"] = RolloverTelegramNotifier.dispatch_value_acca_slip(acca5_payload)
 
-                trio_result["acca_5x_ticket"] = acca5_payload
+            trio_result["acca_5x_ticket"] = acca5_payload
 
-            # ── 2B. MIDWEEK SLIP 3: 10.0x Mega Multiplier (9–12 Vetted Legs, Smart Sharing with 5x) ──
-            # Prioritize fresh unclaimed candidates; if fewer than 10 remain, intelligently share top European anchors
-            # from Slip 2 with diverse low-variance cushions so we NEVER scrape obscure lower-tier leagues.
-            unclaimed_10x = [c for c in acca_candidates if c["event_id"] not in ro_event_ids and c["event_id"] not in acca5_fids]
-            if len(unclaimed_10x) >= 10:
-                pool_for_10x = unclaimed_10x
-                excl_fids = ro_event_ids | acca5_fids
-            else:
-                # Share elite European anchors from 5x pool using alternate market cushions
-                pool_for_10x = unclaimed_10x + [c for c in acca_candidates if c["event_id"] in acca5_fids]
-                excl_fids = ro_event_ids
-
-            acca10_legs = cls.assemble_optimal_accumulator_slip(
-                pool_for_10x,
-                target_odds=10.00,
-                min_legs=9,
-                max_legs=12,
-                excluded_event_ids=excl_fids if len(unclaimed_10x) >= 10 else ro_event_ids
-            )
-            if acca10_legs:
-                for leg in acca10_legs:
-                    claimed_event_ids.add(leg["event_id"])
-
-                acca10_odds = round(math.prod(leg["odds"] for leg in acca10_legs), 2)
-                acca10_prob = round(math.prod(leg["model_probability"] for leg in acca10_legs) * 100.0, 1)
-                acca10_code, acca10_url = await cls._request_sportybet_share_code(acca10_legs)
-                acca10_ticket_id = f"ACCA10X-{now_ts}"
-
-                cls._persist_ticket_record(acca10_ticket_id, acca10_code, "MEGA_10X", 10.00, acca10_odds, 1000.0, acca10_legs)
-
-                acca10_payload = {
-                    "status": "SUCCESS",
-                    "ticket_id": acca10_ticket_id,
-                    "title": "10.0x Mega Multiplier Slip",
-                    "booking_code": acca10_code or "N/A",
-                    "share_url": acca10_url,
-                    "target_odds": 10.00,
-                    "actual_odds": acca10_odds,
-                    "confidence_score": acca10_prob,
-                    "date_str": today_str,
-                    "leg_count": len(acca10_legs),
-                    "picks": acca10_legs,
-                    "stake": 1000.0,
-                    "telegram_dispatched": False
-                }
-
-                if send_telegram and acca10_code:
-                    acca10_payload["telegram_dispatched"] = RolloverTelegramNotifier.dispatch_mega_multiplier_slip(acca10_payload)
-
-                trio_result["acca_10x_ticket"] = acca10_payload
-
+        # ── 3. SLIP 3: 10.0x MEGA MULTIPLIER (10–13 Pure Banker Legs, Rollover-Grade Sniper) ──
+        unclaimed_10x = [c for c in banker_candidates if c["event_id"] not in ro_event_ids and c["event_id"] not in acca5_fids]
+        if len(unclaimed_10x) >= 11:
+            pool_for_10x = unclaimed_10x
+            excl_fids = ro_event_ids | acca5_fids
         else:
-            # ── WEEKEND MODE (Saturday & Sunday): 2x 10.0x Mega Slips with 100% Strict Zero-Overlap ──
-            # ── 2A. Weekend 10.0x Mega Multiplier Slip #1 ──
-            unclaimed_10x_1 = [c for c in acca_candidates if c["event_id"] not in claimed_event_ids]
-            acca10_legs_1 = cls.assemble_optimal_accumulator_slip(
-                unclaimed_10x_1,
-                target_odds=10.00,
-                min_legs=10,
-                max_legs=12,
-                excluded_event_ids=claimed_event_ids
-            )
-            if acca10_legs_1:
-                for leg in acca10_legs_1:
-                    claimed_event_ids.add(leg["event_id"])
+            # Multi-Market Anchor Technique: share elite European anchors using alternate low-variance cushions
+            pool_for_10x = unclaimed_10x + [c for c in banker_candidates if c["event_id"] in acca5_fids]
+            excl_fids = ro_event_ids
 
-                acca10_odds_1 = round(math.prod(leg["odds"] for leg in acca10_legs_1), 2)
-                acca10_prob_1 = round(math.prod(leg["model_probability"] for leg in acca10_legs_1) * 100.0, 1)
-                acca10_code_1, acca10_url_1 = await cls._request_sportybet_share_code(acca10_legs_1)
-                acca10_ticket_id_1 = f"ACCA10X-1-{now_ts}"
+        acca10_legs = cls.assemble_optimal_accumulator_slip(
+            pool_for_10x,
+            target_odds=10.00,
+            min_legs=10,
+            max_legs=13,
+            excluded_event_ids=excl_fids if len(unclaimed_10x) >= 11 else ro_event_ids
+        )
+        if acca10_legs:
+            for leg in acca10_legs:
+                claimed_event_ids.add(leg["event_id"])
 
-                cls._persist_ticket_record(acca10_ticket_id_1, acca10_code_1, "MEGA_10X", 10.00, acca10_odds_1, 1000.0, acca10_legs_1)
+            acca10_odds = round(math.prod(leg["odds"] for leg in acca10_legs), 2)
+            acca10_prob = round(math.prod(leg["model_probability"] for leg in acca10_legs) * 100.0, 1)
+            acca10_code, acca10_url = await cls._request_sportybet_share_code(acca10_legs)
+            acca10_ticket_id = f"ACCA10X-{now_ts}"
 
-                acca10_payload_1 = {
-                    "status": "SUCCESS",
-                    "ticket_id": acca10_ticket_id_1,
-                    "title": "10.0x Mega Multiplier — Slip #1",
-                    "variant_index": 1,
-                    "booking_code": acca10_code_1 or "N/A",
-                    "share_url": acca10_url_1,
-                    "target_odds": 10.00,
-                    "actual_odds": acca10_odds_1,
-                    "confidence_score": acca10_prob_1,
-                    "date_str": today_str,
-                    "leg_count": len(acca10_legs_1),
-                    "picks": acca10_legs_1,
-                    "stake": 1000.0,
-                    "telegram_dispatched": False
-                }
+            cls._persist_ticket_record(acca10_ticket_id, acca10_code, "MEGA_10X", 10.00, acca10_odds, 1000.0, acca10_legs)
 
-                if send_telegram and acca10_code_1:
-                    acca10_payload_1["telegram_dispatched"] = RolloverTelegramNotifier.dispatch_mega_multiplier_slip(acca10_payload_1)
+            acca10_payload = {
+                "status": "SUCCESS",
+                "ticket_id": acca10_ticket_id,
+                "title": "10.0x Mega Multiplier Slip",
+                "booking_code": acca10_code or "N/A",
+                "share_url": acca10_url,
+                "target_odds": 10.00,
+                "actual_odds": acca10_odds,
+                "confidence_score": acca10_prob,
+                "date_str": today_str,
+                "leg_count": len(acca10_legs),
+                "picks": acca10_legs,
+                "stake": 1000.0,
+                "telegram_dispatched": False
+            }
 
-                trio_result["acca_10x_ticket"] = acca10_payload_1
+            if send_telegram and acca10_code:
+                acca10_payload["telegram_dispatched"] = RolloverTelegramNotifier.dispatch_mega_multiplier_slip(acca10_payload)
 
-            # ── 2B. Weekend 10.0x Mega Multiplier Slip #2 (Strict Zero-Overlap against Slip #1 & Rollover) ──
-            unclaimed_10x_2 = [c for c in acca_candidates if c["event_id"] not in claimed_event_ids]
-            acca10_legs_2 = cls.assemble_optimal_accumulator_slip(
-                unclaimed_10x_2,
-                target_odds=10.00,
-                min_legs=10,
-                max_legs=12,
-                excluded_event_ids=claimed_event_ids
-            )
-            if acca10_legs_2:
-                for leg in acca10_legs_2:
-                    claimed_event_ids.add(leg["event_id"])
-
-                acca10_odds_2 = round(math.prod(leg["odds"] for leg in acca10_legs_2), 2)
-                acca10_prob_2 = round(math.prod(leg["model_probability"] for leg in acca10_legs_2) * 100.0, 1)
-                acca10_code_2, acca10_url_2 = await cls._request_sportybet_share_code(acca10_legs_2)
-                acca10_ticket_id_2 = f"ACCA10X-2-{now_ts}"
-
-                cls._persist_ticket_record(acca10_ticket_id_2, acca10_code_2, "MEGA_10X", 10.00, acca10_odds_2, 1000.0, acca10_legs_2)
-
-                acca10_payload_2 = {
-                    "status": "SUCCESS",
-                    "ticket_id": acca10_ticket_id_2,
-                    "title": "10.0x Mega Multiplier — Slip #2",
-                    "variant_index": 2,
-                    "booking_code": acca10_code_2 or "N/A",
-                    "share_url": acca10_url_2,
-                    "target_odds": 10.00,
-                    "actual_odds": acca10_odds_2,
-                    "confidence_score": acca10_prob_2,
-                    "date_str": today_str,
-                    "leg_count": len(acca10_legs_2),
-                    "picks": acca10_legs_2,
-                    "stake": 1000.0,
-                    "telegram_dispatched": False
-                }
-
-                if send_telegram and acca10_code_2:
-                    acca10_payload_2["telegram_dispatched"] = RolloverTelegramNotifier.dispatch_mega_multiplier_slip(acca10_payload_2)
-
-                trio_result["acca_10x_ticket_2"] = acca10_payload_2
+            trio_result["acca_10x_ticket"] = acca10_payload
 
         # ── 3. OPTIONAL: 20.0x MONSTER ACCA (If explicitly enabled) ──
         if enable_20odds:
-            pool_for_20x = [c for c in acca_candidates if c["event_id"] not in claimed_event_ids]
+            pool_for_20x = [c for c in banker_candidates if c["event_id"] not in claimed_event_ids]
             acca20_legs = cls.assemble_optimal_accumulator_slip(
                 pool_for_20x,
                 target_odds=20.00,

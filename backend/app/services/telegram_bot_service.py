@@ -379,11 +379,9 @@ class StatIQTelegramBot:
             return
         self._last_dispatch_ts = now_ts
 
-        wat_now = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=1)))
-        mode_text = "2.0x, 5.0x Precision, and 10.0x Mega slips" if wat_now.weekday() in (0, 1, 2, 3, 4) else "2.0x Rollover and 2x 10.0x Mega slips"
         self.send_message(
             chat_id,
-            f"⏳ <b>StatIQ Daily VIP Automation:</b> Querying today's fixtures and generating {mode_text} with <b>Strict Zero-Overlap</b>..."
+            "⏳ <b>StatIQ Daily VIP Automation:</b> Querying today's fixtures and generating <b>2.0x Rollover, 5.0x Precision, and 10.0x Mega slips</b> with <b>Strict Zero-Overlap</b>..."
         )
 
         try:
@@ -482,7 +480,7 @@ class StatIQTelegramBot:
                 )
 
             if dispatched_count > 0:
-                cal_mode = "Midweek Mode (2.0x + 5.0x + 10.0x)" if trio_res.get("acca_5x_ticket") else "Weekend Mode (2.0x + 10.0x #1 + 10.0x #2)"
+                cal_mode = "Daily VIP Banker Suite (2.0x + 5.0x + 10.0x)"
                 self.send_message(
                     chat_id,
                     f"✅ <b>Daily VIP Automation Complete!</b> Dispatched {dispatched_count} slips via <b>{cal_mode}</b> with <b>{trio_res.get('total_unique_fixtures', 0)} unique fixtures</b>."

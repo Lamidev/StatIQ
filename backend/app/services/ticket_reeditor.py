@@ -377,6 +377,15 @@ def _is_volatile_fixture(sel: Dict[str, Any]) -> Tuple[bool, str]:
     ]):
         return True, "Low-tier regional/amateur competition"
 
+    # 6. Obscure Domestic Preliminary Cups & Unpredictable Low-Tier Flights
+    if any(k in comb for k in [
+        "j.league cup", "j-league cup", "emperor cup", "emperor's cup", "j2 league", "j3 league",
+        "kenya", "kakamega", "tanzania", "uganda", "nigeria", "ghana", "algeria", "temouchent", "rouissat",
+        "kosovo", "albania", "macedonia", "montenegro", "bosnia", "cyprus cup", "slovensky pohar", "slovakia cup",
+        "norway 1.", "norway 2.", "1. divisjon", "thailand", "thai league", "vietnam", "malaysia", "indonesia"
+    ]):
+        return True, "Obscure/volatile lower tier or domestic preliminary cup"
+
     return False, ""
 
 
