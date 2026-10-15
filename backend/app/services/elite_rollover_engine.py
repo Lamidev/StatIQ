@@ -537,7 +537,7 @@ class EliteRolloverEngine:
                             prob = round(min(0.93, (1.0 / odds) * 0.97), 4)
                             sel_desc = f"{fav_team} Over 0.5 Goals"
                             stats_3p = evaluate_fixture_3pillar_metrics(h_team, a_team, f"{fav_team} Team Goals", sel_desc, odds)
-                            if prob >= 0.80 and dominance_ratio >= min_dominance and stats_3p.get("composite_safety_score", 0.7) >= 0.68:
+                            if prob >= 0.80 and dominance_ratio >= min_dominance and fav_is_genuine_banker and stats_3p.get("composite_safety_score", 0.7) >= 0.68:
                                 c_sc = float(stats_3p.get("composite_safety_score", 0.75))
                                 candidates.append({
                                     "event_id": eid,
@@ -563,7 +563,7 @@ class EliteRolloverEngine:
                                 })
 
                 # D. Heavy Favorite Win Either Half (Yes)
-                if ("win either half" in m_desc or "either half" in m_desc or m_id in ("61", "62", "73", "74", "111")) and dominance_ratio >= max(1.40, min_dominance):
+                if ("win either half" in m_desc or "either half" in m_desc or m_id in ("61", "62", "73", "74", "111")) and dominance_ratio >= max(1.40, min_dominance) and fav_is_genuine_banker:
                     for oc in m.get("outcomes", []):
                         is_active = oc.get("isActive")
                         if is_active is not None and str(is_active) not in ("1", "True", "true"):
@@ -664,68 +664,64 @@ class EliteRolloverEngine:
                                     "selection_rationale": f"{tier_label} · First Half Fast-Tempo Index · {stats_3p.get('h2h_summary')}"
                                 })
 
-                # G. Asian Handicap Cushion (+1.5) & European +1:0 Goal Cushions (Strictly Ban 3-Way 0:2/2:0 Draw Traps)
-                is_hcp_mkt = (m_id in ("14", "60", "390", "154") or "handicap" in m_desc or "asian handicap" in m_desc)
-                if is_hcp_mkt:
-                    # In 3-way European Handicap (m_id == "14"), strictly BAN 0:2 and 2:0 because exact 2-goal margins settle as a Draw loss
-                    is_3way_trap = (m_id == "14" and ("0:2" in spec or "2:0" in spec))
-                    if not is_3way_trap:
-                        for oc in m.get("outcomes", []):
-                            is_active = oc.get("isActive")
-                            if is_active is not None and str(is_active) not in ("1", "True", "true"):
-                                continue
-                            oc_st = oc.get("status")
-                            if oc_st is not None and str(oc_st) != "0":
-                                continue
-                            oc_id = str(oc.get("id"))
-                            oc_desc = (oc.get("desc") or "").lower()
-                            odds = float(oc.get("odds") or 0)
-                            if odds < 1.15 or odds > max_leg_odds:
-                                continue
+                # G. 2-Way Asian Handicap (+1.5) (Permanently Ban All 3-Way European Handicap Draw Traps)
+                is_asian_hcp = (m_id in ("60", "390", "154") or "asian handicap" in m_desc) and m_id != "14"
+                if is_asian_hcp:
+                    for oc in m.get("outcomes", []):
+                        is_active = oc.get("isActive")
+                        if is_active is not None and str(is_active) not in ("1", "True", "true"):
+                            continue
+                        oc_st = oc.get("status")
+                        if oc_st is not None and str(oc_st) != "0":
+                            continue
+                        oc_id = str(oc.get("id"))
+                        oc_desc = (oc.get("desc") or "").lower()
+                        odds = float(oc.get("odds") or 0)
+                        if odds < 1.15 or odds > max_leg_odds:
+                            continue
 
-                            # Support Asian Handicap (+1.5) and European Handicap (+1)
-                            is_plus_home = (
-                                ("1:0" in spec or "1.5" in spec or "+1.5" in oc_desc or "+1" in oc_desc)
-                                and (oc_id in ("1", "1711", "home") or "home" in oc_desc or "1" in oc_desc)
-                            )
-                            is_plus_away = (
-                                ("0:1" in spec or "1.5" in spec or "+1.5" in oc_desc or "+1" in oc_desc)
-                                and (oc_id in ("3", "1713", "away") or "away" in oc_desc or "2" in oc_desc)
-                            )
+                        # Strictly 2-Way Asian Handicap (+1.5)
+                        is_plus_home = (
+                            ("1.5" in spec or "+1.5" in oc_desc)
+                            and (oc_id in ("1", "1711", "home") or "home" in oc_desc or "1" in oc_desc)
+                        )
+                        is_plus_away = (
+                            ("1.5" in spec or "+1.5" in oc_desc)
+                            and (oc_id in ("3", "1713", "away") or "away" in oc_desc or "2" in oc_desc)
+                        )
 
-                            if is_plus_home or is_plus_away:
-                                beneficiary = h_team if is_plus_home else a_team
-                                hcp_val = "+1.5" if ("1.5" in spec or "+1.5" in oc_desc) else "+1"
-                                sel_desc = f"{beneficiary} ({hcp_val})"
-                                prob = round(min(0.93, (1.0 / odds) * 0.96), 4)
-                                stats_3p = evaluate_fixture_3pillar_metrics(h_team, a_team, f"Handicap {hcp_val}", sel_desc, odds)
-                                if prob >= 0.80 and stats_3p.get("composite_safety_score", 0.7) >= 0.68:
-                                    c_sc = float(stats_3p.get("composite_safety_score", 0.75))
-                                    candidates.append({
-                                        "event_id": eid,
-                                        "home_team": h_team,
-                                        "away_team": a_team,
-                                        "competition": f"{c_name} · {t_name}",
-                                        "competition_tier": tier_label,
-                                        "dominance_ratio": round(dominance_ratio, 2),
-                                        "is_juggernaut": fav_is_juggernaut,
-                                        "market_id": m_id,
-                                        "market_desc": f"Asian Handicap {hcp_val}" if "1.5" in hcp_val else f"Handicap {hcp_val}",
-                                        "outcome_id": oc_id,
-                                        "selection_desc": sel_desc,
-                                        "specifier": spec,
-                                        "odds": odds,
-                                        "model_probability": prob,
-                                        "market_type": "HANDICAP_CUSHION",
-                                        "h2h_summary": stats_3p.get("h2h_summary") or f"Goal Cushion Margin: {beneficiary} ({hcp_val})",
-                                        "form_summary": stats_3p.get("form_summary") or f"Form Resilience: {beneficiary}",
-                                        "composite_safety_score": c_sc,
-                                        "quality_score": (prob * 56.0) + (c_sc * 46.0) + pedigree_bonus + 7.0,
-                                        "selection_rationale": f"{tier_label} · Handicap Goal Cushion ({hcp_val}) · {stats_3p.get('h2h_summary')}"
-                                    })
+                        if is_plus_home or is_plus_away:
+                            beneficiary = h_team if is_plus_home else a_team
+                            sel_desc = f"{beneficiary} (+1.5)"
+                            prob = round(min(0.93, (1.0 / odds) * 0.96), 4)
+                            stats_3p = evaluate_fixture_3pillar_metrics(h_team, a_team, "Asian Handicap +1.5", sel_desc, odds)
+                            if prob >= 0.80 and stats_3p.get("composite_safety_score", 0.7) >= 0.68:
+                                c_sc = float(stats_3p.get("composite_safety_score", 0.75))
+                                candidates.append({
+                                    "event_id": eid,
+                                    "home_team": h_team,
+                                    "away_team": a_team,
+                                    "competition": f"{c_name} · {t_name}",
+                                    "competition_tier": tier_label,
+                                    "dominance_ratio": round(dominance_ratio, 2),
+                                    "is_juggernaut": fav_is_juggernaut,
+                                    "market_id": m_id,
+                                    "market_desc": "Asian Handicap (+1.5)",
+                                    "outcome_id": oc_id,
+                                    "selection_desc": sel_desc,
+                                    "specifier": spec,
+                                    "odds": odds,
+                                    "model_probability": prob,
+                                    "market_type": "HANDICAP_CUSHION",
+                                    "h2h_summary": stats_3p.get("h2h_summary") or f"Goal Cushion Margin: {beneficiary} (+1.5)",
+                                    "form_summary": stats_3p.get("form_summary") or f"Form Resilience: {beneficiary}",
+                                    "composite_safety_score": c_sc,
+                                    "quality_score": (prob * 56.0) + (c_sc * 46.0) + pedigree_bonus + 7.0,
+                                    "selection_rationale": f"{tier_label} · 2-Way Asian Handicap Cushion (+1.5) · {stats_3p.get('h2h_summary')}"
+                                })
 
                 # H. Chance Mix / Double Chance Combo: Favorite or Over 2.5 (STRICTLY for dominant favorites)
-                if ("or over" in m_desc or "win or over" in m_desc or m_id == "62") and dominance_ratio >= max(1.40, min_dominance):
+                if ("or over" in m_desc or "win or over" in m_desc or m_id == "62") and dominance_ratio >= max(1.40, min_dominance) and fav_is_genuine_banker:
                     for oc in m.get("outcomes", []):
                         is_active = oc.get("isActive")
                         if is_active is not None and str(is_active) not in ("1", "True", "true"):
