@@ -1,5 +1,19 @@
 [
   {
+    "id": "NOTIF-ROLLOVER-1791862531",
+    "ticket_id": "ROLLOVER-1791862531",
+    "code": "SEYAP6",
+    "mode": "ROLLOVER",
+    "title": "\ud83c\udf89 Ticket WON! \u2014 SEYAP6",
+    "message": "WON (Clean Sweep - 0 Losses) \u2022 Stake \u20a65,000.00",
+    "flex_status_text": "WON (Clean Sweep - 0 Losses)",
+    "status": "WON",
+    "odds": 1.89,
+    "potential_payout": 9450.0,
+    "created_at": "2026-10-13 13:26:33",
+    "read": false
+  },
+  {
     "id": "NOTIF-ROLLOVER-1791723442",
     "ticket_id": "ROLLOVER-1791723442",
     "code": "RX6BN6",
