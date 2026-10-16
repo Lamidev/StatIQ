@@ -1439,18 +1439,23 @@ class StatIQTelegramBot:
             keyboard_rows = [
                 [
                     {"text": "🚀 Split 4 Slips (2x 5x + 2x 10x)", "callback_data": f"port:{code}:4:unfiltered"},
-                    {"text": "⚡ Split 2 Slips (1x 5x + 1x 10x)", "callback_data": f"port:{code}:2:unfiltered"}
+                    {"text": "🛡️ Split 4 Slips (Risk Filtered)", "callback_data": f"port:{code}:4:filtered"}
                 ],
                 [
-                    {"text": "🛡️ Split 4 Slips (Risk Filtered)", "callback_data": f"port:{code}:4:filtered"},
+                    {"text": "⚡ Split 2 Slips (1x 5x + 1x 10x)", "callback_data": f"port:{code}:2:unfiltered"},
+                    {"text": "🛡️ Split 2 Slips (Risk Filtered)", "callback_data": f"port:{code}:2:filtered"}
+                ],
+                [
+                    {"text": "🗑️ /remove (2x 5.0x Odds)", "callback_data": f"rem:{code}:5.0:odds:2"},
+                    {"text": "🗑️ /remove (2x 10.0x Odds)", "callback_data": f"rem:{code}:10.0:odds:2"}
+                ],
+                [
+                    {"text": "🗑️ /remove (1x 5.0x)", "callback_data": f"rem:{code}:5.0:odds:1"},
+                    {"text": "🗑️ /remove (1x 10.0x)", "callback_data": f"rem:{code}:10.0:odds:1"}
                 ],
                 [
                     {"text": "🗑️ /remove (15 Games)", "callback_data": f"rem:{code}:15:games:1"},
-                    {"text": "🗑️ /remove (2 Variants)", "callback_data": f"rem:{code}:15:games:2"}
-                ],
-                [
-                    {"text": "⚡ /edit (15 Games)", "callback_data": f"edt:{code}:15:games:1"},
-                    {"text": "⚡ /edit (2 Variants)", "callback_data": f"edt:{code}:15:games:2"}
+                    {"text": "⚡ /edit (15 Games)", "callback_data": f"edt:{code}:15:games:1"}
                 ]
             ]
 

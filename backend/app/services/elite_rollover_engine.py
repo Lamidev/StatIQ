@@ -12,6 +12,7 @@ from app.db.session import SessionLocal
 from app.db.models import TrackedTicket, BookingAuditRecord
 from app.services.rollover_telegram_notifier import RolloverTelegramNotifier
 from app.services.form_h2h_service import evaluate_fixture_3pillar_metrics
+from app.services.pick_engine import HIGH_TEMPO_CLUBS
 
 logger = logging.getLogger("statiq.elite_rollover_engine")
 
@@ -97,9 +98,12 @@ class EliteRolloverEngine:
         return all_events or (cls._today_cache or [])
 
     @classmethod
-    def _calculate_poisson_over15_prob(cls, h_odds: float, d_odds: float, a_odds: float) -> float:
-        """Estimates low-variance Over 1.5 goal probability based on market implied total xG."""
+    def _calculate_poisson_over15_prob(cls, h_odds: float, d_odds: float, a_odds: float, market_odds: Optional[float] = None) -> float:
+        """Estimates low-variance Over 1.5 goal probability based on market implied total xG or direct bookmaker pricing."""
         try:
+            if market_odds and market_odds > 1.0:
+                # Market pricing directly gives the consensus bookmaker-implied probability minus standard bookmaker margin (~4%)
+                return round(min(0.93, (1.0 / market_odds) * 0.96), 4)
             # Implied team strengths
             h_inv = 1.0 / max(1.05, h_odds)
             a_inv = 1.0 / max(1.05, a_odds)
@@ -325,7 +329,7 @@ class EliteRolloverEngine:
             if pedigree_bonus < 0:
                 continue
 
-            # Check 1X2 baseline odds for favorite dominance
+            # Check 1X2 baseline odds for favorite dominance (strictly full-time match 1X2, ignoring half/corner markets)
             h_odds = 2.5
             d_odds = 3.2
             a_odds = 2.8
@@ -333,13 +337,16 @@ class EliteRolloverEngine:
             markets = ev.get("markets", [])
             for m in markets:
                 m_id = str(m.get("id"))
-                if m_id == "1" or "1x2" in (m.get("desc") or "").lower():
+                m_desc = (m.get("desc") or "").lower()
+                if m_id == "1" or (m_desc == "1x2" or ("1x2" in m_desc and "half" not in m_desc and "corner" not in m_desc and "booking" not in m_desc)):
                     for oc in m.get("outcomes", []):
                         o_id = str(oc.get("id"))
                         odd_v = float(oc.get("odds") or 0)
                         if o_id == "1" and odd_v > 0: h_odds = odd_v
                         elif o_id == "2" and odd_v > 0: d_odds = odd_v
                         elif o_id == "3" and odd_v > 0: a_odds = odd_v
+                    if m_id == "1":
+                        break
 
             is_home_fav = h_odds < a_odds
             fav_odds = min(h_odds, a_odds)
@@ -358,28 +365,19 @@ class EliteRolloverEngine:
             fav_is_juggernaut = any(jg in fav_team_name.lower() for jg in JUGGERNAUTS)
             juggernaut_bonus = 45.0 if (fav_is_juggernaut and dominance_ratio >= 1.45) else 0.0
 
-            # Strict Dominant Favorite Gate:
-            # - Tier 1 (UEFA Europa, Conference, Champions, EPL, etc.): Home favorites up to 2.20 with dominance >= 1.25
-            #   are genuine European contenders with high home-ground unbeaten rates (>80%).
-            # - Tier 2: Established top flights (odds <= 1.95, dominance >= 1.35)
-            # - Tier 3: Strict outright match odds <= 1.85 and dominance ratio >= 1.40.
+            # Calibrated Dominant Favorite Gate:
+            # - Tier 1 (UEFA Europa, Conference, Champions, EPL, LaLiga, Serie A, etc.): Home/away favorites up to 2.30 with dominance >= 1.20
+            # - Tier 2: Established top flights & Championship (odds <= 2.25, dominance >= 1.22)
+            # - Tier 3: Recognized professional tiers (odds <= 2.20, dominance >= 1.25).
             if is_tier_1:
-                fav_is_genuine_banker = (fav_odds <= 2.20 and dominance_ratio >= 1.25) or fav_is_juggernaut
+                fav_is_genuine_banker = (fav_odds <= 2.30 and dominance_ratio >= 1.20) or fav_is_juggernaut
+                min_dominance = 1.20
             elif is_tier_2:
-                fav_is_genuine_banker = (fav_odds <= 1.95 and dominance_ratio >= 1.35) or (fav_is_juggernaut and dominance_ratio >= 1.25)
+                fav_is_genuine_banker = (fav_odds <= 2.25 and dominance_ratio >= 1.22) or (fav_is_juggernaut and dominance_ratio >= 1.20)
+                min_dominance = 1.22
             else:
-                fav_is_genuine_banker = (fav_odds <= 1.85 and dominance_ratio >= 1.40) or (fav_is_juggernaut and dominance_ratio >= 1.30)
-
-            # Tier-Weighted League Quality Shield:
-            # - Tier 1: Top flights have elite depth (min dominance 1.25)
-            # - Tier 2: Recognized national flights (min dominance 1.30)
-            # - Tier 3 / Regional: Lower obscure divisions must have clear runaway dominance (min dominance 1.55 or juggernaut)
-            if is_tier_1:
+                fav_is_genuine_banker = (fav_odds <= 2.20 and dominance_ratio >= 1.25) or (fav_is_juggernaut and dominance_ratio >= 1.20)
                 min_dominance = 1.25
-            elif is_tier_2:
-                min_dominance = 1.30
-            else:
-                min_dominance = 1.55 if not fav_is_juggernaut else 1.30
 
             # Evaluate each eligible low-variance market in the fixture
             for m in markets:
@@ -489,11 +487,11 @@ class EliteRolloverEngine:
                         is_line_15 = ("1.5" in spec) or ("1.5" in oc_desc) or ("total=1.5" in spec) or ("over 1.5" in oc_desc)
                         is_line_20 = ("total=2" in spec) or ("total=2.0" in spec) or ("over 2" in oc_desc and "2.5" not in oc_desc)
                         if (is_line_15 or is_line_20) and "over" in oc_desc and 1.15 <= odds <= max_leg_odds:
-                            prob = cls._calculate_poisson_over15_prob(h_odds, d_odds, a_odds) if is_line_15 else round(min(0.88, (1.0 / odds) * 0.94), 4)
+                            prob = cls._calculate_poisson_over15_prob(h_odds, d_odds, a_odds, market_odds=odds) if is_line_15 else round(min(0.88, (1.0 / odds) * 0.94), 4)
                             sel_desc = "Over 1.5 Goals" if is_line_15 else "Over 2 Goals"
                             m_type = "OVER_15" if is_line_15 else "OVER_20"
                             stats_3p = evaluate_fixture_3pillar_metrics(h_team, a_team, f"Over/Under {1.5 if is_line_15 else 2.0}", sel_desc, odds)
-                            if prob >= 0.78 and stats_3p.get("composite_safety_score", 0.7) >= 0.68:
+                            if prob >= 0.74 and stats_3p.get("composite_safety_score", 0.7) >= 0.65:
                                 c_sc = float(stats_3p.get("composite_safety_score", 0.75))
                                 candidates.append({
                                     "event_id": eid,
@@ -662,8 +660,10 @@ class EliteRolloverEngine:
 
                 # F. 1st Half Over 0.5 Goals (Strictly Gated to High-Pace, High-xG Leagues)
                 is_high_pace_league = any(k in comp_full for k in [
-                    "champions league", "bundesliga", "eredivisie", "premier league", "championship",
-                    "mls", "copa libertadores", "serie a", "la liga", "ligue 1"
+                    "champions league", "bundesliga", "2. bundesliga", "eredivisie", "eerste divisie",
+                    "premier league", "championship", "mls", "copa libertadores", "serie a", "serie b",
+                    "la liga", "laliga 2", "ligue 1", "ligue 2", "austria", "belgium", "denmark",
+                    "norway", "switzerland", "scotland", "turkey"
                 ])
                 if (m_id == "68" or "1st half - over/under" in m_desc or ("1st half" in m_desc and "over" in m_desc)) and is_high_pace_league:
                     for oc in m.get("outcomes", []):
@@ -704,6 +704,56 @@ class EliteRolloverEngine:
                                     "composite_safety_score": c_sc,
                                     "quality_score": (prob * 54.0) + (c_sc * 44.0) + pedigree_bonus + (juggernaut_bonus * 0.8) + 6.0,
                                     "selection_rationale": f"{tier_label} · First Half Fast-Tempo Index · {stats_3p.get('h2h_summary')}"
+                                })
+
+                # F2. 2nd Half Over 0.5 Goals (Positive Dynamic Goal Cushion - Statistically Highest-Scoring Half)
+                is_2nd_half = (
+                    m_id in ("90", "70", "72")
+                    or "2nd half - over/under" in m_desc
+                    or "second half - over/under" in m_desc
+                    or ("2nd half" in m_desc and "over" in m_desc)
+                    or ("second half" in m_desc and "over" in m_desc)
+                )
+                if is_2nd_half:
+                    for oc in m.get("outcomes", []):
+                        is_active = oc.get("isActive")
+                        if is_active is not None and str(is_active) not in ("1", "True", "true"):
+                            continue
+                        oc_st = oc.get("status")
+                        if oc_st is not None and str(oc_st) != "0":
+                            continue
+                        oc_id = str(oc.get("id"))
+                        oc_desc = (oc.get("desc") or "").lower()
+                        odds = float(oc.get("odds") or 0)
+                        is_line_05 = ("0.5" in spec) or ("0.5" in oc_desc) or ("total=0.5" in spec)
+                        # Strict User Rule: 2nd Half Over 0.5 MUST have odds >= 1.15 (our global minimum odds floor)
+                        if is_line_05 and (oc_id in ("12", "over") or "over" in oc_desc) and 1.15 <= odds <= max_leg_odds:
+                            prob = round(min(0.91, (1.0 / odds) * 0.95), 4)
+                            sel_desc = "2nd Half Over 0.5 Goals"
+                            stats_3p = evaluate_fixture_3pillar_metrics(h_team, a_team, "2nd Half Over 0.5", sel_desc, odds)
+                            if prob >= 0.76 and stats_3p.get("composite_safety_score", 0.7) >= 0.65:
+                                c_sc = float(stats_3p.get("composite_safety_score", 0.75))
+                                candidates.append({
+                                    "event_id": eid,
+                                    "home_team": h_team,
+                                    "away_team": a_team,
+                                    "competition": f"{c_name} · {t_name}",
+                                    "competition_tier": tier_label,
+                                    "dominance_ratio": round(dominance_ratio, 2),
+                                    "is_juggernaut": fav_is_juggernaut,
+                                    "market_id": m_id,
+                                    "market_desc": "2nd Half Over/Under",
+                                    "outcome_id": oc_id,
+                                    "selection_desc": sel_desc,
+                                    "specifier": spec or "total=0.5",
+                                    "odds": odds,
+                                    "model_probability": prob,
+                                    "market_type": "SECOND_HALF_OVER_05",
+                                    "h2h_summary": stats_3p.get("h2h_summary") or f"2H Goal Trend: {h_team} vs {a_team}",
+                                    "form_summary": stats_3p.get("form_summary") or f"2H Acceleration Index: {h_team} + {a_team}",
+                                    "composite_safety_score": c_sc,
+                                    "quality_score": (prob * 55.0) + (c_sc * 45.0) + pedigree_bonus + (juggernaut_bonus * 0.8) + 7.0,
+                                    "selection_rationale": f"{tier_label} · Second Half Goal Index · {stats_3p.get('h2h_summary')}"
                                 })
 
                 # G. 2-Way Asian Handicap (+1.5) (Permanently Ban All 3-Way European Handicap Draw Traps)
@@ -829,6 +879,14 @@ class EliteRolloverEngine:
         closest to target_odds (1.50 or 2.00) while maximizing joint win probability.
         Strictly zero random shuffling: highest statistical quality is guaranteed.
         """
+        if not candidates:
+            return []
+
+        # STRICT SAFETY DIRECTIVE (User Directive):
+        # 1st Half Over 0.5 is 100% PROHIBITED in the 2.0x Rollover Slip.
+        # Compounding rollover capital relies strictly on full-match bedrock cushions:
+        # Team Over 0.5 Goals, Double Chance (1X/X2), Over 1.5 Goals, Asian Handicap (+1.5).
+        candidates = [c for c in candidates if c.get("market_type") != "FIRST_HALF_OVER_05"]
         if not candidates:
             return []
 
@@ -1095,6 +1153,27 @@ class EliteRolloverEngine:
         if not candidates:
             return []
 
+        target = float(target_odds)
+
+        # STRICT SAFETY DIRECTIVE (User Directive):
+        # - For 5.0x Precision Multiplier (target < 9.5): 1st Half Over 0.5 is 100% PROHIBITED.
+        #   5.0x must rely exclusively on high-assurance full-time cushions.
+        # - For 10.0x Mega Multiplier (target >= 9.5): 1st Half Over 0.5 is permitted ONLY IF
+        #   both teams have proven high-scoring profiles (composite_safety_score >= 0.74 and juggernaut / high-tempo club).
+        if target < 9.5:
+            candidates = [c for c in candidates if c.get("market_type") != "FIRST_HALF_OVER_05"]
+        else:
+            candidates = [
+                c for c in candidates
+                if c.get("market_type") != "FIRST_HALF_OVER_05" or (
+                    float(c.get("composite_safety_score", 0)) >= 0.74
+                    and (c.get("is_juggernaut") or any(t in str(c.get("home_team", "")).lower() or t in str(c.get("away_team", "")).lower() for t in HIGH_TEMPO_CLUBS))
+                )
+            ]
+
+        if not candidates:
+            return []
+
         excluded = excluded_event_ids or set()
 
         # Group candidates by fixture so alternative markets can be selected if Double Chance quota is reached
@@ -1205,6 +1284,14 @@ class EliteRolloverEngine:
                     break
                 if curr_odds >= target_ceiling and len(selected_legs) >= min_legs:
                     break
+
+        # Verify accumulator reached required odds threshold; do not return severely under-target slips
+        if target >= 4.5 and curr_odds < 4.0:
+            logger.warning(f"[EliteRollover] Accumulator could only achieve {curr_odds:.2f}x (target: {target:.2f}x). Insufficient qualified pool.")
+            return []
+        if target >= 9.5 and curr_odds < 8.0:
+            logger.warning(f"[EliteRollover] Accumulator could only achieve {curr_odds:.2f}x (target: {target:.2f}x). Insufficient qualified pool.")
+            return []
 
         return selected_legs
 
@@ -1440,7 +1527,8 @@ class EliteRolloverEngine:
 
         # ── 3. SLIP 3: 10.0x MEGA MULTIPLIER (11–14 Pure Banker Legs, Rollover-Grade Sniper) ──
         unclaimed_10x = [c for c in banker_candidates if c["event_id"] not in ro_event_ids and c["event_id"] not in acca5_fids]
-        if len(unclaimed_10x) >= 10:
+        distinct_unclaimed_10x = len(set(c["event_id"] for c in unclaimed_10x))
+        if distinct_unclaimed_10x >= 14:
             pool_for_10x = unclaimed_10x
             excl_fids = ro_event_ids | acca5_fids
         else:
@@ -1455,7 +1543,7 @@ class EliteRolloverEngine:
             target_odds=10.00,
             min_legs=11,
             max_legs=14,
-            excluded_event_ids=excl_fids if len(unclaimed_10x) >= 10 else ro_event_ids
+            excluded_event_ids=excl_fids
         )
         if acca10_legs:
             for leg in acca10_legs:

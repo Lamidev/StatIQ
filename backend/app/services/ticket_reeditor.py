@@ -19,6 +19,8 @@ MatchIQ Ticket Re-Editor & Optimization Service (AUDITOR & REMOVE Modes)
 """
 
 import asyncio
+import collections
+from collections import defaultdict, deque
 import math
 import logging
 import random
@@ -1211,15 +1213,15 @@ async def re_edit_ticket(
                     alt["provider_specifier"] = "total=1.5"
 
             elif "handicap" in m_lower:
-                alt["market_name"] = "Over/Under Goals"
-                alt["selection_name"] = "Under 3.5 Goals"
-                alt["odds"] = round(max(1.18, min(1.35, orig_odds * 1.02)), 2)
+                alt["market_name"] = "2nd Half Over/Under"
+                alt["selection_name"] = "2nd Half Over 0.5 Goals"
+                alt["odds"] = round(max(1.15, min(1.35, orig_odds * 0.95)), 2)
                 alt["estimated_odds"] = alt["odds"]
-                alt["estimated_prob"] = 0.89
-                alt["reason"] = f"Under 3.5 Goals defensive safety cushion"
-                alt["provider_market_id"] = "18"
-                alt["provider_outcome_id"] = "13"
-                alt["provider_specifier"] = "total=3.5"
+                alt["estimated_prob"] = 0.88
+                alt["reason"] = f"2nd Half Over 0.5 Goals positive dynamic cushion"
+                alt["provider_market_id"] = "90"
+                alt["provider_outcome_id"] = "12"
+                alt["provider_specifier"] = "total=0.5"
 
             else:
                 alt["market_name"] = "Double Chance"
@@ -1502,8 +1504,8 @@ async def split_ticket_into_portfolio(
             if leg_odd < 1.05:
                 continue
 
-            # Don't blow past ceiling if already past floor
-            if curr_multiplier * leg_odd > t_ceiling and curr_multiplier >= t_floor:
+            # Don't blow past ceiling: skip legs that shoot excessively beyond ceiling
+            if (curr_multiplier * leg_odd) > (t_ceiling * 1.08):
                 continue
 
             chosen_legs.append(cand)
