@@ -96,7 +96,44 @@ class StatIQTelegramBot:
         reply_to_message_id: Optional[int] = None,
         parse_mode: str = "HTML"
     ) -> Optional[Dict[str, Any]]:
-        """Sends an HTML formatted message with optional inline keyboard."""
+        """Sends an HTML formatted message with optional inline keyboard. Safely splits if > 4000 chars."""
+        if not text:
+            return None
+
+        # Automatically chunk long messages to protect against Telegram's 4096 character limit
+        if len(text) > 4000:
+            lines = text.split("\n")
+            chunks = []
+            curr = []
+            curr_len = 0
+            for l in lines:
+                if curr_len + len(l) + 1 > 3800:
+                    chunks.append("\n".join(curr))
+                    curr = [l]
+                    curr_len = len(l)
+                else:
+                    curr.append(l)
+                    curr_len += len(l) + 1
+            if curr:
+                chunks.append("\n".join(curr))
+
+            res = None
+            for idx, ch in enumerate(chunks):
+                markup = reply_markup if idx == len(chunks) - 1 else None
+                reply_to = reply_to_message_id if idx == 0 else None
+                res = self._send_single_message(chat_id, ch, markup, reply_to, parse_mode)
+            return res
+
+        return self._send_single_message(chat_id, text, reply_markup, reply_to_message_id, parse_mode)
+
+    def _send_single_message(
+        self,
+        chat_id: int | str,
+        text: str,
+        reply_markup: Optional[Dict[str, Any]] = None,
+        reply_to_message_id: Optional[int] = None,
+        parse_mode: str = "HTML"
+    ) -> Optional[Dict[str, Any]]:
         url = f"{self.base_url}/sendMessage"
         payload = {
             "chat_id": chat_id,
@@ -321,7 +358,28 @@ class StatIQTelegramBot:
         """Displays Compounding Challenge ladder status with current day, stake, and picks."""
         from app.services.rollover_cron_scheduler import rollover_scheduler
         camp = rollover_scheduler.get_active_campaign()
-        
+
+        if camp.get("has_active") is False or camp.get("challenge_status") in ("DISMISSED", "REMOVED"):
+            msg = (
+                "🏆 <b>StatIQ Compounding Challenge Ladder</b>\n\n"
+                "There is currently no active compounding challenge running.\n\n"
+                "Tap below to kick off a fresh compounding run with automated daily 2.0x compounding stakes:"
+            )
+            keyboard = {
+                "inline_keyboard": [
+                    [
+                        {"text": "🚀 Start 3-Day Challenge (₦5k ➔ ₦40k)", "callback_data": "camp:start:3"}
+                    ],
+                    [
+                        {"text": "🔥 Start 5-Day Challenge (₦5k ➔ ₦160k)", "callback_data": "camp:start:5"}
+                    ],
+                    [
+                        {"text": "🎯 Generate 2.0x Rollover Slip Now", "callback_data": "gen:rollover"}
+                    ]
+                ]
+            }
+            return self.send_message(chat_id, msg, reply_markup=keyboard)
+
         curr_day = camp.get("current_day", 1)
         tot_days = camp.get("total_days", 3)
         curr_stake = camp.get("current_stake", 5000)
@@ -1932,6 +1990,13 @@ class StatIQTelegramBot:
         raw = text.strip()
         low = raw.lower()
 
+        # Explicit commands with their own dedicated parsers must not be hijacked
+        if any(low.startswith(p) for p in [
+            "/games", "/matches", "/remove", "/trim", "/edit", "/upgrade",
+            "/portfolio", "/split", "/permute", "/distribute", "/rollover", "/roll", "/challenge", "/ladder"
+        ]):
+            return None
+
         # Pattern 0: Direct shortcut commands like /2x10, /2x10odds, /2x5, /2x5odds, /3x10
         m_short = re.match(r"^/(\d+)\s*[xX*]\s*(\d+\.?\d*)(?:odds|x)?\b", low)
         if m_short:
@@ -1948,7 +2013,7 @@ class StatIQTelegramBot:
                 return {"type": "UNIFORM", "count": max(1, min(4, cnt)), "target_odds": odds_val, "targets": [odds_val] * cnt}
 
         # Pattern 2: Odds then Count e.g. "10 odds 2 tickets", "10 odds 2x", "10x 2 tickets", "10 odds 2 slips"
-        m2 = re.search(r"(\d+\.?\d*)\s*(?:odds?|x)?\s*(?:for\s+)?(\d+)\s*(?:x|\*|tickets?|slips?|variants?)", low)
+        m2 = re.search(r"(\d+\.?\d*)\s*(?:odds?|x)\s*(?:for\s+)?(\d+)\s*(?:x|\*|tickets?|slips?|variants?)", low)
         if m2:
             odds_val = float(m2.group(1))
             cnt = int(m2.group(2))
