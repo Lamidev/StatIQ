@@ -1482,13 +1482,13 @@ class EliteRolloverEngine:
 
                 trio_result["rollover_ticket"] = ro_payload
 
-        # ── 2. SLIP 2: 5.0x PRECISION MULTIPLIER (8–11 Pure Banker Legs, Compounding Rollover Acca) ──
+        # ── 2. SLIP 2: 5.0x PRECISION MULTIPLIER (5–7 Pure Elite Banker Legs) ──
         unclaimed_5x = [c for c in banker_candidates if c["event_id"] not in ro_event_ids]
         acca5_legs = cls.assemble_optimal_accumulator_slip(
             unclaimed_5x,
             target_odds=5.00,
-            min_legs=8,
-            max_legs=11,
+            min_legs=5,
+            max_legs=7,
             excluded_event_ids=ro_event_ids
         )
         acca5_fids = set()
@@ -1525,10 +1525,10 @@ class EliteRolloverEngine:
 
             trio_result["acca_5x_ticket"] = acca5_payload
 
-        # ── 3. SLIP 3: 10.0x MEGA MULTIPLIER (11–14 Pure Banker Legs, Rollover-Grade Sniper) ──
+        # ── 3. SLIP 3: 10.0x MEGA MULTIPLIER (7–9 Elite Banker Legs, Zero Filler) ──
         unclaimed_10x = [c for c in banker_candidates if c["event_id"] not in ro_event_ids and c["event_id"] not in acca5_fids]
         distinct_unclaimed_10x = len(set(c["event_id"] for c in unclaimed_10x))
-        if distinct_unclaimed_10x >= 14:
+        if distinct_unclaimed_10x >= 10:
             pool_for_10x = unclaimed_10x
             excl_fids = ro_event_ids | acca5_fids
         else:
@@ -1541,8 +1541,8 @@ class EliteRolloverEngine:
         acca10_legs = cls.assemble_optimal_accumulator_slip(
             pool_for_10x,
             target_odds=10.00,
-            min_legs=11,
-            max_legs=14,
+            min_legs=7,
+            max_legs=9,
             excluded_event_ids=excl_fids
         )
         if acca10_legs:
@@ -1651,7 +1651,8 @@ class EliteRolloverEngine:
         morning_eids = cls._daily_dispatched_event_ids
         if not excluded_event_ids and morning_eids:
             fresh_cands = [c for c in candidates if c["event_id"] not in morning_eids]
-            if len(fresh_cands) >= (15 * max(1, num_tickets)):
+            req_legs = target_games if (target_games and target_games > 0) else (6 if (target_odds and target_odds >= 4.5) else 3)
+            if len(fresh_cands) >= (req_legs * max(1, num_tickets)):
                 claimed.update(morning_eids)
 
         results = []
@@ -1733,13 +1734,13 @@ class EliteRolloverEngine:
                     slip_legs = cls.assemble_optimal_rollover_slip(unclaimed, target_odds=t_odds)
                 else:
                     if t_odds >= 18.0:
-                        min_l, max_l = 13, 16
-                    elif t_odds >= 14.0:
-                        min_l, max_l = 11, 14
-                    elif t_odds >= 9.0:
                         min_l, max_l = 10, 13
+                    elif t_odds >= 14.0:
+                        min_l, max_l = 8, 11
+                    elif t_odds >= 9.0:
+                        min_l, max_l = 7, 9
                     elif t_odds >= 4.5:
-                        min_l, max_l = 5, 8
+                        min_l, max_l = 5, 7
                     else:
                         min_l, max_l = 3, 5
                     slip_legs = cls.assemble_optimal_accumulator_slip(
@@ -1755,6 +1756,7 @@ class EliteRolloverEngine:
 
             for leg in slip_legs:
                 claimed.add(leg["event_id"])
+                cls._daily_dispatched_event_ids.add(leg["event_id"])
 
             acc_odds = round(math.prod(leg["odds"] for leg in slip_legs), 2)
             comb_prob = round(math.prod(leg["model_probability"] for leg in slip_legs) * 100.0, 1)

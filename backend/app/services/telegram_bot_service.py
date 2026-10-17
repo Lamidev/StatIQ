@@ -1322,9 +1322,28 @@ class StatIQTelegramBot:
         """
         code = code.strip().upper()
         self.send_chat_action(chat_id, "typing")
-        is_4_slips = str(target_portfolio).upper() in ("4", "4_SLIPS", "FOUR")
-        mode_desc = "4 Diversified Slips (2x 5.0x + 2x 10.0x)" if is_4_slips else "2 Slips (1x 5.0x + 1x 10.0x)"
-        filter_desc = "🛡️ Filtered: Risky picks purged" if filter_risky else "⚡ Unfiltered: 100% Original picks permuted"
+
+        t_port_upper = str(target_portfolio).upper().strip()
+        if t_port_upper in ("TRIO", "3", "3_SLIPS", "THREE"):
+            mode_desc = "🎯 Trio Portfolio (2x 5.0x + 1x 10.0x)"
+            norm_port = "TRIO"
+        elif t_port_upper in ("2X_5ODDS", "2X5", "5X_ONLY"):
+            mode_desc = "⚡ Double 5.0x (2 Independent Slips)"
+            norm_port = "2X_5ODDS"
+        elif t_port_upper in ("2X_10ODDS", "2X10", "10X_ONLY"):
+            mode_desc = "⚡ Double 10.0x (2 Independent Slips)"
+            norm_port = "2X_10ODDS"
+        elif t_port_upper in ("SINGLE_5ODDS", "SINGLE", "1X5", "CORE"):
+            mode_desc = "🗑️ Single Clean Core (1x 5.0x Slip)"
+            norm_port = "SINGLE_5ODDS"
+        elif t_port_upper in ("2", "2_SLIPS", "TWO"):
+            mode_desc = "2 Slips (1x 5.0x + 1x 10.0x)"
+            norm_port = "2_SLIPS"
+        else:
+            mode_desc = "🚀 4 Diversified Slips (2x 5.0x + 2x 10.0x)"
+            norm_port = "4_SLIPS"
+
+        filter_desc = "🛡️ Market-First Audit: Traps Purged" if filter_risky else "⚡ Unfiltered: Raw Picks"
 
         self.send_message(
             chat_id,
@@ -1352,7 +1371,7 @@ class StatIQTelegramBot:
                 res = loop.run_until_complete(
                     split_ticket_into_portfolio(
                         selections=selections,
-                        target_portfolio="4_SLIPS" if is_4_slips else "2_SLIPS",
+                        target_portfolio=norm_port,
                         filter_risky=filter_risky
                     )
                 )
@@ -1430,28 +1449,29 @@ class StatIQTelegramBot:
                 f"🎟️ <b>SportyBet Slip Detected: <code>{code}</code></b>\n\n"
                 f"📊 <b>Total Matches:</b> {n_matches} Matches\n"
                 f"⚡ <b>Original Multiplier:</b> {total_odds:.2f}x\n\n"
-                f"Select an optimization mode below:\n"
-                f"• <b>PORTFOLIO SPLIT:</b> Permutes games into 2x 5x + 2x 10x or 1x 5x + 1x 10x\n"
-                f"• <b>REMOVE:</b> Purges risky legs, keeping bettor's picks as-is\n"
-                f"• <b>EDIT:</b> Upgrades risky lines to verified SportyBet safety markets"
+                f"Select an automated portfolio split below (Market-First Audit):\n"
+                f"• <b>TRIO (Recommended):</b> 2x 5.0x + 1x 10.0x (1 win covers all stakes)\n"
+                f"• <b>4 SLIPS:</b> 2x 5.0x + 2x 10.0x (Zero Cross-Match Contamination)\n"
+                f"• <b>DOUBLE 5x / 10x:</b> 2 Independent Slips\n"
+                f"• <b>SINGLE CORE:</b> 1x 5.0x Clean Core Ticket"
             )
 
             keyboard_rows = [
                 [
-                    {"text": "🚀 Split 4 Slips (2x 5x + 2x 10x)", "callback_data": f"port:{code}:4:unfiltered"},
-                    {"text": "🛡️ Split 4 Slips (Risk Filtered)", "callback_data": f"port:{code}:4:filtered"}
+                    {"text": "🎯 Trio (2x 5x + 1x 10x) · Filtered 🛡️", "callback_data": f"port:{code}:trio:filtered"},
+                    {"text": "⚡ Trio (Raw) ⚡", "callback_data": f"port:{code}:trio:unfiltered"}
                 ],
                 [
-                    {"text": "⚡ Split 2 Slips (1x 5x + 1x 10x)", "callback_data": f"port:{code}:2:unfiltered"},
-                    {"text": "🛡️ Split 2 Slips (Risk Filtered)", "callback_data": f"port:{code}:2:filtered"}
+                    {"text": "🚀 4 Slips (2x 5x + 2x 10x) · Filtered 🛡️", "callback_data": f"port:{code}:4:filtered"},
+                    {"text": "⚡ 4 Slips (Raw) ⚡", "callback_data": f"port:{code}:4:unfiltered"}
                 ],
                 [
-                    {"text": "🗑️ /remove (2x 5.0x Odds)", "callback_data": f"rem:{code}:5.0:odds:2"},
-                    {"text": "🗑️ /remove (2x 10.0x Odds)", "callback_data": f"rem:{code}:10.0:odds:2"}
+                    {"text": "⚡ Double 5.0x (Filtered)", "callback_data": f"port:{code}:2x5:filtered"},
+                    {"text": "⚡ Double 10.0x (Filtered)", "callback_data": f"port:{code}:2x10:filtered"}
                 ],
                 [
-                    {"text": "🗑️ /remove (1x 5.0x)", "callback_data": f"rem:{code}:5.0:odds:1"},
-                    {"text": "🗑️ /remove (1x 10.0x)", "callback_data": f"rem:{code}:10.0:odds:1"}
+                    {"text": "🗑️ Single Clean Core (1x 5.0x)", "callback_data": f"port:{code}:single5:filtered"},
+                    {"text": "⚡ Double 5.0x (Raw)", "callback_data": f"port:{code}:2x5:unfiltered"}
                 ],
                 [
                     {"text": "🗑️ /remove (15 Games)", "callback_data": f"rem:{code}:15:games:1"},
@@ -1699,15 +1719,15 @@ class StatIQTelegramBot:
         # Case 2b: Portfolio Splitter
         elif data.startswith("port:"):
             parts = data.split(":")
-            if len(parts) >= 4:
+            if len(parts) >= 3:
                 code = parts[1]
-                num_slips = parts[2]
-                filt_mode = parts[3]
+                target_port = parts[2].upper()
+                filt_mode = parts[3] if len(parts) > 3 else "filtered"
                 self.handle_portfolio_command(
                     chat_id=chat_id,
                     code=code,
-                    target_portfolio="4_SLIPS" if num_slips == "4" else "2_SLIPS",
-                    filter_risky=(filt_mode == "filtered")
+                    target_portfolio=target_port,
+                    filter_risky=(filt_mode != "unfiltered")
                 )
 
         # Case 3: Interactive Audit Actions (aud:sin, aud:top, aud:ovr)
