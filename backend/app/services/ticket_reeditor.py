@@ -112,6 +112,15 @@ async def _fetch_live_event_intelligence(
         except Exception as e:
             logger.warning(f"[TicketReeditor] Intel fetch error for {clean_id}: {e}")
 
+    # Fetch SportyBet live H2H match history and scoring averages
+    h2h_data = {}
+    if clean_id and not clean_id.startswith("AUDIT_"):
+        try:
+            from app.services.sportybet_ingestion import SportyBetIngestionService
+            h2h_data = SportyBetIngestionService.fetch_h2h_stats(clean_id, home_team, away_team)
+        except Exception as e:
+            logger.debug(f"[TicketReeditor] H2H fetch note for {clean_id}: {e}")
+
     # Fallback to MatchIQ Elo/Poisson if SportyBet factsCenter is empty
     m_probs = calculate_matchiq_probabilities(home_team, away_team)
     elo_gap = float(m_probs.get("elo_gap", 0.0))
@@ -311,7 +320,8 @@ async def _fetch_live_event_intelligence(
         "over_15": over15_cand,
         "win_either_half_fav": weh_fav,
         "best_elite": best_elite,
-        "all_elite_candidates": found_elite_candidates
+        "all_elite_candidates": found_elite_candidates,
+        "h2h_data": h2h_data
     }
 
 # Alias for backwards compatibility
@@ -779,9 +789,10 @@ async def score_selection(
 
         # ── CHECK 5B: BOTH HALVES UNDER 1.5: NO / GOALS IN BOTH HALVES: NO (DATA-DRIVEN VETTING) ──
         # Market definition: At least one half must produce 2+ goals.
-        # Rigorously verified against match data, H2H, and Poisson expected goals.
-        # It is a safer alternative to Over 2.5 ONLY if the fixture has genuine high-scoring dynamics (tot_exp >= 2.40, high tempo, or heavy offensive favorite).
-        # In low-scoring or defensive grinds (tot_exp < 2.40), matches frequently end 0-0, 1-0, or 1-1 (1 goal per half), causing this pick to LOSE.
+        # User 3-Pillar Audit:
+        # Pillar 1 - Market Odds: 1.15 <= odds <= 1.55 (valid pricing floor and ceiling)
+        # Pillar 2 - Head-to-Head (H2H) Records: Verify both teams score and have produced Over 2.5 / high scoring in past meetings
+        # Pillar 3 - Recent Form & Scoring Dynamics: High-scoring club profile, recent 2+ goal games, and Poisson xG >= 2.40
         elif ("both halves under" in m_lower or "both halves under" in p_lower or "goals in both halves" in m_lower or "both half under" in m_lower) and "no" in p_lower:
             lam1 = 0.45 * tot_exp
             lam2 = 0.55 * tot_exp
@@ -793,18 +804,53 @@ async def score_selection(
             is_high_tempo = any(t in home.lower() or t in away.lower() for t in HIGH_TEMPO_CLUBS)
             has_dominant_offense = (fav_odds <= 1.40 and (intel.get("expected_home_goals", 0) >= 1.60 or intel.get("expected_away_goals", 0) >= 1.60))
 
-            is_data_validated = (
-                (tot_exp >= 2.40 and odds <= 1.50) or
-                (tot_exp >= 2.25 and is_high_tempo) or
-                has_dominant_offense
-            )
+            # Pillar 2: Live H2H evaluation
+            h2h = intel.get("h2h_data") or {}
+            h2h_meetings = h2h.get("last_5") or []
+            h2h_avg_goals = float(h2h.get("avg_total_goals", 0.0) or 0.0)
+            n_meetings = len(h2h_meetings)
+            h2h_over25_count = sum(1 for m in h2h_meetings if m.get("total_goals", 0) >= 3)
+            h2h_btts_count = sum(1 for m in h2h_meetings if m.get("home_score", 0) >= 1 and m.get("away_score", 0) >= 1)
+            h2h_over15_count = sum(1 for m in h2h_meetings if m.get("total_goals", 0) >= 2)
+
+            h2h_confirms_scoring = False
+            h2h_conflicts_scoring = False
+            h2h_badge_text = ""
+
+            if n_meetings >= 2:
+                over25_rate = h2h_over25_count / n_meetings
+                btts_rate = h2h_btts_count / n_meetings
+                over15_rate = h2h_over15_count / n_meetings
+
+                if h2h_avg_goals >= 2.2 or over25_rate >= 0.50 or (btts_rate >= 0.50 and over15_rate >= 0.65):
+                    h2h_confirms_scoring = True
+                    h2h_badge_text = f"H2H affirms scoring: {h2h_avg_goals:.1f} avg goals ({h2h_over25_count}/{n_meetings} Over 2.5)"
+                elif h2h_avg_goals < 1.9 and over25_rate <= 0.20:
+                    h2h_conflicts_scoring = True
+                    h2h_badge_text = f"H2H conflicts: low-scoring grind history ({h2h_avg_goals:.1f} avg goals across {n_meetings} games)"
+
+            # Strict 3-Pillar Concurrence Gate:
+            # If historical H2H contradicts high scoring, do NOT concur.
+            if h2h_conflicts_scoring:
+                is_data_validated = False
+            else:
+                is_data_validated = (
+                    h2h_confirms_scoring or
+                    (tot_exp >= 2.40 and odds <= 1.50) or
+                    (tot_exp >= 2.25 and is_high_tempo) or
+                    has_dominant_offense
+                )
 
             if is_data_validated and 1.15 <= odds <= 1.55:
                 is_anchor_candidate = True
                 action = "KEEP"
-                prob = min(0.92, max(prob, poisson_prob_no, 0.85))
-                form_notes.append(f"Data-verified high-scoring fixture ({tot_exp:.1f} exp goals) confirms Both Halves Under 1.5: NO (model {poisson_prob_no*100:.0f}%)")
+                prob = min(0.92, max(prob, poisson_prob_no, 0.86))
+                audit_summary = f"3-Pillar Concurrence: {h2h_badge_text or f'{tot_exp:.1f} total xG'} validates Both Halves Under 1.5: NO (model {poisson_prob_no*100:.0f}%)"
+                form_notes.append(audit_summary)
+                h2h_notes.append(h2h_badge_text or f"High-tempo matchup (xG {tot_exp:.1f})")
             else:
+                mismatch_reason = h2h_badge_text or f"low total xG dynamic ({tot_exp:.1f} goals)"
+                drop_msg = f"3-Pillar Mismatch ({mismatch_reason}): 'Both Halves Under 1.5: NO' requires at least 2 goals in a single half. Low-tempo fixtures frequently end 1-0 or 1-1, resulting in a loss."
                 if mode_upper == "EDIT":
                     dc_cand = intel.get("double_chance_fav")
                     team_cand = intel.get("team_over_fav")
@@ -813,7 +859,7 @@ async def score_selection(
                         fortified_pick = dc_cand
                         action = "UPGRADED_SAFE"
                         prob = dc_cand.get("probability", 0.90)
-                        form_notes.append(f"Low exp goals ({tot_exp:.1f}): Upgraded Both Halves Under 1.5 NO to verified live Double Chance")
+                        form_notes.append(f"H2H/xG caution: Upgraded Both Halves Under 1.5 NO to verified live Double Chance")
                     elif over15_cand and float(over15_cand.get("odds", 0)) >= 1.15 and tot_exp >= 2.0:
                         fortified_pick = over15_cand
                         action = "UPGRADED_SAFE"
@@ -827,12 +873,12 @@ async def score_selection(
                     else:
                         keep = False
                         prob = min(prob, 0.55)
-                        drop_reason = f"Low Expected Goals Dynamic ({tot_exp:.1f} goals): 'Both Halves Under 1.5: NO' requires 2+ goals in a single half. Low-tempo fixtures frequently end 1-0 or 1-1, resulting in a loss."
+                        drop_reason = drop_msg
                 else:
                     keep = False
                     prob = min(prob, 0.55)
-                    drop_reason = f"Low Expected Goals Dynamic ({tot_exp:.1f} goals): 'Both Halves Under 1.5: NO' requires 2+ goals in a single half. Low-tempo fixtures frequently end 1-0 or 1-1, resulting in a loss."
-                    form_notes.append(f"Defensive/low-tempo fixture: total expected goals ({tot_exp:.1f}) below 2.4 threshold")
+                    drop_reason = drop_msg
+                    form_notes.append(f"3-pillar audit dropped: {mismatch_reason}")
 
         # ── CHECK 5C: BOTH HALVES UNDER 1.5: YES (HIGH-RISK TRAP) ──
         elif ("both halves under" in m_lower or "both halves under" in p_lower or "goals in both halves" in m_lower or "both half under" in m_lower) and "yes" in p_lower:
