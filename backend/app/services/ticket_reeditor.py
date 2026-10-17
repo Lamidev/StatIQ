@@ -1688,7 +1688,7 @@ async def split_ticket_into_portfolio(
             {"id": 1, "title": "10.0x Mega Multiplier (Variant 1)", "target_odds": 10.00, "floor": 9.20, "ceiling": 12.50, "max_legs": 9, "block": "EVEN"},
             {"id": 2, "title": "10.0x Mega Multiplier (Variant 2)", "target_odds": 10.00, "floor": 9.20, "ceiling": 12.50, "max_legs": 9, "block": "ODD"},
         ]
-    elif t_mode in ("SINGLE_5ODDS", "SINGLE", "1X5", "CORE"):
+    elif t_mode in ("SINGLE_5ODDS", "SINGLE", "1X5", "CORE", "SINGLE5", "SINGLE_5", "1X_5ODDS"):
         slip_configs = [
             {"id": 1, "title": "5.0x Clean Core Multiplier", "target_odds": 5.00, "floor": 4.60, "ceiling": 6.20, "max_legs": 7, "block": "TOP"},
         ]

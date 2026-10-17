@@ -156,6 +156,12 @@ class StatIQTelegramBot:
             "• <code>/auto</code> — View automation status & 1-tap toggles (2.0x, 5.0x, 10.0x)\n"
             "• <code>/dispatch</code> — <b>Run & dispatch today's 3 slips immediately</b>\n"
             "• 🔒 <i>Zero-Overlap Guarantee: All 3 daily tickets share 0 common fixtures!</i>\n\n"
+            "🎯 <b>On-Demand Accumulators (Zero-Overlap Guarantee):</b>\n"
+            "• <code>/duo</code> or <code>/5and10</code> — <b>Simultaneously books 1x 5.0x + 1x 10.0x slips (0 shared matches!)</b>\n"
+            "• <code>/odds 5 10</code> — Multi-target generator (e.g. 5.0x & 10.0x simultaneously)\n"
+            "• <code>/5odds</code> — 5.0x Precision Multiplier (5–7 vetted legs)\n"
+            "• <code>/10odds</code> — 10.0x Mega Multiplier (7–9 vetted legs)\n"
+            "• <i>Sequential Insulation:</i> Running <code>/5odds</code> then <code>/10odds</code> single-handedly automatically excludes previously booked games!\n\n"
             "🎯 <b>Generate by Target Odds (1 or 2 Zero-Overlap Slips):</b>\n"
             "• <code>/odds 2.0</code> — 2.0x Safe Multiplier (1 Slip)\n"
             "• <code>/odds 2.0 2 tickets</code> — <b>2 Variant Slips (Zero Overlap!)</b>\n"
@@ -185,12 +191,12 @@ class StatIQTelegramBot:
                     {"text": "🚀 Dispatch Slips Now", "callback_data": "auto:dispatch"}
                 ],
                 [
-                    {"text": "🎯 2.0x (1 Slip)", "callback_data": "gen:odds:2.0:1"},
-                    {"text": "🎯 2.0x (2 Slips · Zero Overlap)", "callback_data": "gen:odds:2.0:2"}
+                    {"text": "🎯 2.0x Rollover", "callback_data": "gen:odds:2.0:1"},
+                    {"text": "⚡ 5x + 10x Duo (0-Overlap)", "callback_data": "gen:duo"}
                 ],
                 [
                     {"text": "🔥 5.0x (1 Slip)", "callback_data": "gen:odds:5.0:1"},
-                    {"text": "🔥 5.0x (2 Slips · Zero Overlap)", "callback_data": "gen:odds:5.0:2"}
+                    {"text": "🚀 10.0x Mega (1 Slip)", "callback_data": "gen:odds:10.0:1"}
                 ],
                 [
                     {"text": "⚽ 10 Games (1 Slip)", "callback_data": "gen:games:10:1"},
@@ -599,6 +605,70 @@ class StatIQTelegramBot:
         except Exception as e:
             logger.error(f"[TelegramBot] Odds build error: {e}", exc_info=True)
             self.send_message(chat_id, f"❌ <b>Error:</b> Failed to generate ticket ({_esc(str(e))}).")
+
+    def handle_duo_command(self, chat_id: int | str, targets: Optional[List[float]] = None):
+        """
+        Generates simultaneous 5.0x Precision Multiplier + 10.0x Mega Multiplier slips
+        with STRICT ZERO-OVERLAP (100% unique fixtures across both slips).
+        Uses the exact same Elite Vetted Selection Engine as the 10:00 AM daily automation.
+        """
+        targets = targets or [5.0, 10.0]
+        self.send_chat_action(chat_id, "typing")
+        targets_str = " + ".join(f"{t:.1f}x" for t in targets)
+        self.send_message(
+            chat_id,
+            f"⏳ <b>StatIQ Elite Multi-Multiplier Engine:</b> Generating simultaneous <b>{targets_str}</b> slips (Strict Zero-Overlap Guarantee · Min Odds ≥ 1.15x)..."
+        )
+
+        try:
+            from app.services.elite_rollover_engine import EliteRolloverEngine
+
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                portfolio = loop.run_until_complete(
+                    EliteRolloverEngine.generate_elite_multi_target_portfolio(targets=targets)
+                )
+            finally:
+                loop.close()
+
+            if not portfolio:
+                self.send_message(
+                    chat_id,
+                    "⚠️ Could not assemble multi-target slips with current live board fixtures. Please try again shortly."
+                )
+                return
+
+            dispatched = 0
+            for slip in portfolio:
+                approved_legs = slip.get("approved_legs") or []
+                if not approved_legs:
+                    continue
+
+                booking_code = slip.get("booking_code")
+                share_url = slip.get("share_url")
+                acc_odds = slip.get("accumulated_odds") or 5.0
+                comb_prob = (slip.get("combined_probability") or 0.65) * 100.0
+                title = slip.get("title") or f"🎯 StatIQ Slip #{dispatched + 1}"
+
+                extra_note = "🔒 Strict Zero-Overlap Guarantee (Zero matches shared with other slips) · Min Odds ≥ 1.15x"
+                self._dispatch_ticket_message(
+                    chat_id=chat_id,
+                    title=f"{title} ({len(approved_legs)} Legs)",
+                    booking_code=booking_code,
+                    share_url=share_url,
+                    total_odds=acc_odds,
+                    confidence=comb_prob,
+                    picks=approved_legs,
+                    extra_note=extra_note
+                )
+                dispatched += 1
+
+            if dispatched == 0:
+                self.send_message(chat_id, "⚠️ <b>Notice:</b> No suitable elite fixtures available meeting safety & odds floor right now.")
+        except Exception as e:
+            logger.error(f"[TelegramBot] Dual odds build error: {e}", exc_info=True)
+            self.send_message(chat_id, f"❌ <b>Error:</b> Failed to generate dual tickets ({_esc(str(e))}).")
 
     def handle_games_command(self, chat_id: int | str, target_games: int, num_tickets: int = 1):
         """Generates an AI accumulator with an exact game count (1 or more slips)."""
@@ -1333,12 +1403,15 @@ class StatIQTelegramBot:
         elif t_port_upper in ("2X_10ODDS", "2X10", "10X_ONLY"):
             mode_desc = "⚡ Double 10.0x (2 Independent Slips)"
             norm_port = "2X_10ODDS"
-        elif t_port_upper in ("SINGLE_5ODDS", "SINGLE", "1X5", "CORE"):
+        elif t_port_upper in ("SINGLE_5ODDS", "SINGLE", "1X5", "CORE", "SINGLE5", "SINGLE_5", "1X_5ODDS"):
             mode_desc = "🗑️ Single Clean Core (1x 5.0x Slip)"
             norm_port = "SINGLE_5ODDS"
         elif t_port_upper in ("2", "2_SLIPS", "TWO"):
             mode_desc = "2 Slips (1x 5.0x + 1x 10.0x)"
             norm_port = "2_SLIPS"
+        elif t_port_upper in ("4", "4_SLIPS", "FOUR"):
+            mode_desc = "🚀 4 Diversified Slips (2x 5.0x + 2x 10.0x)"
+            norm_port = "4_SLIPS"
         else:
             mode_desc = "🚀 4 Diversified Slips (2x 5.0x + 2x 10.0x)"
             norm_port = "4_SLIPS"
@@ -1747,6 +1820,8 @@ class StatIQTelegramBot:
             action = parts[1]
             if action == "rollover":
                 self.handle_rollover_command(chat_id)
+            elif action == "duo":
+                self.handle_duo_command(chat_id, targets=[5.0, 10.0])
             elif action == "odds":
                 val = float(parts[2]) if len(parts) > 2 else 2.0
                 num_t = int(parts[3]) if len(parts) > 3 else 1
@@ -1890,11 +1965,35 @@ class StatIQTelegramBot:
             self.handle_rollover_command(chat_id)
             return
 
-        # 3. /odds <target_odds> [num_tickets]
+        # 4b. Simultaneous Multi-Multiplier Slips: /duo, /5and10, /10and5, /5n10, /10n5, /combo, /trio
+        # Simultaneously books 1x 5.0x + 1x 10.0x with STRICT ZERO-OVERLAP
+        if any(text.lower().startswith(cmd) for cmd in [
+            "/duo", "/5and10", "/10and5", "/5n10", "/10n5", "/5_10", "/10_5",
+            "/combo", "/comboslip", "/dual", "/splitodds", "/twin"
+        ]):
+            targets = [float(n) for n in re.findall(r"\b(\d+\.?\d*)\b", text)]
+            if len(targets) < 2:
+                targets = [5.0, 10.0]
+            self.handle_duo_command(chat_id, targets=targets)
+            return
+
+        if text.lower().startswith("/trio") or text.lower().startswith("/3slips"):
+            self.handle_duo_command(chat_id, targets=[5.0, 5.0, 10.0])
+            return
+
+        # 3. /odds <target_odds> [num_tickets] OR multi-odds (e.g. /odds 5 10)
         odds_match = re.match(r"^/(?:odds|build|target)\s*(\d+\.?\d*)(.*)", text, re.IGNORECASE)
         if odds_match:
             val = float(odds_match.group(1))
             rest = (odds_match.group(2) or "").lower().strip()
+
+            # Multi-target check: e.g. /odds 5 10 or /odds 5 and 10 or /odds 5, 10
+            more_nums = [float(n) for n in re.findall(r"\b(\d+\.?\d*)\b", rest) if not any(k in rest for k in ["ticket", "variant", "slip"])]
+            if more_nums:
+                all_targets = [val] + more_nums
+                self.handle_duo_command(chat_id, targets=all_targets)
+                return
+
             is_two = any(k in rest for k in ["2 ticket", "2 variant", "2 slip", "two ticket", "two variant", "two slip", " 2 "]) or rest.startswith("2")
             num_tickets = 2 if is_two else 1
             self.handle_odds_command(chat_id, val, num_tickets=num_tickets)
@@ -1905,6 +2004,11 @@ class StatIQTelegramBot:
         if shortcut_odds:
             val = float(shortcut_odds.group(1))
             rest = (shortcut_odds.group(2) or "").lower().strip()
+            more_nums = [float(n) for n in re.findall(r"\b(\d+\.?\d*)\b", rest) if not any(k in rest for k in ["ticket", "variant", "slip"])]
+            if more_nums:
+                all_targets = [val] + more_nums
+                self.handle_duo_command(chat_id, targets=all_targets)
+                return
             is_two = any(k in rest for k in ["2 ticket", "2 variant", "2 slip", "two ticket", "two variant", "two slip", " 2 "]) or rest.startswith("2")
             num_tickets = 2 if is_two else 1
             self.handle_odds_command(chat_id, val, num_tickets=num_tickets)
@@ -2031,12 +2135,14 @@ class StatIQTelegramBot:
         """
         commands = [
             {"command": "start", "description": "Show main menu & quick action buttons"},
-            {"command": "remove", "description": "Purge risky legs as-is (/remove CODE 15 games 2 tickets)"},
-            {"command": "edit", "description": "Upgrade to safe SportyBet markets (/edit CODE 15 games 2 tickets)"},
+            {"command": "duo", "description": "1x 5.0x + 1x 10.0x simultaneous slips (Zero Overlap)"},
+            {"command": "odds", "description": "Target odds (/odds 5 or /odds 5 10 or /odds 20)"},
+            {"command": "portfolio", "description": "Split mega slip into 4 or 2 diversified tickets"},
+            {"command": "rollover", "description": "Generate today's 2.0x Safe Rollover slip"},
+            {"command": "remove", "description": "Purge risky legs as-is (/remove CODE)"},
+            {"command": "edit", "description": "Upgrade to safe SportyBet markets (/edit CODE)"},
             {"command": "auto", "description": "Daily 10 AM VIP Automation status & toggles"},
             {"command": "dispatch", "description": "Dispatch today's daily slips now"},
-            {"command": "rollover", "description": "Generate today's 2.0x Safe Rollover slip"},
-            {"command": "odds", "description": "Target odds (/odds 20 or /odds 20 2 tickets)"},
             {"command": "games", "description": "Top matches (/games 15 or /games 15 2 tickets)"},
             {"command": "schedule", "description": "Configure 10 AM dispatch time & active days"},
             {"command": "help", "description": "Help guide & full usage manual"},

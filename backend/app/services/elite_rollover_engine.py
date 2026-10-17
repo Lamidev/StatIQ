@@ -121,7 +121,8 @@ class EliteRolloverEngine:
     def evaluate_elite_rollover_candidates(
         cls,
         events: List[Dict[str, Any]],
-        max_leg_odds: float = 1.45
+        max_leg_odds: float = 1.45,
+        is_on_demand: bool = False
     ) -> List[Dict[str, Any]]:
         """
         Filters and ranks each fixture for Elite Rollover suitability.
@@ -155,13 +156,18 @@ class EliteRolloverEngine:
                 start_ms = start_ms * 1000.0
 
             # Strict Kickoff Timing Gates (WAT Timezone):
-            # 1. At least 45 minutes after now (avoids 10:30am/11:00am in-play rush & gives user time to place bets)
-            # 2. Concludes strictly before 22:30 WAT (10:30 PM) on the same day (eliminates midnight / 1am rollover delays)
+            # For 10:00 AM automation: >= 45m after now & concludes before 22:30 WAT on the same day.
+            # For On-Demand booking: >= 15m after now & allows next-day evening fixtures if late in the day.
             wat_tz = datetime.timezone(datetime.timedelta(hours=1))
             now_wat = datetime.datetime.now(wat_tz)
             end_of_day_wat = now_wat.replace(hour=22, minute=30, second=0, microsecond=0)
             end_of_day_ms = end_of_day_wat.timestamp() * 1000.0
-            min_kickoff_ms = now_ms + (45 * 60 * 1000.0)
+            if is_on_demand:
+                min_kickoff_ms = now_ms + (15 * 60 * 1000.0)
+                if now_wat.hour >= 18:
+                    end_of_day_ms = (now_wat + datetime.timedelta(days=1)).replace(hour=23, minute=59, second=0).timestamp() * 1000.0
+            else:
+                min_kickoff_ms = now_ms + (45 * 60 * 1000.0)
 
             if start_ms > 0:
                 if start_ms < min_kickoff_ms:
@@ -1641,7 +1647,7 @@ class EliteRolloverEngine:
         if not raw_events:
             return []
 
-        candidates = cls.evaluate_elite_rollover_candidates(raw_events, max_leg_odds=1.55)
+        candidates = cls.evaluate_elite_rollover_candidates(raw_events, max_leg_odds=1.55, is_on_demand=True)
         if not candidates:
             return []
 
@@ -1652,7 +1658,7 @@ class EliteRolloverEngine:
         if not excluded_event_ids and morning_eids:
             fresh_cands = [c for c in candidates if c["event_id"] not in morning_eids]
             req_legs = target_games if (target_games and target_games > 0) else (6 if (target_odds and target_odds >= 4.5) else 3)
-            if len(fresh_cands) >= (req_legs * max(1, num_tickets)):
+            if len(fresh_cands) >= 5:
                 claimed.update(morning_eids)
 
         results = []
@@ -1769,6 +1775,88 @@ class EliteRolloverEngine:
                 "combined_probability": comb_prob / 100.0,
                 "booking_code": b_code,
                 "share_url": s_url,
+                "leg_count": len(slip_legs)
+            })
+
+        return results
+
+    @classmethod
+    async def generate_elite_multi_target_portfolio(
+        cls,
+        targets: List[float] = [5.0, 10.0]
+    ) -> List[Dict[str, Any]]:
+        """
+        Unified On-Demand Multi-Target Generator (e.g. 5.0x + 10.0x simultaneously):
+        Guarantees STRICT ZERO-OVERLAP between the 5.0x and 10.0x slips.
+        Uses the exact same Elite Vetted Selection Engine as the 10:00 AM daily automation.
+        """
+        raw_events = await cls.fetch_sportybet_today_events(max_pages=20)
+        if not raw_events:
+            return []
+
+        candidates = cls.evaluate_elite_rollover_candidates(raw_events, max_leg_odds=1.55, is_on_demand=True)
+        if not candidates:
+            return []
+
+        claimed = set(cls._daily_dispatched_event_ids)
+        total_req_legs = sum(6 if t >= 4.5 else 3 for t in targets)
+        fresh_cands = [c for c in candidates if c["event_id"] not in claimed]
+        if len(fresh_cands) < total_req_legs:
+            candidates = sorted(candidates, key=lambda c: 0 if c["event_id"] not in claimed else 1)
+            claimed = set()
+
+        results = []
+        for idx, t_odds in enumerate(targets):
+            unclaimed = [c for c in candidates if c["event_id"] not in claimed]
+            if not unclaimed:
+                break
+
+            if t_odds >= 14.0:
+                min_l, max_l = 8, 11
+            elif t_odds >= 9.0:
+                min_l, max_l = 7, 9
+            elif t_odds >= 4.5:
+                min_l, max_l = 5, 7
+            else:
+                min_l, max_l = 3, 5
+
+            slip_legs = cls.assemble_optimal_accumulator_slip(
+                unclaimed,
+                target_odds=t_odds,
+                min_legs=min_l,
+                max_legs=max_l,
+                excluded_event_ids=claimed
+            )
+
+            if not slip_legs:
+                continue
+
+            for leg in slip_legs:
+                claimed.add(leg["event_id"])
+                cls._daily_dispatched_event_ids.add(leg["event_id"])
+
+            acc_odds = round(math.prod(leg["odds"] for leg in slip_legs), 2)
+            comb_prob = round(math.prod(leg["model_probability"] for leg in slip_legs) * 100.0, 1)
+            b_code, s_url = await cls._request_sportybet_share_code(slip_legs)
+
+            if 4.0 <= t_odds <= 6.5:
+                title = "🎯 5.0x Precision Multiplier"
+            elif 8.5 <= t_odds <= 12.0:
+                title = "🚀 10.0x Mega Multiplier"
+            elif 1.8 <= t_odds <= 2.5:
+                title = "🛡️ 2.0x Rollover Slip"
+            else:
+                title = f"🎯 {t_odds:.1f}x Multiplier"
+
+            results.append({
+                "ticket_index": idx + 1,
+                "title": title,
+                "target_odds": t_odds,
+                "accumulated_odds": acc_odds,
+                "combined_probability": comb_prob / 100.0,
+                "booking_code": b_code,
+                "share_url": s_url,
+                "approved_legs": slip_legs,
                 "leg_count": len(slip_legs)
             })
 
