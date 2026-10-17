@@ -1656,7 +1656,8 @@ class StatIQTelegramBot:
                     {"text": "🔥 2x 5-Odds Slips (Safe 🛡️)", "callback_data": f"port:{code}:2x5:filtered"}
                 ],
                 [
-                    {"text": "🎯 Trio (Safe: 2x 5x + 1x 10x)", "callback_data": f"port:{code}:trio:filtered"}
+                    {"text": "🎯 Duo (1x 5.0x + 1x 10.0x · Safe 🛡️)", "callback_data": f"port:{code}:2:filtered"},
+                    {"text": "🎯 Trio (2x 5x + 1x 10x)", "callback_data": f"port:{code}:trio:filtered"}
                 ],
                 [
                     {"text": "🎲 Trio (Smart Blended Risk)", "callback_data": f"port:{code}:trio:blended"},
@@ -2167,12 +2168,14 @@ class StatIQTelegramBot:
             return
 
         # 5. /portfolio (or alias /split, /permute, /distribute): Multi-ticket investment portfolio
-        # Examples: /portfolio CODE | /portfolio CODE 2x10 | /portfolio CODE 2x5 | /portfolio CODE filtered
+        # Examples: /portfolio CODE | /portfolio CODE 2x10 | /portfolio CODE 2x5 | /portfolio CODE 5 and 10 | /portfolio CODE filtered
         port_match = re.match(r"^/(?:portfolio|split|permute|distribute)\s+([A-Za-z0-9]+)(.*)", text, re.IGNORECASE)
         if port_match:
             code = port_match.group(1).upper()
             rest = port_match.group(2).lower()
-            if "2x10" in rest or "2x 10" in rest or "10x" in rest or "10 odds" in rest:
+            if ("5" in rest and "10" in rest) or any(k in rest for k in ["duo", "combo", "dual", "twin", "5and10", "10and5", "5n10"]):
+                target_port = "2_SLIPS"
+            elif "2x10" in rest or "2x 10" in rest or "10x" in rest or "10 odds" in rest:
                 target_port = "2X_10ODDS"
             elif "2x5" in rest or "2x 5" in rest or "5x" in rest or "5 odds" in rest:
                 target_port = "2X_5ODDS"
@@ -2190,11 +2193,16 @@ class StatIQTelegramBot:
             return
 
         # 5a. /remove (or alias /trim): Risk purge preserving original picks as-is
-        # Examples: /remove D99K41 15 games 2 tickets | /remove D99K41 2 tickets | /remove D99K41
+        # Examples: /remove CODE 5 and 10 | /remove CODE duo | /remove D99K41 15 games 2 tickets | /remove D99K41
         remove_match = re.match(r"^/(?:remove|trim)\s+([A-Za-z0-9]+)(.*)", text, re.IGNORECASE)
         if remove_match:
             code = remove_match.group(1).upper()
             rest = remove_match.group(2).lower()
+
+            # Simultaneous 5 odds + 10 odds duo request
+            if ("5" in rest and "10" in rest) or any(k in rest for k in ["duo", "combo", "dual", "twin", "5and10", "10and5", "5n10"]):
+                self.handle_portfolio_command(chat_id, code=code, target_portfolio="2_SLIPS", filter_risky="filtered")
+                return
 
             target_mode = "GAMES"
             is_two = any(k in rest for k in ["2 ticket", "2 variant", "2 slip", "two ticket", "two variant", "two slip", " 2 "]) or rest.strip().startswith("2")
@@ -2224,11 +2232,16 @@ class StatIQTelegramBot:
             return
 
         # 5b. /edit (or alias /reedit, /upgrade): Market upgrade to verified SportyBet safety markets
-        # Examples: /edit D99K41 15 games 2 tickets | /edit D99K41 2 tickets | /edit D99K41
+        # Examples: /edit CODE 5 and 10 | /edit CODE duo | /edit D99K41 15 games 2 tickets | /edit D99K41
         edit_match = re.match(r"^/(?:edit|reedit|upgrade)\s+([A-Za-z0-9]+)(.*)", text, re.IGNORECASE)
         if edit_match:
             code = edit_match.group(1).upper()
             rest = edit_match.group(2).lower()
+
+            # Simultaneous 5 odds + 10 odds duo request
+            if ("5" in rest and "10" in rest) or any(k in rest for k in ["duo", "combo", "dual", "twin", "5and10", "10and5", "5n10"]):
+                self.handle_portfolio_command(chat_id, code=code, target_portfolio="2_SLIPS", filter_risky="filtered")
+                return
 
             target_mode = "GAMES"
             is_two = any(k in rest for k in ["2 ticket", "2 variant", "2 slip", "two ticket", "two variant", "two slip", " 2 "]) or rest.strip().startswith("2")
