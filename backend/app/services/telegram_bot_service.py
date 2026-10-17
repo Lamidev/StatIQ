@@ -1343,7 +1343,13 @@ class StatIQTelegramBot:
             mode_desc = "🚀 4 Diversified Slips (2x 5.0x + 2x 10.0x)"
             norm_port = "4_SLIPS"
 
-        filter_desc = "🛡️ Market-First Audit: Traps Purged" if filter_risky else "⚡ Unfiltered: Raw Picks"
+        f_str = str(filter_risky).lower()
+        if f_str == "blended":
+            filter_desc = "🎲 Smart Blended Diversification (Safe Spine + Isolated Risk)"
+        elif f_str in ("filtered", "true", "1"):
+            filter_desc = "🛡️ Market-First Audit: Traps Purged"
+        else:
+            filter_desc = "⚡ Unfiltered: Raw Picks"
 
         self.send_message(
             chat_id,
@@ -1445,42 +1451,104 @@ class StatIQTelegramBot:
             n_matches = len(selections)
             total_odds = decoded.get("total_odds") or 1.0
 
-            msg = (
-                f"🎟️ <b>SportyBet Slip Detected: <code>{code}</code></b>\n\n"
-                f"📊 <b>Total Matches:</b> {n_matches} Matches\n"
-                f"⚡ <b>Original Multiplier:</b> {total_odds:.2f}x\n\n"
-                f"Select an automated portfolio split below (Market-First Audit):\n"
-                f"• <b>TRIO (Recommended):</b> 2x 5.0x + 1x 10.0x (1 win covers all stakes)\n"
-                f"• <b>4 SLIPS:</b> 2x 5.0x + 2x 10.0x (Zero Cross-Match Contamination)\n"
-                f"• <b>DOUBLE 5x / 10x:</b> 2 Independent Slips\n"
-                f"• <b>SINGLE CORE:</b> 1x 5.0x Clean Core Ticket"
+            # Step 1: Run 3-Pillar Audit scan across all selections
+            from app.services.ticket_reeditor import re_edit_ticket
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                audit_res = loop.run_until_complete(
+                    re_edit_ticket(
+                        selections=selections,
+                        target_odds=50.0,
+                        mode="REMOVE",
+                        target_mode="ODDS",
+                        num_tickets=1
+                    )
+                )
+            finally:
+                loop.close()
+
+            safe_picks = audit_res.get("all_safe_selections") or audit_res.get("final_selections") or []
+            risky_picks = audit_res.get("removed_selections") or []
+            n_safe = len(safe_picks)
+            n_risky = len(risky_picks)
+
+            # Step 2: Format Visual Safe Matches List
+            safe_lines = []
+            for idx, s in enumerate(safe_picks, 1):
+                h = s.get("home_team", "Home")
+                a = s.get("away_team", "Away")
+                p = s.get("selection_name", "")
+                o = float(s.get("odds") or s.get("estimated_odds") or 1.25)
+                h2h_txt = s.get("h2h_summary")
+                badge = f" <i>({h2h_txt})</i>" if h2h_txt and "affirms" in str(h2h_txt) else ""
+                safe_lines.append(f"{idx}. <b>{_esc(h)} vs {_esc(a)}</b> ➔ <code>{_esc(p)}</code> @ {o:.2f}x{badge}")
+
+            # Step 3: Format Visual Risky Matches List with Drop Reasons
+            risky_lines = []
+            for idx, r in enumerate(risky_picks, 1):
+                h = r.get("home_team", "Home")
+                a = r.get("away_team", "Away")
+                p = r.get("selection_name", "")
+                o = float(r.get("original_odds") or r.get("odds") or 1.50)
+                reason = r.get("reason") or "High variance / low statistical cushion"
+                # Keep reason concise for Telegram display
+                if ":" in reason:
+                    reason = reason.split(":")[-1].strip()
+                risky_lines.append(f"{idx}. <b>{_esc(h)} vs {_esc(a)}</b> ➔ <code>{_esc(p)}</code> @ {o:.2f}x\n   ⚠️ <i>{_esc(reason)}</i>")
+
+            # Assemble Visual Breakdown Messages
+            safe_block = "\n".join(safe_lines) if safe_lines else "<i>No safe matches detected.</i>"
+            risky_block = "\n".join(risky_lines) if risky_lines else "<i>No risky matches detected. 100% of picks verified safe!</i>"
+
+            msg_header = (
+                f"🎟️ <b>SportyBet Slip Audit: <code>{code}</code></b>\n"
+                f"📊 <b>Total Matches:</b> {n_matches} | ⚡ <b>Original Multiplier:</b> {total_odds:.2f}x\n\n"
+                f"🛡️ <b>VERIFIED SAFE MATCHES ({n_safe} Games · Good to Go):</b>\n"
+            )
+
+            msg_footer = (
+                f"\n\n⚠️ <b>FLAGGED RISKY MATCHES ({n_risky} Games · Traps / Volatile):</b>\n"
+                f"{risky_block}\n\n"
+                f"👇 <b>Select how to deploy these games:</b>\n"
+                f"• <b>Safe Only 🛡️:</b> Drop all {n_risky} risky games. Build slips using only the verified core.\n"
+                f"• <b>Smart Blended 🎲:</b> Safe core spine + distribute risky games evenly with 0 overlap!\n"
+                f"• <b>Raw ⚡:</b> Keep all {n_matches} original games."
             )
 
             keyboard_rows = [
                 [
-                    {"text": "🎯 Trio (2x 5x + 1x 10x) · Filtered 🛡️", "callback_data": f"port:{code}:trio:filtered"},
-                    {"text": "⚡ Trio (Raw) ⚡", "callback_data": f"port:{code}:trio:unfiltered"}
+                    {"text": "🎯 Trio (Safe Only 🛡️)", "callback_data": f"port:{code}:trio:filtered"},
+                    {"text": "🎲 Trio (Smart Blended 🎲)", "callback_data": f"port:{code}:trio:blended"}
                 ],
                 [
-                    {"text": "🚀 4 Slips (2x 5x + 2x 10x) · Filtered 🛡️", "callback_data": f"port:{code}:4:filtered"},
-                    {"text": "⚡ 4 Slips (Raw) ⚡", "callback_data": f"port:{code}:4:unfiltered"}
+                    {"text": "🚀 4 Slips (Safe Only 🛡️)", "callback_data": f"port:{code}:4:filtered"},
+                    {"text": "🎲 4 Slips (Smart Blended 🎲)", "callback_data": f"port:{code}:4:blended"}
                 ],
                 [
-                    {"text": "⚡ Double 5.0x (Filtered)", "callback_data": f"port:{code}:2x5:filtered"},
-                    {"text": "⚡ Double 10.0x (Filtered)", "callback_data": f"port:{code}:2x10:filtered"}
+                    {"text": "⚡ Double 5.0x (Safe)", "callback_data": f"port:{code}:2x5:filtered"},
+                    {"text": "⚡ Double 10.0x (Safe)", "callback_data": f"port:{code}:2x10:filtered"}
                 ],
                 [
-                    {"text": "🗑️ Single Clean Core (1x 5.0x)", "callback_data": f"port:{code}:single5:filtered"},
-                    {"text": "⚡ Double 5.0x (Raw)", "callback_data": f"port:{code}:2x5:unfiltered"}
+                    {"text": "🗑️ Single Clean Core (1x 5x)", "callback_data": f"port:{code}:single5:filtered"},
+                    {"text": "⚡ 4 Slips (Raw All)", "callback_data": f"port:{code}:4:unfiltered"}
                 ],
                 [
                     {"text": "🗑️ /remove (15 Games)", "callback_data": f"rem:{code}:15:games:1"},
                     {"text": "⚡ /edit (15 Games)", "callback_data": f"edt:{code}:15:games:1"}
                 ]
             ]
-
             keyboard = {"inline_keyboard": keyboard_rows}
-            self.send_message(chat_id, msg, reply_markup=keyboard)
+
+            full_text = msg_header + safe_block + msg_footer
+            if len(full_text) <= 3900:
+                self.send_message(chat_id, full_text, reply_markup=keyboard)
+            else:
+                # Split cleanly into 2 messages if list is long
+                msg_part1 = msg_header + safe_block
+                self.send_message(chat_id, msg_part1)
+                msg_part2 = f"⚠️ <b>FLAGGED RISKY MATCHES ({n_risky} Games · Traps / Volatile):</b>\n{risky_block}\n\n👇 <b>Select how to deploy these games:</b>"
+                self.send_message(chat_id, msg_part2, reply_markup=keyboard)
 
         except Exception as e:
             logger.warning(f"[TelegramBot] Code inspection error: {e}")
@@ -1727,7 +1795,7 @@ class StatIQTelegramBot:
                     chat_id=chat_id,
                     code=code,
                     target_portfolio=target_port,
-                    filter_risky=(filt_mode != "unfiltered")
+                    filter_risky=filt_mode
                 )
 
         # Case 3: Interactive Audit Actions (aud:sin, aud:top, aud:ovr)

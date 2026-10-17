@@ -1645,8 +1645,12 @@ async def split_ticket_into_portfolio(
             "portfolio_tickets": []
         }
 
-    # Step 2: Quality Filtering vs Full Unfiltered Distribution
-    if filter_risky:
+    # Step 2: Quality Filtering vs Full Unfiltered Distribution vs Smart Blended
+    is_blended = (str(filter_risky).lower() == "blended")
+    is_filtered = (filter_risky is True or str(filter_risky).lower() in ("filtered", "true", "1"))
+
+    risky_pool = []
+    if is_blended or is_filtered:
         audit_res = await re_edit_ticket(
             selections=active_selections,
             target_odds=50.0,
@@ -1655,9 +1659,13 @@ async def split_ticket_into_portfolio(
             num_tickets=1,
             allow_volatile_override=allow_volatile_override
         )
-        working_pool = audit_res.get("all_safe_selections") or audit_res.get("final_selections") or active_selections
+        safe_pool = audit_res.get("all_safe_selections") or audit_res.get("final_selections") or []
+        risky_pool = audit_res.get("removed_selections") or []
+        working_pool = safe_pool if safe_pool else list(active_selections)
     else:
         working_pool = list(active_selections)
+        safe_pool = list(active_selections)
+        risky_pool = []
 
     if len(working_pool) < 4:
         working_pool = list(active_selections)
@@ -1752,6 +1760,18 @@ async def split_ticket_into_portfolio(
         chosen_legs = []
         chosen_f_keys = set()
         curr_multiplier = 1.0
+
+        # In SMART BLENDED mode: Assign 1 or 2 isolated, disjoint risky legs to this ticket
+        if is_blended and risky_pool:
+            slip_risky = [risky_pool[i] for i in range(len(risky_pool)) if i % len(slip_configs) == (t_id - 1)]
+            for r_cand in slip_risky[:2]:
+                f_key = str(r_cand.get("event_id") or r_cand.get("game_id") or r_cand.get("home_team", ""))
+                leg_odd = float(r_cand.get("odds") or r_cand.get("estimated_odds") or 1.25)
+                if leg_odd >= 1.15 and f_key not in chosen_f_keys:
+                    if (curr_multiplier * leg_odd) <= (t_ceiling * 1.08):
+                        chosen_legs.append(r_cand)
+                        chosen_f_keys.add(f_key)
+                        curr_multiplier *= leg_odd
 
         for cand in cand_candidates:
             f_key = str(cand.get("event_id") or cand.get("game_id") or cand.get("home_team", ""))
