@@ -614,7 +614,10 @@ class StatIQTelegramBot:
         """
         targets = targets or [5.0, 10.0]
         self.send_chat_action(chat_id, "typing")
-        targets_str = " + ".join(f"{t:.1f}x" for t in targets)
+        if len(targets) > 1 and all(abs(t - targets[0]) < 0.01 for t in targets):
+            targets_str = f"{len(targets)}x {targets[0]:.1f}x"
+        else:
+            targets_str = " + ".join(f"{t:.1f}x" for t in targets)
         self.send_message(
             chat_id,
             f"⏳ <b>StatIQ Elite Multi-Multiplier Engine:</b> Generating simultaneous <b>{targets_str}</b> slips (Strict Zero-Overlap Guarantee · Min Odds ≥ 1.15x)..."
@@ -1591,24 +1594,23 @@ class StatIQTelegramBot:
 
             keyboard_rows = [
                 [
-                    {"text": "🎯 Trio (Safe Only 🛡️)", "callback_data": f"port:{code}:trio:filtered"},
-                    {"text": "🎲 Trio (Smart Blended 🎲)", "callback_data": f"port:{code}:trio:blended"}
+                    {"text": "⚡ 2x 10-Odds Slips (Safe 🛡️)", "callback_data": f"port:{code}:2x10:filtered"},
+                    {"text": "🔥 2x 5-Odds Slips (Safe 🛡️)", "callback_data": f"port:{code}:2x5:filtered"}
                 ],
                 [
-                    {"text": "🚀 4 Slips (Safe Only 🛡️)", "callback_data": f"port:{code}:4:filtered"},
-                    {"text": "🎲 4 Slips (Smart Blended 🎲)", "callback_data": f"port:{code}:4:blended"}
+                    {"text": "🎯 Trio (Safe: 2x 5x + 1x 10x)", "callback_data": f"port:{code}:trio:filtered"}
                 ],
                 [
-                    {"text": "⚡ Double 5.0x (Safe)", "callback_data": f"port:{code}:2x5:filtered"},
-                    {"text": "⚡ Double 10.0x (Safe)", "callback_data": f"port:{code}:2x10:filtered"}
+                    {"text": "🎲 Trio (Smart Blended Risk)", "callback_data": f"port:{code}:trio:blended"},
+                    {"text": "🛡️ Single Core (1x 5.0x)", "callback_data": f"port:{code}:single5:filtered"}
                 ],
                 [
-                    {"text": "🗑️ Single Clean Core (1x 5x)", "callback_data": f"port:{code}:single5:filtered"},
+                    {"text": "🚀 4 Slips (Safe Only)", "callback_data": f"port:{code}:4:filtered"},
                     {"text": "⚡ 4 Slips (Raw All)", "callback_data": f"port:{code}:4:unfiltered"}
                 ],
                 [
-                    {"text": "🗑️ /remove (15 Games)", "callback_data": f"rem:{code}:15:games:1"},
-                    {"text": "⚡ /edit (15 Games)", "callback_data": f"edt:{code}:15:games:1"}
+                    {"text": "✂️ /remove Safe Core", "callback_data": f"rem:{code}:15:games:1"},
+                    {"text": "⚡ /edit Upgraded", "callback_data": f"edt:{code}:15:games:1"}
                 ]
             ]
             keyboard = {"inline_keyboard": keyboard_rows}
@@ -1913,9 +1915,63 @@ class StatIQTelegramBot:
                         num_tickets=num_t, confirmed_action="OVERRIDE"
                     )
 
-    # ─────────────────────────────────────────────────────────────────────────
-    # Text Message Parser
-    # ─────────────────────────────────────────────────────────────────────────
+    @staticmethod
+    def _parse_multi_ticket_intent(text: str) -> Optional[Dict[str, Any]]:
+        """
+        Extracts multi-ticket count and target odds from natural language or commands.
+        Handles:
+          - '2x 10odds', '2x 10 odds', '2x 10', '2 * 10 odds' -> count=2, target_odds=10.0
+          - '2 tickets 10 odds', '2 slips 10 odds' -> count=2, target_odds=10.0
+          - '10 odds 2 tickets', '10 odds 2x', '10x 2 tickets' -> count=2, target_odds=10.0
+          - '/2x10', '/2x10odds', '/2x5', '/2x5odds', '/3x10' -> count=2, target_odds=10.0 or 5.0
+          - '/duo 10', '/duo 10odds', '/duo 10x' -> count=2, target_odds=10.0 (duo specifies 2)
+          - '/duo 5', '/duo 5odds' -> count=2, target_odds=5.0
+          - '/duo 2', '/duo 2odds' -> count=2, target_odds=2.0
+          - '/duo 5 10', '/duo 5 and 10' -> distinct targets [5.0, 10.0]
+        """
+        raw = text.strip()
+        low = raw.lower()
+
+        # Pattern 0: Direct shortcut commands like /2x10, /2x10odds, /2x5, /2x5odds, /3x10
+        m_short = re.match(r"^/(\d+)\s*[xX*]\s*(\d+\.?\d*)(?:odds|x)?\b", low)
+        if m_short:
+            cnt = int(m_short.group(1))
+            odds_val = float(m_short.group(2))
+            return {"type": "UNIFORM", "count": max(1, min(4, cnt)), "target_odds": odds_val, "targets": [odds_val] * cnt}
+
+        # Pattern 1: Count x Odds e.g. "2x 10odds", "2x 10 odds", "2x 10", "2 * 10", "2 tickets 10 odds", "2 slips 10 odds"
+        m1 = re.search(r"(\d+)\s*(?:x|\*|tickets?|slips?|variants?)\s*(?:of\s+)?(\d+\.?\d*)\s*(?:odds?|x)?", low)
+        if m1:
+            cnt = int(m1.group(1))
+            odds_val = float(m1.group(2))
+            if 1.2 <= odds_val <= 100.0 and 1 <= cnt <= 6:
+                return {"type": "UNIFORM", "count": max(1, min(4, cnt)), "target_odds": odds_val, "targets": [odds_val] * cnt}
+
+        # Pattern 2: Odds then Count e.g. "10 odds 2 tickets", "10 odds 2x", "10x 2 tickets", "10 odds 2 slips"
+        m2 = re.search(r"(\d+\.?\d*)\s*(?:odds?|x)?\s*(?:for\s+)?(\d+)\s*(?:x|\*|tickets?|slips?|variants?)", low)
+        if m2:
+            odds_val = float(m2.group(1))
+            cnt = int(m2.group(2))
+            if 1.2 <= odds_val <= 100.0 and 1 <= cnt <= 6:
+                return {"type": "UNIFORM", "count": max(1, min(4, cnt)), "target_odds": odds_val, "targets": [odds_val] * cnt}
+
+        # Pattern 3: Duo / Dual commands e.g. /duo 10, /duo 5, /duo 5 10, /duo
+        if any(low.startswith(cmd) for cmd in [
+            "/duo", "/5and10", "/10and5", "/5n10", "/10n5", "/5_10", "/10_5",
+            "/combo", "/comboslip", "/dual", "/splitodds", "/twin"
+        ]):
+            cmd_prefix = low.split()[0]
+            rest_of_cmd = low[len(cmd_prefix):].strip()
+            nums = [float(n) for n in re.findall(r"(\d+\.?\d*)", rest_of_cmd)]
+            if len(nums) >= 2:
+                return {"type": "DISTINCT", "targets": nums[:4]}
+            elif len(nums) == 1:
+                odds_val = nums[0]
+                return {"type": "UNIFORM", "count": 2, "target_odds": odds_val, "targets": [odds_val, odds_val]}
+            else:
+                return {"type": "DISTINCT", "targets": [5.0, 10.0]}
+
+        return None
 
     def process_message(self, message: Dict[str, Any]):
         """Parses incoming text messages and routes to the correct handler."""
@@ -1965,20 +2021,35 @@ class StatIQTelegramBot:
             self.handle_rollover_command(chat_id)
             return
 
-        # 4b. Simultaneous Multi-Multiplier Slips: /duo, /5and10, /10and5, /5n10, /10n5, /combo, /trio
-        # Simultaneously books 1x 5.0x + 1x 10.0x with STRICT ZERO-OVERLAP
-        if any(text.lower().startswith(cmd) for cmd in [
-            "/duo", "/5and10", "/10and5", "/5n10", "/10n5", "/5_10", "/10_5",
-            "/combo", "/comboslip", "/dual", "/splitodds", "/twin"
-        ]):
-            targets = [float(n) for n in re.findall(r"\b(\d+\.?\d*)\b", text)]
-            if len(targets) < 2:
-                targets = [5.0, 10.0]
+        # 4a. Natural Multi-Ticket Intent Parser
+        # Handles user patterns:
+        #   - "2x 10odds", "2x 10 odds", "2x 10", "2 * 10 odds", "2 tickets 10 odds"
+        #   - "10 odds 2 tickets", "10 odds 2x", "10x 2 tickets", "10 odds 2 slips"
+        #   - "/2x10", "/2x10odds", "/2x5", "/2x5odds", "/3x10"
+        #   - "/duo 10", "/duo 10 odds", "/duo 5", "/duo 2", "/duo 5 10", "/duo"
+        #   - "/trio", "/3slips"
+        multi_intent = self._parse_multi_ticket_intent(text)
+        if multi_intent:
+            targets = multi_intent.get("targets") or [5.0, 10.0]
             self.handle_duo_command(chat_id, targets=targets)
             return
 
         if text.lower().startswith("/trio") or text.lower().startswith("/3slips"):
             self.handle_duo_command(chat_id, targets=[5.0, 5.0, 10.0])
+            return
+
+        # 4b. Multi-Multiplier Slips: /duo, /5and10, /10and5, /5n10, /10n5, /5_10, /10_5
+        # Simultaneously books multi-target slips with STRICT ZERO-OVERLAP
+        if any(text.lower().startswith(cmd) for cmd in [
+            "/duo", "/5and10", "/10and5", "/5n10", "/10n5", "/5_10", "/10_5",
+            "/combo", "/comboslip", "/dual", "/splitodds", "/twin"
+        ]):
+            targets = [float(n) for n in re.findall(r"(\d+\.?\d*)", text[4:])]
+            if len(targets) == 1:
+                targets = [targets[0], targets[0]]
+            elif len(targets) < 2:
+                targets = [5.0, 10.0]
+            self.handle_duo_command(chat_id, targets=targets)
             return
 
         # 3. /odds <target_odds> [num_tickets] OR multi-odds (e.g. /odds 5 10)
@@ -1996,7 +2067,10 @@ class StatIQTelegramBot:
 
             is_two = any(k in rest for k in ["2 ticket", "2 variant", "2 slip", "two ticket", "two variant", "two slip", " 2 "]) or rest.startswith("2")
             num_tickets = 2 if is_two else 1
-            self.handle_odds_command(chat_id, val, num_tickets=num_tickets)
+            if num_tickets > 1:
+                self.handle_duo_command(chat_id, targets=[val] * num_tickets)
+            else:
+                self.handle_odds_command(chat_id, val, num_tickets=1)
             return
 
         # Shortcuts: /2odds, /5odds, /10odds, /20odds [num_tickets]
@@ -2011,7 +2085,10 @@ class StatIQTelegramBot:
                 return
             is_two = any(k in rest for k in ["2 ticket", "2 variant", "2 slip", "two ticket", "two variant", "two slip", " 2 "]) or rest.startswith("2")
             num_tickets = 2 if is_two else 1
-            self.handle_odds_command(chat_id, val, num_tickets=num_tickets)
+            if num_tickets > 1:
+                self.handle_duo_command(chat_id, targets=[val] * num_tickets)
+            else:
+                self.handle_odds_command(chat_id, val, num_tickets=1)
             return
 
         # 4. /games <count> [num_tickets]
@@ -2025,13 +2102,25 @@ class StatIQTelegramBot:
             return
 
         # 5. /portfolio (or alias /split, /permute, /distribute): Multi-ticket investment portfolio
-        # Examples: /portfolio CODE | /portfolio CODE 2 | /portfolio CODE 4 | /portfolio CODE filtered
+        # Examples: /portfolio CODE | /portfolio CODE 2x10 | /portfolio CODE 2x5 | /portfolio CODE filtered
         port_match = re.match(r"^/(?:portfolio|split|permute|distribute)\s+([A-Za-z0-9]+)(.*)", text, re.IGNORECASE)
         if port_match:
             code = port_match.group(1).upper()
             rest = port_match.group(2).lower()
-            target_port = "2_SLIPS" if any(k in rest for k in ["2", "single", "two", "1x"]) else "4_SLIPS"
-            filter_r = any(k in rest for k in ["filter", "safe", "clean", "purge"])
+            if "2x10" in rest or "2x 10" in rest or "10x" in rest or "10 odds" in rest:
+                target_port = "2X_10ODDS"
+            elif "2x5" in rest or "2x 5" in rest or "5x" in rest or "5 odds" in rest:
+                target_port = "2X_5ODDS"
+            elif "trio" in rest or "3" in rest:
+                target_port = "TRIO"
+            elif any(k in rest for k in ["single", "core", "1x"]):
+                target_port = "SINGLE_5ODDS"
+            elif "4" in rest:
+                target_port = "4_SLIPS"
+            else:
+                target_port = "2_SLIPS" if any(k in rest for k in ["2", "two"]) else "4_SLIPS"
+
+            filter_r = "unfiltered" if any(k in rest for k in ["raw", "unfiltered", "all"]) else "filtered"
             self.handle_portfolio_command(chat_id, code=code, target_portfolio=target_port, filter_risky=filter_r)
             return
 

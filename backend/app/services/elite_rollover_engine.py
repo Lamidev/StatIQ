@@ -212,7 +212,15 @@ class EliteRolloverEngine:
                 "northern ireland", "wales", "cymru", "cyprus cup", "slovensky pohar", "slovakia cup",
                 "kosovo", "albania", "macedonia", "montenegro", "bosnia", "latvia", "lithuania", "estonia",
                 "belarus", "moldova", "luxembourg", "malta", "faroe islands",
-                "3. liga", "norway 1.", "norway 2.", "1. divisjon", "sweden division 1"
+                "3. liga", "norway 1.", "norway 2.", "1. divisjon", "sweden division 1",
+                # Non-league / FA Trophy / Preliminary Qualifiers
+                "atherton", "collieries", "spennymoor", "harborough", "fylde", "aldershot", "tadley", "calleva",
+                "merthyr", "stamford afc", "bedford", "fa trophy", "qualification round", "preliminary round",
+                "fa cup qualifying", "fa cup, qualification", "phonix lubeck", "kickers emden", "lokeren temse", "aec mons",
+                # Obscure lower-tier leagues
+                "liga 2", "copa peru", "cantolao", "cs santos",
+                "botola 2", "difaa hassani", "tetouan",
+                "usl", "usl-1", "usl league one", "corpus christi", "richmond kickers"
             ]
             if any(t in comb_name_str for t in bad_tokens):
                 continue
@@ -1740,13 +1748,13 @@ class EliteRolloverEngine:
                     slip_legs = cls.assemble_optimal_rollover_slip(unclaimed, target_odds=t_odds)
                 else:
                     if t_odds >= 18.0:
-                        min_l, max_l = 10, 13
+                        min_l, max_l = 10, 14
                     elif t_odds >= 14.0:
-                        min_l, max_l = 8, 11
-                    elif t_odds >= 9.0:
-                        min_l, max_l = 7, 9
+                        min_l, max_l = 9, 13
+                    elif t_odds >= 8.5:
+                        min_l, max_l = 8, 12
                     elif t_odds >= 4.5:
-                        min_l, max_l = 5, 7
+                        min_l, max_l = 5, 8
                     else:
                         min_l, max_l = 3, 5
                     slip_legs = cls.assemble_optimal_accumulator_slip(
@@ -1787,7 +1795,7 @@ class EliteRolloverEngine:
     ) -> List[Dict[str, Any]]:
         """
         Unified On-Demand Multi-Target Generator (e.g. 5.0x + 10.0x simultaneously):
-        Guarantees STRICT ZERO-OVERLAP between the 5.0x and 10.0x slips.
+        Guarantees STRICT ZERO-OVERLAP between all generated slips.
         Uses the exact same Elite Vetted Selection Engine as the 10:00 AM daily automation.
         """
         raw_events = await cls.fetch_sportybet_today_events(max_pages=20)
@@ -1812,11 +1820,11 @@ class EliteRolloverEngine:
                 break
 
             if t_odds >= 14.0:
-                min_l, max_l = 8, 11
-            elif t_odds >= 9.0:
-                min_l, max_l = 7, 9
+                min_l, max_l = 9, 13
+            elif t_odds >= 8.5:
+                min_l, max_l = 8, 12
             elif t_odds >= 4.5:
-                min_l, max_l = 5, 7
+                min_l, max_l = 5, 8
             else:
                 min_l, max_l = 3, 5
 
@@ -1839,14 +1847,18 @@ class EliteRolloverEngine:
             comb_prob = round(math.prod(leg["model_probability"] for leg in slip_legs) * 100.0, 1)
             b_code, s_url = await cls._request_sportybet_share_code(slip_legs)
 
+            # Check if multiple slips share the same target odds (e.g. 2x 10.0x or 2x 5.0x)
+            same_target_count = sum(1 for t in targets if abs(t - t_odds) < 0.5)
+            variant_suffix = f" (Variant #{idx + 1})" if same_target_count > 1 else ""
+
             if 4.0 <= t_odds <= 6.5:
-                title = "🎯 5.0x Precision Multiplier"
+                title = f"🎯 5.0x Precision Multiplier{variant_suffix}"
             elif 8.5 <= t_odds <= 12.0:
-                title = "🚀 10.0x Mega Multiplier"
+                title = f"🚀 10.0x Mega Multiplier{variant_suffix}"
             elif 1.8 <= t_odds <= 2.5:
-                title = "🛡️ 2.0x Rollover Slip"
+                title = f"🛡️ 2.0x Rollover Slip{variant_suffix}"
             else:
-                title = f"🎯 {t_odds:.1f}x Multiplier"
+                title = f"🎯 {t_odds:.1f}x Multiplier{variant_suffix}"
 
             results.append({
                 "ticket_index": idx + 1,

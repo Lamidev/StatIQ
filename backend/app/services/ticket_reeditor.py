@@ -378,21 +378,29 @@ def _is_volatile_fixture(sel: Dict[str, Any]) -> Tuple[bool, str]:
         return True, "Nordic lower regional tier"
 
     # 4. South American volatile state / lower tiers
-    if any(k in comb for k in ["carioca", "serie b2", "serie c", "serie d", "copa rio", "paulista a3", "paulista a2", "primera c", "primera d", "torneo federal"]):
-        return True, "Volatile lower-tier regional league"
+    if any(k in comb for k in [
+        "carioca", "serie b2", "serie c", "serie d", "copa rio", "paulista a3", "paulista a2", "primera c", "primera d", "torneo federal",
+        "liga 2", "copa peru", "cantolao", "cs santos"
+    ]):
+        return True, "Volatile South American lower-tier / regional league"
 
-    # 5. European Non-League / Regional Tiers
+    # 5. European Non-League / Regional / Qualifying Rounds
     if any(k in comb for k in [
         "tercera", "regionaliga", "regionalliga", "oberliga", "landesliga", "stadtliga",
-        "isthmian", "northern premier", "southern league", "national league north", "national league south",
-        "division 3", "division 4", "san marino", "armenia", "andorra", "gibraltar"
+        "isthmian", "northern premier", "southern league", "southern premier", "national league", "national league north", "national league south",
+        "division 3", "division 4", "san marino", "armenia", "andorra", "gibraltar",
+        "fa cup, qualification", "fa cup qualifying", "fa trophy", "qualification round", "preliminary round",
+        "atherton", "collieries", "spennymoor", "harborough", "fylde", "merthyr", "stamford afc", "bedford", "tadley", "calleva",
+        "phonix lubeck", "kickers emden", "lokeren temse", "aec mons", "royal charleroi sc"
     ]):
-        return True, "Low-tier regional/amateur competition"
+        return True, "Low-tier regional/amateur competition or qualification preliminary"
 
     # 6. Obscure Domestic Preliminary Cups & Unpredictable Low-Tier Flights
     if any(k in comb for k in [
         "j.league cup", "j-league cup", "emperor cup", "emperor's cup", "j2 league", "j3 league",
         "kenya", "kakamega", "tanzania", "uganda", "nigeria", "ghana", "algeria", "temouchent", "rouissat",
+        "morocco", "botola 2", "difaa hassani", "tetouan",
+        "usl", "usl-1", "usl championship", "usl league one", "corpus christi", "richmond kickers",
         "kosovo", "albania", "macedonia", "montenegro", "bosnia", "cyprus cup", "slovensky pohar", "slovakia cup",
         "norway 1.", "norway 2.", "1. divisjon", "thailand", "thai league", "vietnam", "malaysia", "indonesia",
         "dimayor", "torneo dimayor", "copa dimayor", "copa colombia", "colombia b", "primera b",
@@ -580,22 +588,19 @@ async def score_selection(
         }
 
     is_volatile, vol_msg = _is_volatile_fixture(sel)
-    # Market-First Playability Audit: If bettor picked a forgiving line (Double Chance, Over 1.5,
-    # Both Halves Under 1.5: NO, Team Over 0.5, etc.), do NOT auto-purge just because of competition tier.
     if is_volatile and not allow_volatile_override:
-        if not _is_forgiving_market(sel):
-            return {
-                **sel,
-                "estimated_prob": 0.0,
-                "composite_safety_score": 0.0,
-                "classification": "RISKY",
-                "conviction_tier": "TRAP_PURGED",
-                "keep": False,
-                "is_expired": False,
-                "drop_reason": f"Volatile Competition Trap: {vol_msg}. Purged to protect ticket from erratic squad variance.",
-                "action": "VOLATILE_LEAGUE_PURGED",
-                "form_summary": f"Banned volatile/youth fixture: {vol_msg}"
-            }
+        return {
+            **sel,
+            "estimated_prob": 0.0,
+            "composite_safety_score": 0.0,
+            "classification": "RISKY",
+            "conviction_tier": "TRAP_PURGED",
+            "keep": False,
+            "is_expired": False,
+            "drop_reason": f"Volatile Competition Trap: {vol_msg}. Purged to protect ticket from erratic squad variance.",
+            "action": "VOLATILE_LEAGUE_PURGED",
+            "form_summary": f"Banned volatile/youth fixture: {vol_msg}"
+        }
 
     mkt = str(sel.get("market_name", "Match Result"))
     pick = str(sel.get("selection_name", "1"))
@@ -726,7 +731,7 @@ async def score_selection(
                 form_notes.append(f"Underdog pick against {fav_team}")
 
         # ── CHECK 3: DOUBLE CHANCE '12' (HOME OR AWAY) ──
-        elif "12" in p_lower and draw_prob >= 0.24:
+        elif ("12" in p_lower or "home or away" in p_lower or "1 or 2" in p_lower or "1/2" in p_lower or "12" in m_lower or "home or away" in m_lower) and draw_prob >= 0.20:
             if mode_upper == "EDIT":
                 dc_cand = intel.get("double_chance_fav")
                 if dc_cand and float(dc_cand.get("odds", 0)) >= 1.15:
@@ -836,7 +841,7 @@ async def score_selection(
             else:
                 is_data_validated = (
                     h2h_confirms_scoring or
-                    (tot_exp >= 2.40 and odds <= 1.50) or
+                    (tot_exp >= 2.40 and odds <= 1.50 and (n_meetings >= 2 or is_high_tempo)) or
                     (tot_exp >= 2.25 and is_high_tempo) or
                     has_dominant_offense
                 )
@@ -1456,65 +1461,70 @@ async def re_edit_ticket(
         fixture_usage_count: Dict[str, int] = {}
         assigned_markets_per_fixture: Dict[str, set] = {}
 
-        for t_idx in range(num_t):
-            primary_bucket = ticket_buckets[t_idx]
-            t_final = []
+        if target_mode == "ODDS" and target_odds > 1.05:
+            # ── DEDICATED KNAPSACK ACCUMULATOR PARTITIONING FOR ODDS MODE ──
+            # Guarantees each ticket reaches target_odds (floor = target_odds * 0.95)
+            # and enforces 100% strict zero-overlap across slips.
+            overall_used_keys = set()
+            t_floor = target_odds * 0.95
+            t_ceiling = target_odds * 1.15
 
-            for cand in primary_bucket:
-                f_key = _get_f_key(cand)
-                if fixture_usage_count.get(f_key, 0) == 0:
-                    t_final.append(cand)
-                    fixture_usage_count[f_key] = 1
-                    assigned_markets_per_fixture.setdefault(f_key, set()).add(str(cand.get("selection_name")).strip().lower())
-                    if target_mode == "GAMES" and effective_target_games > 0 and len(t_final) >= effective_target_games:
-                        break
-
-            if target_mode == "GAMES" and effective_target_games > 0 and len(t_final) < effective_target_games:
-                needed = effective_target_games - len(t_final)
-                for other_idx, other_bucket in enumerate(ticket_buckets):
-                    if other_idx == t_idx:
-                        continue
-                    candidates_to_borrow = sorted(
-                        other_bucket,
-                        key=lambda x: (1 if x.get("conviction_tier") == "ANCHOR" else 0, float(x.get("estimated_prob", 0.0))),
-                        reverse=True
-                    )
-                    for cand in candidates_to_borrow:
-                        f_key = _get_f_key(cand)
-                        current_count = fixture_usage_count.get(f_key, 0)
-                        is_anchor = (cand.get("conviction_tier") == "ANCHOR" or float(cand.get("estimated_prob", 0.0)) >= 0.85)
-                        max_allowed_for_cand = num_t if is_anchor else (2 if num_t >= 3 else 1)
-
-                        is_already_in_ticket = any(_get_f_key(x) == f_key for x in t_final)
-                        if not is_already_in_ticket:
-                            if mode in ("AUDITOR", "EDIT") and current_count < max_allowed_for_cand:
-                                diversified_cand = _derive_alternative_market(cand, variant_seed=t_idx)
-                                t_final.append(diversified_cand)
-                                fixture_usage_count[f_key] = current_count + 1
-                                assigned_markets_per_fixture.setdefault(f_key, set()).add(str(diversified_cand.get("selection_name")).strip().lower())
-                                needed -= 1
-                            elif mode == "REMOVE" and current_count < max_allowed_for_cand:
-                                t_final.append(cand)
-                                fixture_usage_count[f_key] = current_count + 1
-                                assigned_markets_per_fixture.setdefault(f_key, set()).add(str(cand.get("selection_name")).strip().lower())
-                                needed -= 1
-
-                            if needed <= 0:
-                                break
-                    if needed <= 0:
-                        break
-
-            if effective_target_games > 0 and len(t_final) > effective_target_games:
-                t_final = t_final[:effective_target_games]
-            elif len(t_final) > 40:
-                t_final = t_final[:40]
-
-            if target_mode == "ODDS" and target_odds > 1.05:
+            for t_idx in range(num_t):
+                t_final = []
                 curr_acc = 1.0
-                for c in t_final:
-                    curr_acc *= float(c.get("estimated_odds") or c.get("odds") or 1.25)
 
-                if curr_acc < (target_odds * 0.95):
+                # Strictly select from unclaimed candidates across all prior slips
+                available_cands = [c for c in sorted_candidates if _get_f_key(c) not in overall_used_keys]
+                for cand in available_cands:
+                    f_key = _get_f_key(cand)
+                    if f_key in overall_used_keys:
+                        continue
+                    leg_odd = float(cand.get("odds") or cand.get("estimated_odds") or 1.25)
+                    if leg_odd < 1.05:
+                        continue
+
+                    # Don't overshoot ceiling excessively unless needed to make minimum legs
+                    if (curr_acc * leg_odd) > (t_ceiling * 1.08) and len(t_final) >= 3:
+                        continue
+
+                    t_final.append(cand)
+                    overall_used_keys.add(f_key)
+                    curr_acc *= leg_odd
+
+                    if curr_acc >= t_floor and len(t_final) >= 2:
+                        break
+
+                slip_odds = 1.0
+                slip_prob = 0.0
+                for s in t_final:
+                    o = float(s.get("estimated_odds") or s.get("odds") or 1.25)
+                    p = float(s.get("estimated_prob") or 0.80)
+                    slip_odds *= o
+                    slip_prob += p
+
+                portfolio_slips.append({
+                    "ticket_index": t_idx + 1,
+                    "final_count": len(t_final),
+                    "final_selections": t_final,
+                    "new_total_odds": round(slip_odds, 2),
+                    "avg_win_prob": round(slip_prob / max(1, len(t_final)), 3)
+                })
+        else:
+            for t_idx in range(num_t):
+                primary_bucket = ticket_buckets[t_idx]
+                t_final = []
+
+                for cand in primary_bucket:
+                    f_key = _get_f_key(cand)
+                    if fixture_usage_count.get(f_key, 0) == 0:
+                        t_final.append(cand)
+                        fixture_usage_count[f_key] = 1
+                        assigned_markets_per_fixture.setdefault(f_key, set()).add(str(cand.get("selection_name")).strip().lower())
+                        if effective_target_games > 0 and len(t_final) >= effective_target_games:
+                            break
+
+                if effective_target_games > 0 and len(t_final) < effective_target_games:
+                    needed = effective_target_games - len(t_final)
                     for other_idx, other_bucket in enumerate(ticket_buckets):
                         if other_idx == t_idx:
                             continue
@@ -1532,45 +1542,42 @@ async def re_edit_ticket(
                             is_already_in_ticket = any(_get_f_key(x) == f_key for x in t_final)
                             if not is_already_in_ticket:
                                 if mode in ("AUDITOR", "EDIT") and current_count < max_allowed_for_cand:
-                                    diversified_cand = _derive_alternative_market(cand)
+                                    diversified_cand = _derive_alternative_market(cand, variant_seed=t_idx)
                                     t_final.append(diversified_cand)
                                     fixture_usage_count[f_key] = current_count + 1
-                                    curr_acc *= float(diversified_cand.get("estimated_odds") or diversified_cand.get("odds") or 1.25)
+                                    assigned_markets_per_fixture.setdefault(f_key, set()).add(str(diversified_cand.get("selection_name")).strip().lower())
+                                    needed -= 1
                                 elif mode == "REMOVE" and current_count < max_allowed_for_cand:
                                     t_final.append(cand)
                                     fixture_usage_count[f_key] = current_count + 1
-                                    curr_acc *= float(cand.get("estimated_odds") or cand.get("odds") or 1.25)
+                                    assigned_markets_per_fixture.setdefault(f_key, set()).add(str(cand.get("selection_name")).strip().lower())
+                                    needed -= 1
 
-                                if curr_acc >= (target_odds * 0.95) and len(t_final) >= 2:
+                                if needed <= 0:
                                     break
-                        if curr_acc >= (target_odds * 0.95) and len(t_final) >= 2:
+                        if needed <= 0:
                             break
 
-                trimmed = []
-                acc_check = 1.0
-                for cand in t_final:
-                    leg_odd = float(cand.get("estimated_odds") or cand.get("odds") or 1.25)
-                    trimmed.append(cand)
-                    acc_check *= leg_odd
-                    if acc_check >= (target_odds * 0.95) and len(trimmed) >= 2:
-                        break
-                t_final = trimmed
+                if effective_target_games > 0 and len(t_final) > effective_target_games:
+                    t_final = t_final[:effective_target_games]
+                elif len(t_final) > 40:
+                    t_final = t_final[:40]
 
-            slip_odds = 1.0
-            slip_prob = 0.0
-            for s in t_final:
-                o = float(s.get("estimated_odds") or s.get("odds") or 1.25)
-                p = float(s.get("estimated_prob") or 0.80)
-                slip_odds *= o
-                slip_prob += p
+                slip_odds = 1.0
+                slip_prob = 0.0
+                for s in t_final:
+                    o = float(s.get("estimated_odds") or s.get("odds") or 1.25)
+                    p = float(s.get("estimated_prob") or 0.80)
+                    slip_odds *= o
+                    slip_prob += p
 
-            portfolio_slips.append({
-                "ticket_index": t_idx + 1,
-                "final_count": len(t_final),
-                "final_selections": t_final,
-                "new_total_odds": round(slip_odds, 2),
-                "avg_win_prob": round(slip_prob / max(1, len(t_final)), 3)
-            })
+                portfolio_slips.append({
+                    "ticket_index": t_idx + 1,
+                    "final_count": len(t_final),
+                    "final_selections": t_final,
+                    "new_total_odds": round(slip_odds, 2),
+                    "avg_win_prob": round(slip_prob / max(1, len(t_final)), 3)
+                })
 
     primary_slip = portfolio_slips[0] if portfolio_slips else {
         "ticket_index": 1,
@@ -1674,49 +1681,69 @@ async def split_ticket_into_portfolio(
     t_mode = str(target_portfolio).upper().strip()
     if t_mode in ("TRIO", "3", "3_SLIPS", "THREE"):
         slip_configs = [
-            {"id": 1, "title": "5.0x Precision Multiplier (Variant A)", "target_odds": 5.00, "floor": 4.60, "ceiling": 6.20, "max_legs": 7, "block": "EVEN"},
-            {"id": 2, "title": "5.0x Precision Multiplier (Variant B)", "target_odds": 5.00, "floor": 4.60, "ceiling": 6.20, "max_legs": 7, "block": "ODD"},
-            {"id": 3, "title": "10.0x Mega Multiplier", "target_odds": 10.00, "floor": 9.20, "ceiling": 12.50, "max_legs": 9, "block": "MIX"},
+            {"id": 1, "title": "5.0x Precision Multiplier (Variant A)", "target_odds": 5.00, "floor": 4.60, "ceiling": 6.20, "max_legs": 8, "block": "EVEN"},
+            {"id": 2, "title": "5.0x Precision Multiplier (Variant B)", "target_odds": 5.00, "floor": 4.60, "ceiling": 6.20, "max_legs": 8, "block": "ODD"},
+            {"id": 3, "title": "10.0x Mega Multiplier", "target_odds": 10.00, "floor": 9.20, "ceiling": 12.50, "max_legs": 13, "block": "MIX"},
         ]
     elif t_mode in ("2X_5ODDS", "2X5", "5X_ONLY"):
         slip_configs = [
-            {"id": 1, "title": "5.0x Precision Multiplier (Variant A)", "target_odds": 5.00, "floor": 4.60, "ceiling": 6.20, "max_legs": 7, "block": "EVEN"},
-            {"id": 2, "title": "5.0x Precision Multiplier (Variant B)", "target_odds": 5.00, "floor": 4.60, "ceiling": 6.20, "max_legs": 7, "block": "ODD"},
+            {"id": 1, "title": "5.0x Precision Multiplier (Variant A)", "target_odds": 5.00, "floor": 4.60, "ceiling": 6.20, "max_legs": 8, "block": "EVEN"},
+            {"id": 2, "title": "5.0x Precision Multiplier (Variant B)", "target_odds": 5.00, "floor": 4.60, "ceiling": 6.20, "max_legs": 8, "block": "ODD"},
         ]
     elif t_mode in ("2X_10ODDS", "2X10", "10X_ONLY"):
         slip_configs = [
-            {"id": 1, "title": "10.0x Mega Multiplier (Variant 1)", "target_odds": 10.00, "floor": 9.20, "ceiling": 12.50, "max_legs": 9, "block": "EVEN"},
-            {"id": 2, "title": "10.0x Mega Multiplier (Variant 2)", "target_odds": 10.00, "floor": 9.20, "ceiling": 12.50, "max_legs": 9, "block": "ODD"},
+            {"id": 1, "title": "10.0x Mega Multiplier (Variant 1)", "target_odds": 10.00, "floor": 9.20, "ceiling": 12.50, "max_legs": 13, "block": "EVEN"},
+            {"id": 2, "title": "10.0x Mega Multiplier (Variant 2)", "target_odds": 10.00, "floor": 9.20, "ceiling": 12.50, "max_legs": 13, "block": "ODD"},
         ]
     elif t_mode in ("SINGLE_5ODDS", "SINGLE", "1X5", "CORE", "SINGLE5", "SINGLE_5", "1X_5ODDS"):
         slip_configs = [
-            {"id": 1, "title": "5.0x Clean Core Multiplier", "target_odds": 5.00, "floor": 4.60, "ceiling": 6.20, "max_legs": 7, "block": "TOP"},
+            {"id": 1, "title": "5.0x Clean Core Multiplier", "target_odds": 5.00, "floor": 4.60, "ceiling": 6.20, "max_legs": 8, "block": "TOP"},
         ]
     elif t_mode in ("2", "2_SLIPS", "TWO"):
         slip_configs = [
-            {"id": 1, "title": "5.0x Precision Multiplier (Variant A)", "target_odds": 5.00, "floor": 4.60, "ceiling": 6.20, "max_legs": 7, "block": "EVEN"},
-            {"id": 2, "title": "10.0x Mega Multiplier (Variant 1)", "target_odds": 10.00, "floor": 9.20, "ceiling": 12.50, "max_legs": 9, "block": "ODD"},
+            {"id": 1, "title": "5.0x Precision Multiplier (Variant A)", "target_odds": 5.00, "floor": 4.60, "ceiling": 6.20, "max_legs": 8, "block": "EVEN"},
+            {"id": 2, "title": "10.0x Mega Multiplier (Variant 1)", "target_odds": 10.00, "floor": 9.20, "ceiling": 12.50, "max_legs": 13, "block": "ODD"},
         ]
     else:  # Default: 4_SLIPS
         slip_configs = [
-            {"id": 1, "title": "5.0x Precision Multiplier (Variant A)", "target_odds": 5.00, "floor": 4.60, "ceiling": 6.20, "max_legs": 7, "block": "BLOCK_1"},
-            {"id": 2, "title": "5.0x Precision Multiplier (Variant B)", "target_odds": 5.00, "floor": 4.60, "ceiling": 6.20, "max_legs": 7, "block": "BLOCK_2"},
-            {"id": 3, "title": "10.0x Mega Multiplier (Variant 1)", "target_odds": 10.00, "floor": 9.20, "ceiling": 12.50, "max_legs": 9, "block": "BLOCK_3"},
-            {"id": 4, "title": "10.0x Mega Multiplier (Variant 2)", "target_odds": 10.00, "floor": 9.20, "ceiling": 12.50, "max_legs": 9, "block": "BLOCK_4"},
+            {"id": 1, "title": "5.0x Precision Multiplier (Variant A)", "target_odds": 5.00, "floor": 4.60, "ceiling": 6.20, "max_legs": 8, "block": "BLOCK_1"},
+            {"id": 2, "title": "5.0x Precision Multiplier (Variant B)", "target_odds": 5.00, "floor": 4.60, "ceiling": 6.20, "max_legs": 8, "block": "BLOCK_2"},
+            {"id": 3, "title": "10.0x Mega Multiplier (Variant 1)", "target_odds": 10.00, "floor": 9.20, "ceiling": 12.50, "max_legs": 13, "block": "BLOCK_3"},
+            {"id": 4, "title": "10.0x Mega Multiplier (Variant 2)", "target_odds": 10.00, "floor": 9.20, "ceiling": 12.50, "max_legs": 13, "block": "BLOCK_4"},
         ]
 
-    # Rank pool by statistical win probability & safe odds sweet-spot (1.18 - 1.45)
+    # Rank pool by statistical win probability, tier pedigree, and safe odds sweet-spot (1.18 - 1.45)
+    TIER1_LEAGUES = {
+        "premier league", "la liga", "serie a", "bundesliga", "ligue 1",
+        "uefa champions league", "uefa europa league", "eredivisie", "primeira liga", "championship"
+    }
+    JUGGERNAUTS = {
+        "bayern", "manchester city", "man city", "real madrid", "barcelona", "liverpool",
+        "inter", "arsenal", "paris saint-germain", "psg", "bayer leverkusen", "dortmund",
+        "borussia dortmund", "juventus", "chelsea", "roma", "atletico madrid"
+    }
+
     def _cand_rank(c):
         prob = float(c.get("estimated_prob") or 0.80)
         is_anchor = c.get("conviction_tier") == "ANCHOR"
         o = float(c.get("odds") or c.get("estimated_odds") or 1.25)
         sweet_spot = 0.05 if 1.18 <= o <= 1.45 else 0.0
-        return prob + (0.08 if is_anchor else 0.0) + sweet_spot
+
+        comb = f"{c.get('home_team', '')} {c.get('away_team', '')} {c.get('tournament_name', '')} {c.get('category_name', '')}".lower()
+        t1_bonus = 0.15 if any(lg in comb for lg in TIER1_LEAGUES) else 0.0
+        jug_bonus = 0.12 if any(jg in comb for jg in JUGGERNAUTS) else 0.0
+
+        # Don't let Asian Handicap probability inflation overshadow Tier-1 giants
+        mkt = str(c.get("market_name", "")).lower()
+        ah_discount = -0.10 if "handicap" in mkt else 0.0
+
+        return prob + (0.08 if is_anchor else 0.0) + sweet_spot + t1_bonus + jug_bonus + ah_discount
 
     ranked_pool = sorted(working_pool, key=_cand_rank, reverse=True)
 
     # Step 4: Permutation and Anti-Choke Point Block Knapsack
     fixture_usage: Dict[str, int] = collections.defaultdict(int)
+    overall_claimed_f_keys = set()
     portfolio_tickets = []
     adapter = SportyBetAdapter()
 
@@ -1767,7 +1794,7 @@ async def split_ticket_into_portfolio(
             for r_cand in slip_risky[:2]:
                 f_key = str(r_cand.get("event_id") or r_cand.get("game_id") or r_cand.get("home_team", ""))
                 leg_odd = float(r_cand.get("odds") or r_cand.get("estimated_odds") or 1.25)
-                if leg_odd >= 1.15 and f_key not in chosen_f_keys:
+                if leg_odd >= 1.15 and f_key not in chosen_f_keys and f_key not in overall_claimed_f_keys:
                     if (curr_multiplier * leg_odd) <= (t_ceiling * 1.08):
                         chosen_legs.append(r_cand)
                         chosen_f_keys.add(f_key)
@@ -1776,6 +1803,10 @@ async def split_ticket_into_portfolio(
         for cand in cand_candidates:
             f_key = str(cand.get("event_id") or cand.get("game_id") or cand.get("home_team", ""))
             if f_key in chosen_f_keys:
+                continue
+
+            # Strict zero overlap enforcement: if pool is large enough, do not reuse matches across slips
+            if f_key in overall_claimed_f_keys and len(ranked_pool) >= len(slip_configs) * 4:
                 continue
 
             leg_odd = float(cand.get("odds") or cand.get("estimated_odds") or 1.25)
@@ -1796,9 +1827,11 @@ async def split_ticket_into_portfolio(
                 break
 
         # Fallback expansion if target floor wasn't reached with the partitioned block:
+        # Prioritize completely unclaimed fixtures across the entire portfolio first!
         if curr_multiplier < t_floor:
-            unused_pool = [c for c in ranked_pool if str(c.get("event_id") or c.get("game_id") or c.get("home_team", "")) not in chosen_f_keys]
-            for cand in unused_pool:
+            # Pass A: strictly un-claimed fixtures
+            unused_fresh = [c for c in ranked_pool if str(c.get("event_id") or c.get("game_id") or c.get("home_team", "")) not in overall_claimed_f_keys and str(c.get("event_id") or c.get("game_id") or c.get("home_team", "")) not in chosen_f_keys]
+            for cand in unused_fresh:
                 f_key = str(cand.get("event_id") or cand.get("game_id") or cand.get("home_team", ""))
                 leg_odd = float(cand.get("odds") or cand.get("estimated_odds") or 1.25)
                 if leg_odd < 1.05:
@@ -1813,6 +1846,25 @@ async def split_ticket_into_portfolio(
                 if len(chosen_legs) >= t_max_legs:
                     break
 
+            # Pass B: if still under floor, allow lowest-usage fixtures
+            if curr_multiplier < t_floor and len(chosen_legs) < t_max_legs:
+                unused_pool = [c for c in ranked_pool if str(c.get("event_id") or c.get("game_id") or c.get("home_team", "")) not in chosen_f_keys]
+                unused_pool.sort(key=lambda x: fixture_usage[str(x.get("event_id") or x.get("game_id") or x.get("home_team", ""))])
+                for cand in unused_pool:
+                    f_key = str(cand.get("event_id") or cand.get("game_id") or cand.get("home_team", ""))
+                    leg_odd = float(cand.get("odds") or cand.get("estimated_odds") or 1.25)
+                    if leg_odd < 1.05:
+                        continue
+                    if (curr_multiplier * leg_odd) > (t_ceiling * 1.08):
+                        continue
+                    chosen_legs.append(cand)
+                    chosen_f_keys.add(f_key)
+                    curr_multiplier *= leg_odd
+                    if curr_multiplier >= t_floor and len(chosen_legs) >= 3:
+                        break
+                    if len(chosen_legs) >= t_max_legs:
+                        break
+
         if not chosen_legs:
             continue
 
@@ -1820,6 +1872,7 @@ async def split_ticket_into_portfolio(
         for cand in chosen_legs:
             f_key = str(cand.get("event_id") or cand.get("game_id") or cand.get("home_team", ""))
             fixture_usage[f_key] += 1
+            overall_claimed_f_keys.add(f_key)
 
         final_odds = round(curr_multiplier, 2)
         avg_prob = round(sum(float(x.get("estimated_prob", 0.80)) for x in chosen_legs) / len(chosen_legs) * 100.0, 1)
