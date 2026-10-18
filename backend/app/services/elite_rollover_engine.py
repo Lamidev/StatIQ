@@ -38,7 +38,7 @@ class EliteRolloverEngine:
     _daily_dispatched_event_ids = set()
 
     @classmethod
-    async def fetch_sportybet_today_events(cls, max_pages: int = 4) -> List[Dict[str, Any]]:
+    async def fetch_sportybet_today_events(cls, max_pages: int = 6) -> List[Dict[str, Any]]:
         """
         Directly queries SportyBet's wapConfigurableEventsByOrder endpoint with todayGames=True.
         Collects all unstarted fixtures playing today across all active tournaments.
@@ -48,21 +48,25 @@ class EliteRolloverEngine:
         if cls._today_cache and (now - cls._today_cache_time) < 60:
             return cls._today_cache
 
-        url = f"{cls.BASE_URL}/ng/factsCenter/wapConfigurableEventsByOrder"
+        import concurrent.futures
+        from app.services.sportybet_ingestion import SportyBetIngestionService
+
         all_events = []
         seen_event_ids = set()
 
-        async def _fetch_page(client, page):
+        def _fetch_page_sync(page: int) -> List[Dict[str, Any]]:
+            client = SportyBetIngestionService._get_client()
+            url = f"{cls.BASE_URL}/ng/factsCenter/wapConfigurableEventsByOrder"
             payload = {
                 "sportId": "sr:sport:1",
                 "pageNum": page,
-                "pageSize": 100,
+                "pageSize": 50,
                 "todayGames": True,
                 "withTwoUpMarket": True,
                 "withOneUpMarket": True
             }
             try:
-                r = await client.post(url, json=payload, timeout=6.0)
+                r = client.post(url, json=payload, timeout=10.0)
                 if r.status_code == 200:
                     data = r.json()
                     if data.get("bizCode") == 10000:
@@ -72,9 +76,9 @@ class EliteRolloverEngine:
             return []
 
         try:
-            async with httpx.AsyncClient(headers=cls.HEADERS) as client:
-                tasks = [_fetch_page(client, p) for p in range(1, max_pages + 1)]
-                results = await asyncio.gather(*tasks)
+            loop = asyncio.get_event_loop()
+            with concurrent.futures.ThreadPoolExecutor(max_workers=min(max_pages, 8)) as executor:
+                results = await loop.run_in_executor(None, lambda: list(executor.map(_fetch_page_sync, range(1, max_pages + 1))))
 
             for tournaments in results:
                 for t in tournaments:

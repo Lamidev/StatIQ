@@ -130,9 +130,9 @@ class RolloverCronScheduler:
                     dispatch_time = cfg.get("dispatch_time", "10:00")
                     last_run = cfg.get("last_run_date")
 
-                    # Check if today is an active day and current time matches dispatch_time
-                    if (current_day_code in active_days) and (current_time_str == dispatch_time) and (last_run != today_str):
-                        logger.info(f"[RolloverScheduler] Triggering scheduled 10:00 AM WAT Daily VIP Trio run for {current_day_code} ({today_str})...")
+                    # Check if today is an active day and current time matches or has passed dispatch_time
+                    if (current_day_code in active_days) and (current_time_str >= dispatch_time) and (last_run != today_str) and (now_wat.hour < 21):
+                        logger.info(f"[RolloverScheduler] Triggering scheduled Daily VIP run for {current_day_code} ({today_str} @ {current_time_str})...")
                         target_odds = float(cfg.get("target_odds", 2.00))
 
                         challenge_info = None
@@ -164,49 +164,55 @@ class RolloverCronScheduler:
                         )
                         loop.close()
 
-                        # Update run history & state
-                        cfg["last_run_date"] = today_str
-                        cfg["last_trio_result"] = trio_res
-                        primary_ticket = (trio_res.get("rollover_ticket") 
-                                          or trio_res.get("acca_5x_ticket")
-                                          or trio_res.get("acca_10x_ticket")
-                                          or trio_res.get("acca_20x_ticket"))
-                        cfg["last_ticket"] = primary_ticket
+                        # Update run history & state ONLY on SUCCESS
+                        is_success = (trio_res.get("status") == "SUCCESS")
+                        if is_success:
+                            cfg["last_run_date"] = today_str
+                            cfg["last_trio_result"] = trio_res
+                            primary_ticket = (trio_res.get("rollover_ticket") 
+                                              or trio_res.get("acca_5x_ticket")
+                                              or trio_res.get("acca_10x_ticket")
+                                              or trio_res.get("acca_20x_ticket"))
+                            cfg["last_ticket"] = primary_ticket
 
-                        history_entry = {
-                            "date": today_str,
-                            "time": current_time_str,
-                            "status": trio_res.get("status"),
-                            "unique_fixtures": trio_res.get("total_unique_fixtures", 0),
-                            "rollover_code": trio_res.get("rollover_ticket", {}).get("booking_code") if trio_res.get("rollover_ticket") else None,
-                            "acca_5x_code": trio_res.get("acca_5x_ticket", {}).get("booking_code") if trio_res.get("acca_5x_ticket") else None,
-                            "acca_10x_code": trio_res.get("acca_10x_ticket", {}).get("booking_code") if trio_res.get("acca_10x_ticket") else None,
-                            "acca_20x_code": trio_res.get("acca_20x_ticket", {}).get("booking_code") if trio_res.get("acca_20x_ticket") else None,
-                            "zero_overlap": trio_res.get("zero_overlap_guaranteed", True),
-                            "calendar_mode": trio_res.get("calendar_mode", "DAILY_VIP_BANKER_SUITE"),
-                            "campaign_mode": cfg.get("campaign_mode", "CONTINUOUS"),
-                            "stake": current_stake
-                        }
+                            history_entry = {
+                                "date": today_str,
+                                "time": current_time_str,
+                                "status": "SUCCESS",
+                                "unique_fixtures": trio_res.get("total_unique_fixtures", 0),
+                                "rollover_code": trio_res.get("rollover_ticket", {}).get("booking_code") if trio_res.get("rollover_ticket") else None,
+                                "acca_5x_code": trio_res.get("acca_5x_ticket", {}).get("booking_code") if trio_res.get("acca_5x_ticket") else None,
+                                "acca_10x_code": trio_res.get("acca_10x_ticket", {}).get("booking_code") if trio_res.get("acca_10x_ticket") else None,
+                                "acca_20x_code": trio_res.get("acca_20x_ticket", {}).get("booking_code") if trio_res.get("acca_20x_ticket") else None,
+                                "zero_overlap": trio_res.get("zero_overlap_guaranteed", True),
+                                "calendar_mode": trio_res.get("calendar_mode", "DAILY_VIP_BANKER_SUITE"),
+                                "campaign_mode": cfg.get("campaign_mode", "CONTINUOUS"),
+                                "stake": current_stake
+                            }
 
-                        # If Challenge mode, record day and progress counter
-                        if cfg.get("campaign_mode") == "CHALLENGE":
-                            curr_day = int(cfg.get("challenge_day_current", 1))
-                            tot_days = int(cfg.get("challenge_days", 10))
-                            history_entry["challenge_day"] = f"Day {curr_day} of {tot_days}"
-                            
-                            # Increment day for next run
-                            next_day = curr_day + 1
-                            cfg["challenge_day_current"] = next_day
-                            if curr_day >= tot_days:
-                                cfg["challenge_status"] = "COMPLETED"
-                                cfg["is_enabled"] = False
-                                logger.info(f"[RolloverScheduler] Reached final day {curr_day} of challenge. Marked COMPLETED.")
+                            # If Challenge mode, record day and progress counter
+                            if cfg.get("campaign_mode") == "CHALLENGE":
+                                curr_day = int(cfg.get("challenge_day_current", 1))
+                                tot_days = int(cfg.get("challenge_days", 10))
+                                history_entry["challenge_day"] = f"Day {curr_day} of {tot_days}"
+                                
+                                # Increment day for next run
+                                next_day = curr_day + 1
+                                cfg["challenge_day_current"] = next_day
+                                if curr_day >= tot_days:
+                                    cfg["challenge_status"] = "COMPLETED"
+                                    cfg["is_enabled"] = False
+                                    logger.info(f"[RolloverScheduler] Reached final day {curr_day} of challenge. Marked COMPLETED.")
 
-                        history = cfg.get("run_history", [])
-                        history.insert(0, history_entry)
-                        cfg["run_history"] = history[:30]  # Retain last 30 runs
-                        self.save_config(cfg)
-                        logger.info(f"[RolloverScheduler] Scheduled run completed with status: {trio_res.get('status')}")
+                            history = cfg.get("run_history", [])
+                            history.insert(0, history_entry)
+                            cfg["run_history"] = history[:30]  # Retain last 30 runs
+                            self.save_config(cfg)
+                            logger.info(f"[RolloverScheduler] Scheduled run completed successfully.")
+                        else:
+                            # Do NOT mark today as done or advance challenge day on failure!
+                            logger.warning(f"[RolloverScheduler] Scheduled run did not succeed ({trio_res.get('status')}: {trio_res.get('message')}). Retrying on next cycle.")
+                            time.sleep(30)
 
             except Exception as e:
                 logger.error(f"[RolloverScheduler] Error in cron tick: {e}")
