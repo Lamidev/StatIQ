@@ -325,6 +325,8 @@ class EliteRolloverEngine:
                     is_tier_2 = True
                 elif "greece" in c_lower and "super league" in t_lower:
                     is_tier_2 = True
+                elif "saudi" in c_lower and "pro league" in t_lower:
+                    is_tier_2 = True
                 elif any(k in comp_full for k in ["copa libertadores", "copa sudamericana", "afc champions league elite"]):
                     is_tier_2 = True
 
@@ -391,18 +393,18 @@ class EliteRolloverEngine:
             juggernaut_bonus = 45.0 if (fav_is_juggernaut and dominance_ratio >= 1.45 and not is_heavyweight_derby) else 0.0
 
             # Calibrated Dominant Favorite Gate:
-            # - Tier 1 (UEFA Europa, Conference, Champions, EPL, LaLiga, Serie A, etc.): Home/away favorites up to 2.30 with dominance >= 1.20
-            # - Tier 2: Established top flights & Championship (odds <= 2.25, dominance >= 1.22)
-            # - Tier 3: Recognized professional tiers (odds <= 2.20, dominance >= 1.25).
+            # - Tier 1 (UEFA Europa, Conference, Champions, EPL, LaLiga, Serie A, etc.): Home/away favorites up to 2.55 with dominance >= 1.18
+            # - Tier 2: Established top flights & Championship (odds <= 2.45, dominance >= 1.20)
+            # - Tier 3: Recognized professional tiers (odds <= 2.30, dominance >= 1.22).
             if is_tier_1:
-                fav_is_genuine_banker = (fav_odds <= 2.30 and dominance_ratio >= 1.20) or fav_is_juggernaut
-                min_dominance = 1.20
+                fav_is_genuine_banker = (fav_odds <= 2.55 and dominance_ratio >= 1.18) or fav_is_juggernaut
+                min_dominance = 1.18
             elif is_tier_2:
-                fav_is_genuine_banker = (fav_odds <= 2.25 and dominance_ratio >= 1.22) or (fav_is_juggernaut and dominance_ratio >= 1.20)
-                min_dominance = 1.22
+                fav_is_genuine_banker = (fav_odds <= 2.45 and dominance_ratio >= 1.20) or (fav_is_juggernaut and dominance_ratio >= 1.20)
+                min_dominance = 1.20
             else:
-                fav_is_genuine_banker = (fav_odds <= 2.20 and dominance_ratio >= 1.25) or (fav_is_juggernaut and dominance_ratio >= 1.20)
-                min_dominance = 1.25
+                fav_is_genuine_banker = (fav_odds <= 2.30 and dominance_ratio >= 1.22) or (fav_is_juggernaut and dominance_ratio >= 1.20)
+                min_dominance = 1.22
 
             # Evaluate each eligible low-variance market in the fixture
             for m in markets:
@@ -516,7 +518,8 @@ class EliteRolloverEngine:
                             sel_desc = "Over 1.5 Goals" if is_line_15 else "Over 2 Goals"
                             m_type = "OVER_15" if is_line_15 else "OVER_20"
                             stats_3p = evaluate_fixture_3pillar_metrics(h_team, a_team, f"Over/Under {1.5 if is_line_15 else 2.0}", sel_desc, odds)
-                            if prob >= 0.74 and stats_3p.get("composite_safety_score", 0.7) >= 0.65:
+                            min_prob = 0.70 if odds >= 1.28 else 0.74
+                            if prob >= min_prob and stats_3p.get("composite_safety_score", 0.7) >= 0.65:
                                 c_sc = float(stats_3p.get("composite_safety_score", 0.75))
                                 candidates.append({
                                     "event_id": eid,
@@ -1568,17 +1571,17 @@ class EliteRolloverEngine:
             pool_for_10x = unclaimed_10x
             excl_fids = ro_event_ids | acca5_fids
         else:
-            # Multi-Market Anchor Technique: share elite European anchors using strictly ALTERNATE low-variance cushions
-            acca5_keys = set(f"{leg['event_id']}:{leg.get('market_type')}" for leg in (acca5_legs or []))
-            alt_candidates = [c for c in banker_candidates if c["event_id"] in acca5_fids and f"{c['event_id']}:{c.get('market_type')}" not in acca5_keys]
+            # Multi-Market Anchor Technique (Lean Weekdays): share elite anchors using strictly ALTERNATE low-variance cushions
+            claimed_keys = set(f"{leg['event_id']}:{leg.get('market_type')}" for leg in ((ro_legs or []) + (acca5_legs or [])))
+            alt_candidates = [c for c in banker_candidates if f"{c['event_id']}:{c.get('market_type')}" not in claimed_keys]
             pool_for_10x = unclaimed_10x + alt_candidates
-            excl_fids = ro_event_ids
+            excl_fids = None
 
         acca10_legs = cls.assemble_optimal_accumulator_slip(
             pool_for_10x,
             target_odds=10.00,
-            min_legs=7,
-            max_legs=9,
+            min_legs=9,
+            max_legs=12,
             excluded_event_ids=excl_fids
         )
         if acca10_legs:
