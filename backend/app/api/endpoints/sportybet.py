@@ -63,7 +63,7 @@ def get_events(
     if competition_id:
         comp = db.execute(
             select(SportyBetCompetition).where(SportyBetCompetition.sporty_competition_id == competition_id)
-        ).scalar_one_or_none()
+        ).scalars().first()
         if comp:
             query = query.where(SportyBetEvent.competition_id == comp.id)
 
@@ -115,7 +115,7 @@ def get_event_detail(
         select(SportyBetEvent).where(
             (SportyBetEvent.sporty_event_id == event_id) | (SportyBetEvent.sporty_game_id == event_id)
         )
-    ).scalar_one_or_none()
+    ).scalars().first()
 
     if not ev:
         raise HTTPException(status_code=404, detail="SportyBet event not found in mirror DB")

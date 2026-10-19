@@ -39,7 +39,7 @@ class SportyBetValidator:
         # 1. Check local mirror
         ev = db.execute(
             select(SportyBetEvent).where(SportyBetEvent.sporty_event_id == sporty_event_id)
-        ).scalar_one_or_none()
+        ).scalars().first()
 
         if not ev:
             return False, f"Event {sporty_event_id} not found in SportyBet catalogue", None

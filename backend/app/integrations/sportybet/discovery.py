@@ -62,7 +62,7 @@ class SportyBetDiscoveryService:
             
             existing = db.execute(
                 select(SportyBetCompetition).where(SportyBetCompetition.sporty_competition_id == t_id)
-            ).scalar_one_or_none()
+            ).scalars().first()
 
             if existing:
                 existing.name = norm["name"]

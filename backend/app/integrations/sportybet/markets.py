@@ -56,7 +56,7 @@ class SportyBetMarketSyncService:
             if spec:
                 query = query.where(SportyBetMarket.specifier == spec)
 
-            existing_m = db.execute(query).scalar_one_or_none()
+            existing_m = db.execute(query).scalars().first()
 
             if existing_m:
                 existing_m.market_name = norm_m["market_name"]
@@ -95,7 +95,7 @@ class SportyBetMarketSyncService:
                         SportyBetOutcome.market_id == market_db_id,
                         SportyBetOutcome.sporty_outcome_id == o_id
                     )
-                ).scalar_one_or_none()
+                ).scalars().first()
 
                 new_odds = norm_o["odds"]
                 odds_changed = False

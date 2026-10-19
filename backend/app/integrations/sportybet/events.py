@@ -97,7 +97,7 @@ class SportyBetEventSyncService:
             ev_id = norm_ev["sporty_event_id"]
             existing_ev = db.execute(
                 select(SportyBetEvent).where(SportyBetEvent.sporty_event_id == ev_id)
-            ).scalar_one_or_none()
+            ).scalars().first()
 
             if existing_ev:
                 existing_ev.sporty_game_id = norm_ev["sporty_game_id"]
