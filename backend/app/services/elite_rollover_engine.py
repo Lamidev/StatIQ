@@ -43,7 +43,7 @@ class EliteRolloverEngine:
         "bayern munich", "bayern", "inter", "inter milan", "sporting cp", "sporting",
         "benfica", "porto", "bayer leverkusen", "leverkusen", "borussia dortmund", "dortmund",
         "atletico madrid", "napoli", "roma", "feyenoord", "psv", "ajax", "chelsea", "tottenham",
-        "atalanta", "aston villa", "newcastle"
+        "atalanta", "aston villa", "newcastle", "fenerbahce", "galatasaray", "besiktas"
     }
 
     @classmethod
@@ -305,7 +305,7 @@ class EliteRolloverEngine:
                     is_tier_2 = True
                 elif "scotland" in c_lower and "premiership" in t_lower:
                     is_tier_2 = True
-                elif "turkey" in c_lower and "super lig" in t_lower:
+                elif ("turkey" in c_lower or "turkiye" in c_lower) and "super lig" in t_lower:
                     is_tier_2 = True
                 elif "austria" in c_lower and "bundesliga" in t_lower and "2" not in t_lower:
                     is_tier_2 = True
@@ -318,6 +318,8 @@ class EliteRolloverEngine:
                 elif "sweden" in c_lower and "allsvenskan" in t_lower:
                     is_tier_2 = True
                 elif "poland" in c_lower and "ekstraklasa" in t_lower:
+                    is_tier_2 = True
+                elif "romania" in c_lower and "superliga" in t_lower:
                     is_tier_2 = True
                 elif "czech" in c_lower and any(k in t_lower for k in ["chance liga", "first league", "1. liga"]):
                     is_tier_2 = True
@@ -346,9 +348,13 @@ class EliteRolloverEngine:
                         is_tier_3 = True
                     elif "eerste divisie" in comp_full:
                         is_tier_3 = True
+                    elif "sweden" in c_lower and "superettan" in t_lower:
+                        is_tier_3 = True
+                    elif ("turkey" in c_lower or "turkiye" in c_lower) and "1. lig" in t_lower:
+                        is_tier_3 = True
                     elif "usa" in c_lower and "mls" in t_lower:
                         is_tier_3 = True
-                    elif any(k in comp_full for k in ["fa cup", "copa del rey", "dfb pokal", "coppa italia", "coupe de france"]):
+                    elif any(k in comp_full for k in ["fa cup", "copa del rey", "dfb pokal", "coppa italia", "coupe de france", "efl cup", "carabao cup"]):
                         is_tier_3 = True
 
                     if is_tier_3:
@@ -964,13 +970,13 @@ class EliteRolloverEngine:
         top_slice = ranked_pool[:50]
 
         # For 1.50x target: test 1-leg (~1.45-1.55) and 2-leg (~1.20 x 1.25)
-        # For 2.00x target: test 2-leg, 3-leg, and 4-leg combinations to reach exact ~2.00x odds (3-4 banker legs)
+        # For 2.00x target: test 4-leg first (proven 70% win-rate formula), fallback to 3-leg
         if target <= 1.45:
             leg_options = (1, 2)
         elif target <= 1.70:
-            leg_options = (1, 2, 3)
+            leg_options = (2, 3)
         else:
-            leg_options = (3, 4)
+            leg_options = (4, 3)
 
         for k in leg_options:
             for combo in itertools.combinations(top_slice, k):
@@ -995,8 +1001,8 @@ class EliteRolloverEngine:
                 if tot_odds < (target * 0.90) or tot_odds > (target * 1.15):
                     continue
 
-                # Objective: heavily weight joint probability, league/market quality score, juggernaut first-dibs, and market diversity
-                leg_penalty = (k - 1) * 2.0
+                # Objective: prioritize 4-leg sweet spot for 2.0x, heavily weight joint probability and quality
+                leg_penalty = 0.0 if k == 4 else (abs(k - 4) * 4.0)
                 unique_mkts = len(set(leg.get("market_type") for leg in combo))
                 diversity_bonus = (unique_mkts - 1) * 10.0
                 dc_count = sum(1 for leg in combo if leg.get("market_type") == "DOUBLE_CHANCE")
@@ -1336,7 +1342,7 @@ class EliteRolloverEngine:
 
     @classmethod
     async def _request_sportybet_share_code(cls, slip_legs: List[Dict[str, Any]]) -> Tuple[Optional[str], Optional[str]]:
-        """Requests SportyBet shareCode via /ng/orders/share."""
+        """Requests SportyBet shareCode via /ng/orders/share with retry resilience."""
         if not slip_legs:
             return None, None
 
@@ -1355,19 +1361,25 @@ class EliteRolloverEngine:
         share_url = None
         share_endpoint = f"{cls.BASE_URL}/ng/orders/share"
 
-        try:
-            async with httpx.AsyncClient(timeout=10.0, headers=cls.HEADERS) as client:
-                r = await client.post(share_endpoint, json={"selections": selections_payload})
-                if r.status_code == 200:
-                    res_data = r.json()
-                    if res_data.get("bizCode") == 10000:
-                        booking_code = res_data.get("data", {}).get("shareCode")
-                        share_url = res_data.get("data", {}).get("shareURL") or f"https://www.sportybet.com/ng/?shareCode={booking_code}"
-                        logger.info(f"[EliteRollover] Generated SportyBet Booking Code: {booking_code}")
+        for attempt in range(1, 3):
+            try:
+                async with httpx.AsyncClient(timeout=10.0, headers=cls.HEADERS) as client:
+                    r = await client.post(share_endpoint, json={"selections": selections_payload})
+                    if r.status_code == 200:
+                        res_data = r.json()
+                        if res_data.get("bizCode") == 10000:
+                            booking_code = res_data.get("data", {}).get("shareCode")
+                            share_url = res_data.get("data", {}).get("shareURL") or f"https://www.sportybet.com/ng/?shareCode={booking_code}"
+                            logger.info(f"[EliteRollover] Generated SportyBet Booking Code: {booking_code}")
+                            return booking_code, share_url
+                        else:
+                            logger.warning(f"[EliteRollover] SportyBet rejected share request (attempt {attempt}): {res_data}")
                     else:
-                        logger.warning(f"[EliteRollover] SportyBet rejected share request: {res_data}")
-        except Exception as e:
-            logger.error(f"[EliteRollover] Error requesting SportyBet booking code: {e}")
+                        logger.warning(f"[EliteRollover] SportyBet HTTP error {r.status_code} (attempt {attempt})")
+            except Exception as e:
+                logger.error(f"[EliteRollover] Error requesting SportyBet booking code (attempt {attempt}): {e}")
+            if attempt < 2:
+                await asyncio.sleep(1.0)
 
         return booking_code, share_url
 
@@ -1466,6 +1478,11 @@ class EliteRolloverEngine:
         wat_now = datetime.datetime.now(wat_tz)
         claimed_event_ids = set()
         ro_event_ids = set()
+        ro_legs: List[Dict[str, Any]] = []
+        acca5_legs: List[Dict[str, Any]] = []
+        acca5_fids: set = set()
+        acca10_legs: List[Dict[str, Any]] = []
+        acca20_legs: List[Dict[str, Any]] = []
         today_str = wat_now.strftime("%A, %b %d, %Y")
         now_ts = int(time.time())
 
@@ -1521,102 +1538,104 @@ class EliteRolloverEngine:
 
                 trio_result["rollover_ticket"] = ro_payload
 
-        # ── 2. SLIP 2: 5.0x PRECISION MULTIPLIER (5–7 Pure Elite Banker Legs) ──
-        unclaimed_5x = [c for c in banker_candidates if c["event_id"] not in ro_event_ids]
-        acca5_legs = cls.assemble_optimal_accumulator_slip(
-            unclaimed_5x,
-            target_odds=5.00,
-            min_legs=5,
-            max_legs=7,
-            excluded_event_ids=ro_event_ids
-        )
-        acca5_fids = set()
-        if acca5_legs:
-            for leg in acca5_legs:
-                claimed_event_ids.add(leg["event_id"])
-                acca5_fids.add(leg["event_id"])
+        # ── 2. SLIP 2: 5.0x PRECISION MULTIPLIER (7–9 Pure Elite Banker Legs) ──
+        if enable_5odds:
+            unclaimed_5x = [c for c in banker_candidates if c["event_id"] not in ro_event_ids]
+            acca5_legs = cls.assemble_optimal_accumulator_slip(
+                unclaimed_5x,
+                target_odds=5.00,
+                min_legs=7,
+                max_legs=9,
+                excluded_event_ids=ro_event_ids
+            )
+            if acca5_legs:
+                for leg in acca5_legs:
+                    claimed_event_ids.add(leg["event_id"])
+                    acca5_fids.add(leg["event_id"])
 
-            acca5_odds = round(math.prod(leg["odds"] for leg in acca5_legs), 2)
-            acca5_prob = round(math.prod(leg["model_probability"] for leg in acca5_legs) * 100.0, 1)
-            acca5_code, acca5_url = await cls._request_sportybet_share_code(acca5_legs)
-            acca5_ticket_id = f"ACCA5X-{now_ts}"
+                acca5_odds = round(math.prod(leg["odds"] for leg in acca5_legs), 2)
+                acca5_prob = round(math.prod(leg["model_probability"] for leg in acca5_legs) * 100.0, 1)
+                acca5_code, acca5_url = await cls._request_sportybet_share_code(acca5_legs)
+                acca5_ticket_id = f"ACCA5X-{now_ts}"
 
-            cls._persist_ticket_record(acca5_ticket_id, acca5_code, "VALUE_ACCA", 5.00, acca5_odds, 2000.0, acca5_legs)
+                cls._persist_ticket_record(acca5_ticket_id, acca5_code, "VALUE_ACCA", 5.00, acca5_odds, 2000.0, acca5_legs)
 
-            acca5_payload = {
-                "status": "SUCCESS",
-                "ticket_id": acca5_ticket_id,
-                "title": "5.0x Precision Multiplier Slip",
-                "booking_code": acca5_code or "N/A",
-                "share_url": acca5_url,
-                "target_odds": 5.00,
-                "actual_odds": acca5_odds,
-                "confidence_score": acca5_prob,
-                "date_str": today_str,
-                "leg_count": len(acca5_legs),
-                "picks": acca5_legs,
-                "stake": 2000.0,
-                "telegram_dispatched": False
-            }
+                acca5_payload = {
+                    "status": "SUCCESS",
+                    "ticket_id": acca5_ticket_id,
+                    "title": "5.0x Precision Multiplier Slip",
+                    "booking_code": acca5_code or "N/A",
+                    "share_url": acca5_url,
+                    "target_odds": 5.00,
+                    "actual_odds": acca5_odds,
+                    "confidence_score": acca5_prob,
+                    "date_str": today_str,
+                    "leg_count": len(acca5_legs),
+                    "picks": acca5_legs,
+                    "stake": 2000.0,
+                    "telegram_dispatched": False
+                }
 
-            if send_telegram and acca5_code:
-                acca5_payload["telegram_dispatched"] = RolloverTelegramNotifier.dispatch_value_acca_slip(acca5_payload)
+                if send_telegram and acca5_code:
+                    acca5_payload["telegram_dispatched"] = RolloverTelegramNotifier.dispatch_value_acca_slip(acca5_payload)
 
-            trio_result["acca_5x_ticket"] = acca5_payload
+                trio_result["acca_5x_ticket"] = acca5_payload
 
-        # ── 3. SLIP 3: 10.0x MEGA MULTIPLIER (7–9 Elite Banker Legs, Zero Filler) ──
-        unclaimed_10x = [c for c in banker_candidates if c["event_id"] not in ro_event_ids and c["event_id"] not in acca5_fids]
-        distinct_unclaimed_10x = len(set(c["event_id"] for c in unclaimed_10x))
-        if distinct_unclaimed_10x >= 10:
-            pool_for_10x = unclaimed_10x
-            excl_fids = ro_event_ids | acca5_fids
-        else:
-            # Multi-Market Anchor Technique (Lean Weekdays): share elite anchors using strictly ALTERNATE low-variance cushions
-            claimed_keys = set(f"{leg['event_id']}:{leg.get('market_type')}" for leg in ((ro_legs or []) + (acca5_legs or [])))
-            alt_candidates = [c for c in banker_candidates if f"{c['event_id']}:{c.get('market_type')}" not in claimed_keys]
-            pool_for_10x = unclaimed_10x + alt_candidates
-            excl_fids = None
+        # ── 3. SLIP 3: 10.0x MEGA MULTIPLIER (9–12 Elite Banker Legs, Zero Filler) ──
+        if enable_10odds:
+            unclaimed_10x = [c for c in banker_candidates if c["event_id"] not in ro_event_ids and c["event_id"] not in acca5_fids]
+            distinct_unclaimed_10x = len(set(c["event_id"] for c in unclaimed_10x))
+            if distinct_unclaimed_10x >= 10:
+                pool_for_10x = unclaimed_10x
+                excl_fids = ro_event_ids | acca5_fids
+            else:
+                # Multi-Market Anchor Technique (Lean Weekdays): share 5x anchors using strictly ALTERNATE low-variance cushions
+                # Rollover fixtures (ro_event_ids) remain 100% SACRED and are NEVER included
+                claimed_5x_keys = set(f"{leg['event_id']}:{leg.get('market_type')}" for leg in acca5_legs)
+                alt_candidates = [c for c in banker_candidates if c["event_id"] not in ro_event_ids and f"{c['event_id']}:{c.get('market_type')}" not in claimed_5x_keys]
+                pool_for_10x = alt_candidates
+                excl_fids = None
 
-        acca10_legs = cls.assemble_optimal_accumulator_slip(
-            pool_for_10x,
-            target_odds=10.00,
-            min_legs=9,
-            max_legs=12,
-            excluded_event_ids=excl_fids
-        )
-        if acca10_legs:
-            for leg in acca10_legs:
-                claimed_event_ids.add(leg["event_id"])
+            acca10_legs = cls.assemble_optimal_accumulator_slip(
+                pool_for_10x,
+                target_odds=10.00,
+                min_legs=9,
+                max_legs=12,
+                excluded_event_ids=excl_fids
+            )
+            if acca10_legs:
+                for leg in acca10_legs:
+                    claimed_event_ids.add(leg["event_id"])
 
-            acca10_odds = round(math.prod(leg["odds"] for leg in acca10_legs), 2)
-            acca10_prob = round(math.prod(leg["model_probability"] for leg in acca10_legs) * 100.0, 1)
-            acca10_code, acca10_url = await cls._request_sportybet_share_code(acca10_legs)
-            acca10_ticket_id = f"ACCA10X-{now_ts}"
+                acca10_odds = round(math.prod(leg["odds"] for leg in acca10_legs), 2)
+                acca10_prob = round(math.prod(leg["model_probability"] for leg in acca10_legs) * 100.0, 1)
+                acca10_code, acca10_url = await cls._request_sportybet_share_code(acca10_legs)
+                acca10_ticket_id = f"ACCA10X-{now_ts}"
 
-            cls._persist_ticket_record(acca10_ticket_id, acca10_code, "MEGA_10X", 10.00, acca10_odds, 1000.0, acca10_legs)
+                cls._persist_ticket_record(acca10_ticket_id, acca10_code, "MEGA_10X", 10.00, acca10_odds, 1000.0, acca10_legs)
 
-            acca10_payload = {
-                "status": "SUCCESS",
-                "ticket_id": acca10_ticket_id,
-                "title": "10.0x Mega Multiplier Slip",
-                "booking_code": acca10_code or "N/A",
-                "share_url": acca10_url,
-                "target_odds": 10.00,
-                "actual_odds": acca10_odds,
-                "confidence_score": acca10_prob,
-                "date_str": today_str,
-                "leg_count": len(acca10_legs),
-                "picks": acca10_legs,
-                "stake": 1000.0,
-                "telegram_dispatched": False
-            }
+                acca10_payload = {
+                    "status": "SUCCESS",
+                    "ticket_id": acca10_ticket_id,
+                    "title": "10.0x Mega Multiplier Slip",
+                    "booking_code": acca10_code or "N/A",
+                    "share_url": acca10_url,
+                    "target_odds": 10.00,
+                    "actual_odds": acca10_odds,
+                    "confidence_score": acca10_prob,
+                    "date_str": today_str,
+                    "leg_count": len(acca10_legs),
+                    "picks": acca10_legs,
+                    "stake": 1000.0,
+                    "telegram_dispatched": False
+                }
 
-            if send_telegram and acca10_code:
-                acca10_payload["telegram_dispatched"] = RolloverTelegramNotifier.dispatch_mega_multiplier_slip(acca10_payload)
+                if send_telegram and acca10_code:
+                    acca10_payload["telegram_dispatched"] = RolloverTelegramNotifier.dispatch_mega_multiplier_slip(acca10_payload)
 
-            trio_result["acca_10x_ticket"] = acca10_payload
+                trio_result["acca_10x_ticket"] = acca10_payload
 
-        # ── 3. OPTIONAL: 20.0x MONSTER ACCA (If explicitly enabled) ──
+        # ── 4. OPTIONAL: 20.0x MONSTER ACCA (If explicitly enabled) ──
         if enable_20odds:
             pool_for_20x = [c for c in banker_candidates if c["event_id"] not in claimed_event_ids]
             acca20_legs = cls.assemble_optimal_accumulator_slip(
@@ -1660,7 +1679,33 @@ class EliteRolloverEngine:
 
         cls._daily_dispatched_event_ids.update(claimed_event_ids)
         trio_result["total_unique_fixtures"] = len(claimed_event_ids)
-        logger.info(f"[EliteRollover] Daily Trio completed with {len(claimed_event_ids)} vetted fixtures across slips.")
+
+        # STRICT QUALITY & DELIVERY GATE:
+        # A run is ONLY marked SUCCESS if every enabled slip acquired valid picks and a live SportyBet booking code.
+        # If any enabled ticket is missing, mark BOOKING_FAILED so the scheduler automatically retries on the next tick!
+        delivery_failed = False
+        fail_reasons = []
+        if enable_rollover and (not trio_result.get("rollover_ticket") or trio_result["rollover_ticket"].get("booking_code") in (None, "N/A", "")):
+            delivery_failed = True
+            fail_reasons.append("2.0x Rollover slip")
+        if enable_5odds and (not trio_result.get("acca_5x_ticket") or trio_result["acca_5x_ticket"].get("booking_code") in (None, "N/A", "")):
+            delivery_failed = True
+            fail_reasons.append("5.0x Acca slip")
+        if enable_10odds and (not trio_result.get("acca_10x_ticket") or trio_result["acca_10x_ticket"].get("booking_code") in (None, "N/A", "")):
+            delivery_failed = True
+            fail_reasons.append("10.0x Mega slip")
+        if enable_20odds and (not trio_result.get("acca_20x_ticket") or trio_result["acca_20x_ticket"].get("booking_code") in (None, "N/A", "")):
+            delivery_failed = True
+            fail_reasons.append("20.0x Monster slip")
+
+        if delivery_failed:
+            trio_result["status"] = "BOOKING_FAILED"
+            trio_result["message"] = f"Failed to acquire live booking code or assemble picks for: {', '.join(fail_reasons)}"
+            logger.warning(f"[EliteRollover] {trio_result['message']}")
+        else:
+            trio_result["status"] = "SUCCESS"
+            logger.info(f"[EliteRollover] Daily Trio completed with {len(claimed_event_ids)} vetted fixtures across slips.")
+
         return trio_result
 
     @classmethod
