@@ -37,6 +37,15 @@ class EliteRolloverEngine:
     _today_cache_time = 0.0
     _daily_dispatched_event_ids = set()
 
+    JUGGERNAUTS = {
+        "celtic", "juventus", "lazio", "ac milan", "milan", "psg", "paris saint-germain",
+        "manchester city", "man city", "arsenal", "liverpool", "real madrid", "barcelona",
+        "bayern munich", "bayern", "inter", "inter milan", "sporting cp", "sporting",
+        "benfica", "porto", "bayer leverkusen", "leverkusen", "borussia dortmund", "dortmund",
+        "atletico madrid", "napoli", "roma", "feyenoord", "psv", "ajax", "chelsea", "tottenham",
+        "atalanta", "aston villa", "newcastle"
+    }
+
     @classmethod
     async def fetch_sportybet_today_events(cls, max_pages: int = 6) -> List[Dict[str, Any]]:
         """
@@ -221,10 +230,12 @@ class EliteRolloverEngine:
                 "atherton", "collieries", "spennymoor", "harborough", "fylde", "aldershot", "tadley", "calleva",
                 "merthyr", "stamford afc", "bedford", "fa trophy", "qualification round", "preliminary round",
                 "fa cup qualifying", "fa cup, qualification", "phonix lubeck", "kickers emden", "lokeren temse", "aec mons",
-                # Obscure lower-tier leagues
+                # Obscure lower-tier leagues & volatile regional club cups
                 "liga 2", "copa peru", "cantolao", "cs santos",
                 "botola 2", "difaa hassani", "tetouan",
-                "usl", "usl-1", "usl league one", "corpus christi", "richmond kickers"
+                "usl", "usl-1", "usl league one", "corpus christi", "richmond kickers",
+                "caf champions league", "caf confederation", "afc champions league two", "afc challenge league",
+                "young africans", "petroleos de luanda", "mc alger", "asec mimosas", "enugu rangers", "cffa"
             ]
             if any(t in comb_name_str for t in bad_tokens):
                 continue
@@ -273,9 +284,9 @@ class EliteRolloverEngine:
             elif "france" in c_lower and "ligue 1" in t_lower:
                 is_tier_1 = True
             elif any(k in comp_full for k in [
-                "uefa champions league", "champions league", "uefa europa league", "europa league",
-                "uefa conference league", "conference league", "uefa europa conference league"
-            ]):
+                "uefa champions league", "uefa europa league",
+                "uefa conference league", "uefa europa conference league"
+            ]) or (comp_full.strip() in ["champions league", "europa league", "conference league"] and "caf" not in comp_full and "afc" not in comp_full):
                 is_tier_1 = True
 
             if is_tier_1:
@@ -372,16 +383,12 @@ class EliteRolloverEngine:
             dominance_ratio = dog_odds / max(1.01, fav_odds)
 
             # Juggernaut Priority Detection: Top European & Scottish Giants (Celtic, Juventus, Lazio, AC Milan, PSG, Man City, etc.)
-            JUGGERNAUTS = {
-                "celtic", "juventus", "lazio", "ac milan", "milan", "psg", "paris saint-germain",
-                "manchester city", "man city", "arsenal", "liverpool", "real madrid", "barcelona",
-                "bayern munich", "bayern", "inter", "inter milan", "sporting cp", "sporting",
-                "benfica", "porto", "bayer leverkusen", "leverkusen", "borussia dortmund", "dortmund",
-                "atletico madrid", "napoli", "roma", "feyenoord", "psv", "ajax", "chelsea", "tottenham"
-            }
             fav_team_name = h_team if is_home_fav else a_team
-            fav_is_juggernaut = any(jg in fav_team_name.lower() for jg in JUGGERNAUTS)
-            juggernaut_bonus = 45.0 if (fav_is_juggernaut and dominance_ratio >= 1.45) else 0.0
+            dog_team_name = a_team if is_home_fav else h_team
+            fav_is_juggernaut = any(jg in fav_team_name.lower() for jg in cls.JUGGERNAUTS)
+            dog_is_juggernaut = any(jg in dog_team_name.lower() for jg in cls.JUGGERNAUTS)
+            is_heavyweight_derby = fav_is_juggernaut and dog_is_juggernaut
+            juggernaut_bonus = 45.0 if (fav_is_juggernaut and dominance_ratio >= 1.45 and not is_heavyweight_derby) else 0.0
 
             # Calibrated Dominant Favorite Gate:
             # - Tier 1 (UEFA Europa, Conference, Champions, EPL, LaLiga, Serie A, etc.): Home/away favorites up to 2.30 with dominance >= 1.20
@@ -547,6 +554,12 @@ class EliteRolloverEngine:
                         continue
 
                     fav_team = h_team if is_home_fav else a_team
+                    opp_team = a_team if is_home_fav else h_team
+
+                    # Rule: Never back an underdog to score against an elite juggernaut defense!
+                    opp_is_juggernaut = any(jg in opp_team.lower() for jg in cls.JUGGERNAUTS)
+                    if opp_is_juggernaut and not fav_is_juggernaut:
+                        continue
 
                     for oc in m.get("outcomes", []):
                         is_active = oc.get("isActive")
@@ -881,6 +894,10 @@ class EliteRolloverEngine:
                                     "selection_rationale": f"{tier_label} · Dual-Route Chance Mix ({fav_team} or Over 2.5)"
                                 })
 
+        # Tag heavyweight derbies across candidates
+        for c in candidates:
+            c["is_heavyweight_derby"] = any(jg in str(c.get("home_team", "")).lower() for jg in cls.JUGGERNAUTS) and any(jg in str(c.get("away_team", "")).lower() for jg in cls.JUGGERNAUTS)
+
         # Sort candidates deterministically by quality_score descending (ELITE FIRST)
         candidates.sort(key=lambda x: (x["quality_score"], x["model_probability"]), reverse=True)
         logger.info(f"[EliteRollover] Filtered {len(candidates)} elite candidate markets from today's pool.")
@@ -893,7 +910,7 @@ class EliteRolloverEngine:
         target_odds: float = 2.00
     ) -> List[Dict[str, Any]]:
         """
-        Deterministically selects the top 1 to 3 distinct fixtures that combine
+        Deterministically selects the top 1 to 4 distinct fixtures that combine
         closest to target_odds (1.50 or 2.00) while maximizing joint win probability.
         Strictly zero random shuffling: highest statistical quality is guaranteed.
         """
@@ -901,10 +918,11 @@ class EliteRolloverEngine:
             return []
 
         # STRICT SAFETY DIRECTIVE (User Directive):
-        # 1st Half Over 0.5 is 100% PROHIBITED in the 2.0x Rollover Slip.
-        # Compounding rollover capital relies strictly on full-match bedrock cushions:
-        # Team Over 0.5 Goals, Double Chance (1X/X2), Over 1.5 Goals, Asian Handicap (+1.5).
-        candidates = [c for c in candidates if c.get("market_type") != "FIRST_HALF_OVER_05"]
+        # 1. 1st Half Over 0.5 is 100% PROHIBITED in the 2.0x Rollover Slip.
+        # 2. Heavyweight Derbies (e.g. Juve vs Lazio, Milan vs Atalanta, Chelsea vs Liverpool)
+        #    are 100% PROHIBITED from compounding rollover capital. Rollover relies strictly on
+        #    dominant juggernauts playing against non-heavyweights.
+        candidates = [c for c in candidates if c.get("market_type") != "FIRST_HALF_OVER_05" and not c.get("is_heavyweight_derby")]
         if not candidates:
             return []
 
