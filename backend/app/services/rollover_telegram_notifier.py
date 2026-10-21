@@ -59,24 +59,14 @@ class RolloverTelegramNotifier:
         picks = ticket_data.get("picks", [])
         date_str = ticket_data.get("date_str", "Today")
         share_url = ticket_data.get("share_url") or f"https://www.sportybet.com/ng/?shareCode={code}"
-        challenge_day = ticket_data.get("challenge_day")
-        stake_amount = ticket_data.get("stake")
-
         title_line = "🎯 <b>StatIQ Elite Rollover Slip</b>"
-        if challenge_day:
-            title_line = f"🎯 <b>StatIQ Elite Rollover — {challenge_day}</b>"
 
         lines = [
             title_line,
             f"📅 <b>Date:</b> {date_str} (10:00 AM WAT Dispatch)",
-            f"⚡ <b>Target Odds:</b> {actual_odds:.2f}x | <b>Combined Confidence:</b> {confidence:.1f}%"
+            f"⚡ <b>Target Odds:</b> {actual_odds:.2f}x | <b>Combined Confidence:</b> {confidence:.1f}%",
+            f"📊 <b>Leg Count:</b> {len(picks)} Banker Matches\n"
         ]
-
-        if stake_amount:
-            pot_return = round(float(stake_amount) * actual_odds)
-            lines.append(f"💰 <b>Compounding Stake:</b> ₦{int(stake_amount):,} ➔ <b>Target Return:</b> ₦{int(pot_return):,}")
-
-        lines.append("")
 
         for i, p in enumerate(picks, 1):
             h = p.get("home_team")

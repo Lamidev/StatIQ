@@ -169,18 +169,16 @@ class EliteRolloverEngine:
                 start_ms = start_ms * 1000.0
 
             # Strict Kickoff Timing Gates (WAT Timezone):
-            # For 10:00 AM automation: >= 45m after now & concludes before 22:30 WAT on the same day.
+            # For 10:00 AM automation: >= 30m after now & concludes before 05:00 WAT next morning (settling hours before next dispatch).
             # For On-Demand booking: >= 15m after now & allows next-day evening fixtures if late in the day.
             wat_tz = datetime.timezone(datetime.timedelta(hours=1))
             now_wat = datetime.datetime.now(wat_tz)
-            end_of_day_wat = now_wat.replace(hour=22, minute=30, second=0, microsecond=0)
-            end_of_day_ms = end_of_day_wat.timestamp() * 1000.0
             if is_on_demand:
                 min_kickoff_ms = now_ms + (15 * 60 * 1000.0)
-                if now_wat.hour >= 18:
-                    end_of_day_ms = (now_wat + datetime.timedelta(days=1)).replace(hour=23, minute=59, second=0).timestamp() * 1000.0
+                end_of_day_ms = (now_wat + datetime.timedelta(days=1)).replace(hour=23, minute=59, second=0).timestamp() * 1000.0 if now_wat.hour >= 18 else now_wat.replace(hour=23, minute=59, second=0).timestamp() * 1000.0
             else:
-                min_kickoff_ms = now_ms + (45 * 60 * 1000.0)
+                min_kickoff_ms = now_ms + (30 * 60 * 1000.0)
+                end_of_day_ms = (now_wat + datetime.timedelta(days=1)).replace(hour=5, minute=0, second=0, microsecond=0).timestamp() * 1000.0
 
             if start_ms > 0:
                 if start_ms < min_kickoff_ms:
@@ -193,9 +191,17 @@ class EliteRolloverEngine:
             eid = ev.get("eventId")
             c_name = ev.get("_categoryName") or ""
             t_name = ev.get("_tournamentName") or ""
+            c_lower = c_name.lower()
+            t_lower = t_name.lower()
+            comp_full = f"{c_lower} {t_lower}"
 
             # 2. ANTI-NOISE FILTER: Strictly ban youth, reserves, amateur, women, friendlies, and obscure volatile leagues
             comb_name_str = f" {h_team} {a_team} {c_name} {t_name} ".lower()
+            is_continental_major = any(k in comp_full for k in [
+                "uefa champions league", "uefa europa league", "uefa conference league",
+                "libertadores", "sudamericana", "afc champions league elite", "afc champions league"
+            ])
+
             bad_tokens = [
                 "srl", "simulated reality", "simulated", "friendly", "friendlies",
                 "u23", "u21", "u20", "u19", "u18", "u17", "youth", "primavera", "reserve", "reserves",
@@ -214,18 +220,16 @@ class EliteRolloverEngine:
                 "thailand", "thai league", "thai", "vietnam", "v-league", "malaysia", "indonesia",
                 "lebanon", "jordan", "kuwait", "bahrain", "oman", "iraq", "syria", "yemen",
                 "india", "indian super", "i-league",
-                # Obscure South American lower tiers & preliminary domestic cups (Torneo DIMAYOR, Copa Colombia, etc.)
-                "dimayor", "torneo dimayor", "copa dimayor", "copa colombia", "colombia b", "primera b", "venezuela", "bolivia",
                 # Secondary Asian regional cups & volatile clubs (Cambodia, Malaysia, Singapore, Hong Kong)
                 "afc champions league two", "afc champions league 2", "afc challenge league", "afc cup",
                 "phnom penh", "lion city", "kitchee", "kuching city", "tai po", "cambodia", "malaysia", "singapore", "hong kong", "macau", "philippines",
-                # Japan domestic cups & lower tiers (where J1 clubs rotate reserve/youth squads: Yamaga, Mito, etc.)
+                # Japan domestic cups & lower tiers (reserve/youth squad rotations in J2/J3)
                 "j.league cup", "j-league cup", "emperor cup", "emperor's cup", "j2 league", "j3 league",
                 # Obscure European lower tiers / domestic preliminary cups
                 "northern ireland", "wales", "cymru", "cyprus cup", "slovensky pohar", "slovakia cup",
                 "kosovo", "albania", "macedonia", "montenegro", "bosnia", "latvia", "lithuania", "estonia",
                 "belarus", "moldova", "luxembourg", "malta", "faroe islands",
-                "3. liga", "norway 1.", "norway 2.", "1. divisjon", "sweden division 1",
+                "3. liga", "norway 2.", "norway 3.", "2. divisjon", "3. divisjon", "sweden division 1",
                 # Non-league / FA Trophy / Preliminary Qualifiers
                 "atherton", "collieries", "spennymoor", "harborough", "fylde", "aldershot", "tadley", "calleva",
                 "merthyr", "stamford afc", "bedford", "fa trophy", "qualification round", "preliminary round",
@@ -233,10 +237,16 @@ class EliteRolloverEngine:
                 # Obscure lower-tier leagues & volatile regional club cups
                 "liga 2", "copa peru", "cantolao", "cs santos",
                 "botola 2", "difaa hassani", "tetouan",
-                "usl", "usl-1", "usl league one", "corpus christi", "richmond kickers",
+                "usl-1", "usl league one", "corpus christi", "richmond kickers",
                 "caf champions league", "caf confederation", "afc champions league two", "afc challenge league",
                 "young africans", "petroleos de luanda", "mc alger", "asec mimosas", "enugu rangers", "cffa"
             ]
+            if not is_continental_major:
+                bad_tokens.extend([
+                    "dimayor", "torneo dimayor", "copa dimayor", "copa colombia", "colombia b", "primera b",
+                    "venezuela", "bolivia"
+                ])
+
             if any(t in comb_name_str for t in bad_tokens):
                 continue
 
@@ -265,9 +275,6 @@ class EliteRolloverEngine:
                 continue
 
             # 3. Competition Pedigree Tier Evaluation (European & Top-Tier Priority)
-            c_lower = c_name.lower()
-            t_lower = t_name.lower()
-            comp_full = f"{c_lower} {t_lower}"
             pedigree_bonus = -50.0  # Default penalty for unverified competitions
             tier_label = "Unranked Competition"
 
@@ -329,7 +336,11 @@ class EliteRolloverEngine:
                     is_tier_2 = True
                 elif "saudi" in c_lower and "pro league" in t_lower:
                     is_tier_2 = True
-                elif any(k in comp_full for k in ["copa libertadores", "copa sudamericana", "afc champions league elite"]):
+                elif any(k in comp_full for k in ["libertadores", "sudamericana", "afc champions league elite", "afc champions league"]):
+                    is_tier_2 = True
+                elif ("japan" in c_lower and "j1" in t_lower) or "j1 league" in comp_full:
+                    is_tier_2 = True
+                elif "brazil" in c_lower and ("serie a" in t_lower or "brasileiro" in t_lower):
                     is_tier_2 = True
 
                 if is_tier_2:
@@ -338,7 +349,9 @@ class EliteRolloverEngine:
                 else:
                     # Tier 3 (+30.0): Major Second Tiers & Established National Flights
                     is_tier_3 = False
-                    if "germany" in c_lower and "2. bundesliga" in t_lower:
+                    if "england" in c_lower and "league one" in t_lower:
+                        is_tier_3 = True
+                    elif "germany" in c_lower and "2. bundesliga" in t_lower:
                         is_tier_3 = True
                     elif "france" in c_lower and "ligue 2" in t_lower:
                         is_tier_3 = True
@@ -352,9 +365,20 @@ class EliteRolloverEngine:
                         is_tier_3 = True
                     elif ("turkey" in c_lower or "turkiye" in c_lower) and "1. lig" in t_lower:
                         is_tier_3 = True
-                    elif "usa" in c_lower and "mls" in t_lower:
+                    elif "mls" in comp_full or (("usa" in c_lower or "united states" in c_lower) and "mls" in t_lower):
                         is_tier_3 = True
-                    elif any(k in comp_full for k in ["fa cup", "copa del rey", "dfb pokal", "coppa italia", "coupe de france", "efl cup", "carabao cup"]):
+                    elif "norway" in c_lower and ("1st division" in t_lower or "1. divisjon" in t_lower or "obos" in t_lower):
+                        is_tier_3 = True
+                    elif "canada" in c_lower and "canadian championship" in t_lower:
+                        is_tier_3 = True
+                    elif "denmark" in c_lower and "dbu pokalen" in t_lower:
+                        is_tier_3 = True
+                    elif "egypt" in c_lower and "premier league" in t_lower:
+                        is_tier_3 = True
+                    elif any(k in comp_full for k in [
+                        "fa cup", "copa del rey", "dfb pokal", "coppa italia", "coupe de france",
+                        "efl cup", "carabao cup", "taca de portugal", "knvb beker", "copa do brasil"
+                    ]):
                         is_tier_3 = True
 
                     if is_tier_3:
@@ -1330,12 +1354,12 @@ class EliteRolloverEngine:
                 if curr_odds >= target_ceiling and len(selected_legs) >= min_legs:
                     break
 
-        # Verify accumulator reached required odds threshold; do not return severely under-target slips
-        if target >= 4.5 and curr_odds < 4.0:
-            logger.warning(f"[EliteRollover] Accumulator could only achieve {curr_odds:.2f}x (target: {target:.2f}x). Insufficient qualified pool.")
+        # Verify accumulator reached required odds threshold; adaptively support lean boards
+        if target >= 4.5 and (curr_odds < 3.2 or len(selected_legs) < 5):
+            logger.warning(f"[EliteRollover] Accumulator could only achieve {curr_odds:.2f}x across {len(selected_legs)} legs (target: {target:.2f}x). Insufficient qualified pool.")
             return []
-        if target >= 9.5 and curr_odds < 8.0:
-            logger.warning(f"[EliteRollover] Accumulator could only achieve {curr_odds:.2f}x (target: {target:.2f}x). Insufficient qualified pool.")
+        if target >= 9.5 and (curr_odds < 6.0 or len(selected_legs) < 7):
+            logger.warning(f"[EliteRollover] Accumulator could only achieve {curr_odds:.2f}x across {len(selected_legs)} legs (target: {target:.2f}x). Insufficient qualified pool.")
             return []
 
         return selected_legs
@@ -1533,9 +1557,6 @@ class EliteRolloverEngine:
                     "telegram_dispatched": False
                 }
 
-                if send_telegram and ro_code:
-                    ro_payload["telegram_dispatched"] = RolloverTelegramNotifier.dispatch_rollover_slip(ro_payload)
-
                 trio_result["rollover_ticket"] = ro_payload
 
         # ── 2. SLIP 2: 5.0x PRECISION MULTIPLIER (7–9 Pure Elite Banker Legs) ──
@@ -1575,11 +1596,16 @@ class EliteRolloverEngine:
                     "stake": 2000.0,
                     "telegram_dispatched": False
                 }
-
-                if send_telegram and acca5_code:
-                    acca5_payload["telegram_dispatched"] = RolloverTelegramNotifier.dispatch_value_acca_slip(acca5_payload)
-
                 trio_result["acca_5x_ticket"] = acca5_payload
+            else:
+                logger.info("[EliteRollover] 5.0x Precision Multiplier rested today: insufficient zero-overlap vetted fixtures on board.")
+                trio_result["acca_5x_ticket"] = {
+                    "status": "RESTED_LEAN_BOARD",
+                    "title": "5.0x Precision Multiplier Slip",
+                    "booking_code": "RESTED",
+                    "message": "Zero-overlap preserved: 5.0x slip rested today due to lean match schedule.",
+                    "telegram_dispatched": False
+                }
 
         # ── 3. SLIP 3: 10.0x MEGA MULTIPLIER (Strict 100% Zero-Overlap Partition) ──
         if enable_10odds:
@@ -1621,11 +1647,16 @@ class EliteRolloverEngine:
                     "stake": 1000.0,
                     "telegram_dispatched": False
                 }
-
-                if send_telegram and acca10_code:
-                    acca10_payload["telegram_dispatched"] = RolloverTelegramNotifier.dispatch_mega_multiplier_slip(acca10_payload)
-
                 trio_result["acca_10x_ticket"] = acca10_payload
+            else:
+                logger.info("[EliteRollover] 10.0x Mega Multiplier rested today: insufficient zero-overlap vetted fixtures on board.")
+                trio_result["acca_10x_ticket"] = {
+                    "status": "RESTED_LEAN_BOARD",
+                    "title": "10.0x Mega Multiplier Slip",
+                    "booking_code": "RESTED",
+                    "message": "Zero-overlap preserved: 10.0x mega slip rested today due to lean match schedule.",
+                    "telegram_dispatched": False
+                }
 
         # ── 4. OPTIONAL: 20.0x MONSTER ACCA (If explicitly enabled) ──
         if enable_20odds:
@@ -1663,40 +1694,82 @@ class EliteRolloverEngine:
                     "stake": 500.0,
                     "telegram_dispatched": False
                 }
-
-                if send_telegram and acca20_code:
-                    acca20_payload["telegram_dispatched"] = RolloverTelegramNotifier.dispatch_mega_20x_slip(acca20_payload)
-
                 trio_result["acca_20x_ticket"] = acca20_payload
+            else:
+                logger.info("[EliteRollover] 20.0x Monster Acca rested today: insufficient zero-overlap vetted fixtures on board.")
+                trio_result["acca_20x_ticket"] = {
+                    "status": "RESTED_LEAN_BOARD",
+                    "title": "20.0x Monster Acca Slip",
+                    "booking_code": "RESTED",
+                    "message": "Zero-overlap preserved: 20.0x monster slip rested today due to lean match schedule.",
+                    "telegram_dispatched": False
+                }
 
         cls._daily_dispatched_event_ids.update(claimed_event_ids)
         trio_result["total_unique_fixtures"] = len(claimed_event_ids)
 
         # STRICT QUALITY & DELIVERY GATE:
-        # A run is ONLY marked SUCCESS if every enabled slip acquired valid picks and a live SportyBet booking code.
-        # If any enabled ticket is missing, mark BOOKING_FAILED so the scheduler automatically retries on the next tick!
+        # 1. 2.0x Rollover slip is the mandatory VIP anchor. It MUST be successfully assembled & booked.
+        # 2. Secondary accumulators (5x, 10x, 20x): If they have assembled legs, they MUST be booked successfully.
+        #    If a secondary slip was rested due to zero-overlap fixture exhaustion on a lean board, that is an
+        #    intentional capital-preservation decision, NOT a delivery failure!
         delivery_failed = False
         fail_reasons = []
-        if enable_rollover and (not trio_result.get("rollover_ticket") or trio_result["rollover_ticket"].get("booking_code") in (None, "N/A", "")):
-            delivery_failed = True
-            fail_reasons.append("2.0x Rollover slip")
-        if enable_5odds and (not trio_result.get("acca_5x_ticket") or trio_result["acca_5x_ticket"].get("booking_code") in (None, "N/A", "")):
-            delivery_failed = True
-            fail_reasons.append("5.0x Acca slip")
-        if enable_10odds and (not trio_result.get("acca_10x_ticket") or trio_result["acca_10x_ticket"].get("booking_code") in (None, "N/A", "")):
-            delivery_failed = True
-            fail_reasons.append("10.0x Mega slip")
-        if enable_20odds and (not trio_result.get("acca_20x_ticket") or trio_result["acca_20x_ticket"].get("booking_code") in (None, "N/A", "")):
-            delivery_failed = True
-            fail_reasons.append("20.0x Monster slip")
+        if enable_rollover:
+            ro_t = trio_result.get("rollover_ticket")
+            if not ro_t or ro_t.get("booking_code") in (None, "N/A", "", "RESTED"):
+                delivery_failed = True
+                fail_reasons.append("2.0x Rollover slip")
+
+        if enable_5odds and acca5_legs:
+            a5_t = trio_result.get("acca_5x_ticket")
+            if not a5_t or a5_t.get("booking_code") in (None, "N/A", "", "RESTED"):
+                delivery_failed = True
+                fail_reasons.append("5.0x Acca slip booking")
+
+        if enable_10odds and acca10_legs:
+            a10_t = trio_result.get("acca_10x_ticket")
+            if not a10_t or a10_t.get("booking_code") in (None, "N/A", "", "RESTED"):
+                delivery_failed = True
+                fail_reasons.append("10.0x Mega slip booking")
+
+        if enable_20odds and acca20_legs:
+            a20_t = trio_result.get("acca_20x_ticket")
+            if not a20_t or a20_t.get("booking_code") in (None, "N/A", "", "RESTED"):
+                delivery_failed = True
+                fail_reasons.append("20.0x Monster slip booking")
 
         if delivery_failed:
             trio_result["status"] = "BOOKING_FAILED"
-            trio_result["message"] = f"Failed to acquire live booking code or assemble picks for: {', '.join(fail_reasons)}"
+            trio_result["message"] = f"Failed to acquire live booking code for: {', '.join(fail_reasons)}"
             logger.warning(f"[EliteRollover] {trio_result['message']}")
-        else:
-            trio_result["status"] = "SUCCESS"
-            logger.info(f"[EliteRollover] Daily Trio completed with {len(claimed_event_ids)} vetted fixtures across slips.")
+            # DO NOT dispatch any ticket to Telegram if delivery gate failed!
+            return trio_result
+
+        trio_result["status"] = "SUCCESS"
+        logger.info(f"[EliteRollover] Daily Trio completed with {len(claimed_event_ids)} vetted fixtures across slips.")
+
+        # ATOMIC DISPATCH: Now that all slips are verified and booked, dispatch to Telegram
+        if send_telegram:
+            # 1. Rollover Slip
+            ro_t = trio_result.get("rollover_ticket")
+            if ro_t and ro_t.get("booking_code") not in (None, "N/A", "", "RESTED") and not ro_t.get("telegram_dispatched"):
+                ro_t["telegram_dispatched"] = RolloverTelegramNotifier.dispatch_rollover_slip(ro_t)
+
+            # 2. 5.0x Precision Multiplier
+            a5_t = trio_result.get("acca_5x_ticket")
+            if a5_t and a5_t.get("booking_code") not in (None, "N/A", "", "RESTED") and not a5_t.get("telegram_dispatched"):
+                a5_t["telegram_dispatched"] = RolloverTelegramNotifier.dispatch_value_acca_slip(a5_t)
+
+            # 3. 10.0x Mega Multiplier
+            a10_t = trio_result.get("acca_10x_ticket")
+            if a10_t and a10_t.get("booking_code") not in (None, "N/A", "", "RESTED") and not a10_t.get("telegram_dispatched"):
+                a10_t["telegram_dispatched"] = RolloverTelegramNotifier.dispatch_mega_multiplier_slip(a10_t)
+
+            # 4. 20.0x Monster Acca
+            a20_t = trio_result.get("acca_20x_ticket")
+            if a20_t and a20_t.get("booking_code") not in (None, "N/A", "", "RESTED") and not a20_t.get("telegram_dispatched"):
+                a20_t["telegram_dispatched"] = RolloverTelegramNotifier.dispatch_mega_20x_slip(a20_t)
 
         return trio_result
 

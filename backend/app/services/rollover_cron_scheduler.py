@@ -198,9 +198,15 @@ class RolloverCronScheduler:
                         )
                         loop.close()
 
-                        # Update run history & state ONLY on SUCCESS
+                        # Update run history & state on SUCCESS or if ticket was already dispatched to Telegram
                         is_success = (trio_res.get("status") == "SUCCESS")
-                        if is_success:
+                        is_dispatched = bool(
+                            trio_res.get("rollover_ticket", {}).get("telegram_dispatched")
+                            or trio_res.get("acca_5x_ticket", {}).get("telegram_dispatched")
+                            or trio_res.get("acca_10x_ticket", {}).get("telegram_dispatched")
+                        )
+
+                        if is_success or is_dispatched:
                             cfg["last_run_date"] = today_str
                             cfg["last_trio_result"] = trio_res
                             primary_ticket = (trio_res.get("rollover_ticket") 
@@ -212,7 +218,7 @@ class RolloverCronScheduler:
                             history_entry = {
                                 "date": today_str,
                                 "time": current_time_str,
-                                "status": "SUCCESS",
+                                "status": "SUCCESS" if is_success else "PARTIAL_DISPATCH",
                                 "unique_fixtures": trio_res.get("total_unique_fixtures", 0),
                                 "rollover_code": trio_res.get("rollover_ticket", {}).get("booking_code") if trio_res.get("rollover_ticket") else None,
                                 "acca_5x_code": trio_res.get("acca_5x_ticket", {}).get("booking_code") if trio_res.get("acca_5x_ticket") else None,
@@ -230,23 +236,24 @@ class RolloverCronScheduler:
                                 tot_days = int(cfg.get("challenge_days", 10))
                                 history_entry["challenge_day"] = f"Day {curr_day} of {tot_days}"
                                 
-                                # Increment day for next run
-                                next_day = curr_day + 1
-                                cfg["challenge_day_current"] = next_day
-                                if curr_day >= tot_days:
-                                    cfg["challenge_status"] = "COMPLETED"
-                                    cfg["is_enabled"] = False
-                                    logger.info(f"[RolloverScheduler] Reached final day {curr_day} of challenge. Marked COMPLETED.")
+                                # Increment day for next run if primary rollover succeeded or dispatched
+                                if is_success or (trio_res.get("rollover_ticket") and trio_res["rollover_ticket"].get("booking_code") not in (None, "N/A", "", "RESTED")):
+                                    next_day = curr_day + 1
+                                    cfg["challenge_day_current"] = next_day
+                                    if curr_day >= tot_days:
+                                        cfg["challenge_status"] = "COMPLETED"
+                                        cfg["is_enabled"] = False
+                                        logger.info(f"[RolloverScheduler] Reached final day {curr_day} of challenge. Marked COMPLETED.")
 
                             history = cfg.get("run_history", [])
                             history.insert(0, history_entry)
                             cfg["run_history"] = history[:30]  # Retain last 30 runs
                             self.save_config(cfg)
-                            logger.info(f"[RolloverScheduler] Scheduled run completed successfully.")
+                            logger.info(f"[RolloverScheduler] Scheduled run completed successfully (is_success={is_success}, is_dispatched={is_dispatched}).")
                         else:
-                            # Do NOT mark today as done or advance challenge day on failure!
-                            logger.warning(f"[RolloverScheduler] Scheduled run did not succeed ({trio_res.get('status')}: {trio_res.get('message')}). Retrying on next cycle.")
-                            time.sleep(30)
+                            # True booking failure with ZERO Telegram dispatches: wait before retrying to prevent rapid loops
+                            logger.warning(f"[RolloverScheduler] Scheduled run did not succeed ({trio_res.get('status')}: {trio_res.get('message')}). Retrying in 5 minutes.")
+                            time.sleep(300)
 
             except Exception as e:
                 logger.error(f"[RolloverScheduler] Error in cron tick: {e}")
