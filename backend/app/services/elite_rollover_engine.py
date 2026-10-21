@@ -1458,7 +1458,7 @@ class EliteRolloverEngine:
            - Slip 3: 20.0x Monster Acca (15–18 vetted legs, target 19.0x–22.0x, replacing 5.0x)
         """
         logger.info(f"[EliteRollover] Executing Daily VIP Automation (Rollover: {enable_rollover}, 10x: {enable_10odds}, 20x: {enable_20odds})...")
-        raw_events = await cls.fetch_sportybet_today_events(max_pages=20)
+        raw_events = await cls.fetch_sportybet_today_events(max_pages=35)
         if not raw_events:
             return {
                 "status": "NO_FIXTURES",
@@ -1581,25 +1581,17 @@ class EliteRolloverEngine:
 
                 trio_result["acca_5x_ticket"] = acca5_payload
 
-        # ── 3. SLIP 3: 10.0x MEGA MULTIPLIER (9–12 Elite Banker Legs, Zero Filler) ──
+        # ── 3. SLIP 3: 10.0x MEGA MULTIPLIER (Strict 100% Zero-Overlap Partition) ──
         if enable_10odds:
-            unclaimed_10x = [c for c in banker_candidates if c["event_id"] not in ro_event_ids and c["event_id"] not in acca5_fids]
-            distinct_unclaimed_10x = len(set(c["event_id"] for c in unclaimed_10x))
-            if distinct_unclaimed_10x >= 10:
-                pool_for_10x = unclaimed_10x
-                excl_fids = ro_event_ids | acca5_fids
-            else:
-                # Multi-Market Anchor Technique (Lean Weekdays): share 5x anchors using strictly ALTERNATE low-variance cushions
-                # Rollover fixtures (ro_event_ids) remain 100% SACRED and are NEVER included
-                claimed_5x_keys = set(f"{leg['event_id']}:{leg.get('market_type')}" for leg in acca5_legs)
-                alt_candidates = [c for c in banker_candidates if c["event_id"] not in ro_event_ids and f"{c['event_id']}:{c.get('market_type')}" not in claimed_5x_keys]
-                pool_for_10x = alt_candidates
-                excl_fids = None
+            # Strictly isolate from Rollover (ro_event_ids) AND 5.0x Acca (acca5_fids)
+            # Guarantees zero fixture contamination across all slips.
+            excl_fids = ro_event_ids | acca5_fids
+            pool_for_10x = [c for c in banker_candidates if c["event_id"] not in excl_fids]
 
             acca10_legs = cls.assemble_optimal_accumulator_slip(
                 pool_for_10x,
                 target_odds=10.00,
-                min_legs=9,
+                min_legs=7,
                 max_legs=12,
                 excluded_event_ids=excl_fids
             )

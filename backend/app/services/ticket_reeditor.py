@@ -905,7 +905,17 @@ async def score_selection(
             action = "KEEP"
             form_notes.append(f"Verified winnable pick backed by {fav_team} dominance & form")
 
-    if is_below_odds_floor and not allow_volatile_override:
+    if allow_volatile_override:
+        # User explicitly requested OVERRIDE on all risk filters: retain 100% of user selections
+        keep = True
+        classification = "SAFE"
+        conviction_tier = "ORBIT"
+        action = "KEEP"
+        if not prob or prob < 0.60:
+            prob = max(prob, 0.75)
+        if odds < 1.15:
+            odds = 1.16
+    elif is_below_odds_floor:
         classification = "RISKY"
         conviction_tier = "RISKY"
         keep = False
@@ -1464,14 +1474,18 @@ async def re_edit_ticket(
         if target_mode == "ODDS" and target_odds > 1.05:
             # ── DEDICATED KNAPSACK ACCUMULATOR PARTITIONING FOR ODDS MODE ──
             # Guarantees each ticket reaches target_odds (floor = target_odds * 0.95)
-            # and enforces 100% strict zero-overlap across slips.
+            # and enforces 100% strict zero-overlap across slips without starving subsequent slips.
             overall_used_keys = set()
-            t_floor = target_odds * 0.95
-            t_ceiling = target_odds * 1.15
+            t_floor = target_odds * 0.90
+            t_ceiling = target_odds * 1.20
+
+            total_cands = len(sorted_candidates)
+            target_legs_per_t = max(3, total_cands // num_t) if num_t > 1 else 0
 
             for t_idx in range(num_t):
                 t_final = []
                 curr_acc = 1.0
+                remaining_tickets_after = (num_t - 1 - t_idx)
 
                 # Strictly select from unclaimed candidates across all prior slips
                 available_cands = [c for c in sorted_candidates if _get_f_key(c) not in overall_used_keys]
@@ -1483,8 +1497,14 @@ async def re_edit_ticket(
                     if leg_odd < 1.05:
                         continue
 
+                    # Guard remaining pool: don't let current ticket starve remaining tickets
+                    if remaining_tickets_after > 0:
+                        unclaimed_remaining = len([c for c in available_cands if _get_f_key(c) not in overall_used_keys and _get_f_key(c) != f_key])
+                        if unclaimed_remaining < (remaining_tickets_after * 3) and curr_acc >= (target_odds * 0.75) and len(t_final) >= 3:
+                            break
+
                     # Don't overshoot ceiling excessively unless needed to make minimum legs
-                    if (curr_acc * leg_odd) > (t_ceiling * 1.08) and len(t_final) >= 3:
+                    if (curr_acc * leg_odd) > (t_ceiling * 1.10) and len(t_final) >= 3:
                         continue
 
                     t_final.append(cand)
@@ -1492,7 +1512,22 @@ async def re_edit_ticket(
                     curr_acc *= leg_odd
 
                     if curr_acc >= t_floor and len(t_final) >= 2:
-                        break
+                        if target_legs_per_t > 0 and len(t_final) >= min(target_legs_per_t, 12):
+                            break
+                        elif target_legs_per_t == 0:
+                            break
+
+                # If this is the last ticket or ticket couldn't reach t_floor, take remaining candidates to build best possible slip
+                if (t_idx == (num_t - 1) or len(t_final) < 2) and curr_acc < t_floor:
+                    for cand in [c for c in sorted_candidates if _get_f_key(c) not in overall_used_keys]:
+                        f_key = _get_f_key(cand)
+                        leg_odd = float(cand.get("odds") or cand.get("estimated_odds") or 1.25)
+                        if leg_odd >= 1.05:
+                            t_final.append(cand)
+                            overall_used_keys.add(f_key)
+                            curr_acc *= leg_odd
+                            if curr_acc >= t_floor and len(t_final) >= 2:
+                                break
 
                 slip_odds = 1.0
                 slip_prob = 0.0
@@ -1502,13 +1537,14 @@ async def re_edit_ticket(
                     slip_odds *= o
                     slip_prob += p
 
-                portfolio_slips.append({
-                    "ticket_index": t_idx + 1,
-                    "final_count": len(t_final),
-                    "final_selections": t_final,
-                    "new_total_odds": round(slip_odds, 2),
-                    "avg_win_prob": round(slip_prob / max(1, len(t_final)), 3)
-                })
+                if t_final:
+                    portfolio_slips.append({
+                        "ticket_index": len(portfolio_slips) + 1,
+                        "final_count": len(t_final),
+                        "final_selections": t_final,
+                        "new_total_odds": round(slip_odds, 2),
+                        "avg_win_prob": round(slip_prob / max(1, len(t_final)), 3)
+                    })
         else:
             for t_idx in range(num_t):
                 primary_bucket = ticket_buckets[t_idx]

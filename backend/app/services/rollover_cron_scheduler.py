@@ -1,6 +1,7 @@
 import os
 import json
 import time
+import tempfile
 import threading
 import logging
 import datetime
@@ -41,6 +42,7 @@ class RolloverCronScheduler:
     Autonomous Background Cron Scheduler for StatIQ Rollover.
     Monitors system clock, discovers scheduled active days, executes at 10:00 AM sharp,
     generates SportyBet booking code, dispatches Telegram signals, and audits tickets.
+    Includes cross-worker file locking to strictly prevent duplicate dispatches.
     """
 
     _instance = None
@@ -56,7 +58,35 @@ class RolloverCronScheduler:
             return cls._instance
 
     def _init_scheduler(self):
+        self._lock_file = None
+        self._last_dispatched_date: Optional[str] = None
         self._ensure_config_file()
+
+    def _acquire_process_lock(self) -> bool:
+        """
+        Cross-worker file lock: Ensures only 1 process/worker on the server
+        runs the Rollover Cron daemon to prevent duplicate daily dispatches.
+        """
+        lock_path = os.path.join(tempfile.gettempdir(), "statiq_rollover_cron.lock")
+        try:
+            self._lock_file = open(lock_path, "a+")
+            if os.name == "nt":
+                import msvcrt
+                try:
+                    msvcrt.locking(self._lock_file.fileno(), msvcrt.LK_NBLCK, 1)
+                    return True
+                except (IOError, OSError):
+                    return False
+            else:
+                import fcntl
+                try:
+                    fcntl.flock(self._lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    return True
+                except (IOError, OSError):
+                    return False
+        except Exception as e:
+            logger.warning(f"[RolloverScheduler] Process lock check note: {e}")
+            return True
 
     def _ensure_config_file(self):
         os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
@@ -87,6 +117,9 @@ class RolloverCronScheduler:
 
     def start(self):
         if self._running:
+            return
+        if not self._acquire_process_lock():
+            logger.info("[RolloverScheduler] Another worker holds the cron lock. Skipping daemon in this worker.")
             return
         self._running = True
         self._thread = threading.Thread(target=self._run_cron_loop, daemon=True, name="StatIQ-RolloverCron")
@@ -131,7 +164,8 @@ class RolloverCronScheduler:
                     last_run = cfg.get("last_run_date")
 
                     # Check if today is an active day and current time matches or has passed dispatch_time
-                    if (current_day_code in active_days) and (current_time_str >= dispatch_time) and (last_run != today_str) and (now_wat.hour < 21):
+                    if (current_day_code in active_days) and (current_time_str >= dispatch_time) and (last_run != today_str) and (self._last_dispatched_date != today_str) and (now_wat.hour < 21):
+                        self._last_dispatched_date = today_str
                         logger.info(f"[RolloverScheduler] Triggering scheduled Daily VIP run for {current_day_code} ({today_str} @ {current_time_str})...")
                         target_odds = float(cfg.get("target_odds", 2.00))
 

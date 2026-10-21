@@ -1034,52 +1034,55 @@ class StatIQTelegramBot:
 
                 # Book each slip on SportyBet and dispatch
                 for slip in portfolio:
-                    slip_idx = slip.get("ticket_index", 1)
-                    final_picks = slip.get("final_selections") or []
-                    if not final_picks:
-                        continue
+                    try:
+                        slip_idx = slip.get("ticket_index", 1)
+                        final_picks = slip.get("final_selections") or []
+                        if not final_picks:
+                            continue
 
-                    # Generate live booking code
-                    book_res = adapter.generate_booking_code(final_picks, "ng")
-                    booked_code = book_res.get("booking_code")
-                    booked_url = book_res.get("load_url") or (f"https://www.sportybet.com/ng/?shareCode={booked_code}" if booked_code else None)
-                    booked_picks = book_res.get("booked_selections") or final_picks
+                        # Generate live booking code
+                        book_res = adapter.generate_booking_code(final_picks, "ng")
+                        booked_code = book_res.get("booking_code")
+                        booked_url = book_res.get("load_url") or (f"https://www.sportybet.com/ng/?shareCode={booked_code}" if booked_code else None)
+                        booked_picks = book_res.get("booked_selections") or final_picks
 
-                    acc_odd = 1.0
-                    for p in booked_picks:
-                        acc_odd *= float(p.get("odds") or 1.20)
+                        acc_odd = 1.0
+                        for p in booked_picks:
+                            acc_odd *= float(p.get("odds") or 1.20)
 
-                    if confirmed_action == "SINGLE":
-                        slip_title = f"🎯 Purged Core Slip ({len(booked_picks)} Matches)"
-                        overlap_tag = f"Target: {mode_desc} · Safe Matches Only · Min Odds ≥ 1.15x"
-                    elif confirmed_action == "TOPUP":
-                        slip_title = f"🌐 Purged & Topped-Up Variant #{slip_idx} ({len(booked_picks)} Matches)"
-                        overlap_tag = "🔒 <b>Zero-Overlap Partition:</b> 100% Unique Fixtures (Safe Code Matches + Live Bankers)"
-                    elif confirmed_action == "OVERRIDE":
-                        slip_title = f"⚡ Bettor Override Variant #{slip_idx} ({len(booked_picks)} Matches)"
-                        overlap_tag = "⚠️ <b>User Override:</b> Original Picks Preserved (Includes Youth Matches)"
-                    else:
-                        slip_title = (
-                            f"🛡️ Purged Variant #{slip_idx} ({len(booked_picks)} Matches)"
-                            if eff_num_t > 1
-                            else f"🛡️ Purged Core Slip ({len(booked_picks)} of {original_count} Matches)"
+                        if confirmed_action == "SINGLE":
+                            slip_title = f"🎯 Purged Core Slip ({len(booked_picks)} Matches)"
+                            overlap_tag = f"Target: {mode_desc} · Safe Matches Only · Min Odds ≥ 1.15x"
+                        elif confirmed_action == "TOPUP":
+                            slip_title = f"🌐 Purged & Topped-Up Variant #{slip_idx} ({len(booked_picks)} Matches)"
+                            overlap_tag = "🔒 <b>Zero-Overlap Partition:</b> 100% Unique Fixtures (Safe Code Matches + Live Bankers)"
+                        elif confirmed_action == "OVERRIDE":
+                            slip_title = f"⚡ Bettor Override Variant #{slip_idx} ({len(booked_picks)} Matches)"
+                            overlap_tag = "⚠️ <b>User Override:</b> Original Picks Preserved (Includes Youth Matches)"
+                        else:
+                            slip_title = (
+                                f"🛡️ Purged Variant #{slip_idx} ({len(booked_picks)} Matches)"
+                                if eff_num_t > 1
+                                else f"🛡️ Purged Core Slip ({len(booked_picks)} of {original_count} Matches)"
+                            )
+                            overlap_tag = (
+                                "🔒 <b>Zero-Overlap Partition:</b> 100% Unique Fixtures"
+                                if eff_num_t > 1
+                                else "Even-Strength & Underdog Traps Purged (Original Picks Preserved)"
+                            )
+
+                        self._dispatch_ticket_message(
+                            chat_id=chat_id,
+                            title=slip_title,
+                            booking_code=booked_code,
+                            share_url=booked_url,
+                            total_odds=round(acc_odd, 2),
+                            confidence=round((slip.get("avg_win_prob") or 0.82) * 100.0, 1),
+                            picks=booked_picks,
+                            extra_note=f"{overlap_tag} · Min Odds ≥ 1.15x Strictly Enforced"
                         )
-                        overlap_tag = (
-                            "🔒 <b>Zero-Overlap Partition:</b> 100% Unique Fixtures"
-                            if eff_num_t > 1
-                            else "Even-Strength & Underdog Traps Purged (Original Picks Preserved)"
-                        )
-
-                    self._dispatch_ticket_message(
-                        chat_id=chat_id,
-                        title=slip_title,
-                        booking_code=booked_code,
-                        share_url=booked_url,
-                        total_odds=round(acc_odd, 2),
-                        confidence=round((slip.get("avg_win_prob") or 0.82) * 100.0, 1),
-                        picks=booked_picks,
-                        extra_note=f"{overlap_tag} · Min Odds ≥ 1.15x Strictly Enforced"
-                    )
+                    except Exception as slip_err:
+                        logger.error(f"[TelegramBot] Error dispatching variant {slip.get('ticket_index')}: {slip_err}")
 
             finally:
                 loop.close()
