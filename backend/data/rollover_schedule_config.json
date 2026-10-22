@@ -13,7 +13,7 @@
   "enable_acca_5x": true,
   "enable_acca_10x": true,
   "enable_acca_20x": false,
-  "target_odds": 2.0,
+  "target_odds": 1.50,
   "max_leg_odds": 1.45,
   "dispatch_time": "10:00",
   "campaign_mode": "CONTINUOUS",
@@ -23,7 +23,7 @@
   "last_ticket": {
     "status": "SUCCESS",
     "ticket_id": "ROLLOVER-1792558800",
-    "title": "2.0x Rollover Slip",
+    "title": "1.50x Rollover Slip",
     "booking_code": "UTRLE0",
     "share_url": "http://www.sportybet.com/ng/?shareCode=UTRLE0",
     "target_odds": 2.0,
@@ -89,7 +89,7 @@
     "rollover_ticket": {
       "status": "SUCCESS",
       "ticket_id": "ROLLOVER-1792318316",
-      "title": "2.0x Rollover Slip",
+      "title": "1.50x Rollover Slip",
       "booking_code": "G3631V",
       "share_url": "http://www.sportybet.com/ng/?shareCode=G3631V",
       "target_odds": 2.0,

@@ -2,7 +2,7 @@
 StatIQ Autonomous Telegram Bot Service
 ======================================
 Enables complete remote control of StatIQ directly from Telegram:
-- On-demand AI Accumulator generation by Target Odds (/odds 2.0, /odds 5.0, etc.)
+- On-demand AI Accumulator generation by Target Odds (/odds 1.5, /odds 5.0, etc.)
 - On-demand AI Accumulator generation by Game Count (/games 10, /games 12)
 - On-demand Daily Elite Rollover (/rollover)
 - External Ticket Trimmer / Risk Purge (/trim <code>, /remove <code>)
@@ -190,25 +190,28 @@ class StatIQTelegramBot:
             "🤖 <b>Welcome to StatIQ AI Football Intelligence Engine</b>\n\n"
             "Control all StatIQ betting engines directly from Telegram without opening the web app:\n\n"
             "⚙️ <b>Daily VIP Automation (10:00 AM WAT Dispatch):</b>\n"
-            "• <code>/auto</code> — View automation status & 1-tap toggles (2.0x, 5.0x, 10.0x)\n"
-            "• <code>/dispatch</code> — <b>Run & dispatch today's 3 slips immediately</b>\n"
-            "• 🔒 <i>Zero-Overlap Guarantee: All 3 daily tickets share 0 common fixtures!</i>\n\n"
+            "• <code>/auto</code> — View automation status & 1-tap toggles (1.50x, 5.0x, 10.0x)\n"
+            "• <code>/dispatch</code> — <b>Run & dispatch today's slips immediately</b>\n"
+            "• 🔒 <i>Zero-Overlap Guarantee: All daily tickets share 0 common fixtures!</i>\n\n"
             "🎯 <b>On-Demand Accumulators (Zero-Overlap Guarantee):</b>\n"
             "• <code>/duo</code> or <code>/5and10</code> — <b>Simultaneously books 1x 5.0x + 1x 10.0x slips (0 shared matches!)</b>\n"
             "• <code>/odds 5 10</code> — Multi-target generator (e.g. 5.0x & 10.0x simultaneously)\n"
             "• <code>/5odds</code> — 5.0x Precision Multiplier (5–7 vetted legs)\n"
-            "• <code>/10odds</code> — 10.0x Mega Multiplier (7–9 vetted legs)\n"
-            "• <i>Sequential Insulation:</i> Running <code>/5odds</code> then <code>/10odds</code> single-handedly automatically excludes previously booked games!\n\n"
+            "• <code>/10odds</code> — 10.0x Mega Multiplier (8–10 high-conviction legs)\n"
+            "• <i>Sequential Insulation:</i> Running <code>/5odds</code> then <code>/10odds</code> automatically excludes previously booked games!\n\n"
             "🎯 <b>Generate by Target Odds (1 or 2 Zero-Overlap Slips):</b>\n"
-            "• <code>/odds 2.0</code> — 2.0x Safe Multiplier (1 Slip)\n"
-            "• <code>/odds 2.0 2 tickets</code> — <b>2 Variant Slips (Zero Overlap!)</b>\n"
+            "• <code>/odds 1.5</code> — 1.50x Banker Multiplier (2–3 banker legs)\n"
+            "• <code>/odds 1.5 2 tickets</code> — <b>2 Variant Slips (Zero Overlap!)</b>\n"
             "• <code>/odds 5.0 2 tickets</code> — 2 Multiplier Slips (100% Unique Fixtures)\n\n"
+            "🌍 <b>Multi-Day Horizon Accumulators:</b>\n"
+            "• <code>/weekend 50</code> — Weekend Longshot (Friday–Sunday top flights, 50x–100x)\n"
+            "• <code>/ucl 25</code> — Midweek Champions League / European Cups Slip\n\n"
+            "🚀 <b>On-Demand Rollover:</b>\n"
+            "• <code>/rollover</code> — Instant 1.50x Banker Rollover Slip (2–3 Legs, Zero 1-0 traps)\n\n"
             "⚽ <b>Generate by Match Count (1 or 2 Zero-Overlap Slips):</b>\n"
             "• <code>/games 10</code> — Top 10 High-Confidence Matches (1 Slip)\n"
             "• <code>/games 10 2 tickets</code> — <b>2 Variant Slips of 10 Matches Each</b>\n"
             "• <code>/games 12 2 tickets</code> — 2 Variant Slips of 12 Matches Each\n\n"
-            "🚀 <b>On-Demand Rollover:</b>\n"
-            "• <code>/rollover</code> — Instant 2.0x Low-Variance Day Slip\n\n"
             "🛡️ <b>Purge Bettor's Code As-Is (/remove):</b>\n"
             "Purges 50-50 traps, underdogs, and sub-1.15 legs while preserving bettor's exact picks:\n"
             "• <code>/remove CODE 15 games 2 tickets</code> ➔ <i>Extracts 2 Zero-Overlap Slips of 15 games!</i>\n"
@@ -228,7 +231,7 @@ class StatIQTelegramBot:
                     {"text": "🚀 Dispatch Slips Now", "callback_data": "auto:dispatch"}
                 ],
                 [
-                    {"text": "🎯 2.0x Rollover", "callback_data": "gen:odds:2.0:1"},
+                    {"text": "🎯 1.50x Rollover", "callback_data": "gen:odds:1.5:1"},
                     {"text": "⚡ 5x + 10x Duo (0-Overlap)", "callback_data": "gen:duo"}
                 ],
                 [
@@ -253,7 +256,7 @@ class StatIQTelegramBot:
             self.send_message(
                 chat_id,
                 "🟢 <b>Daily VIP Automation Activated!</b>\n\n"
-                "The engine will automatically book and dispatch 2.0x, 10.0x, and 20.0x slips daily at <b>10:00 AM WAT</b>.\n"
+                "The engine will automatically book and dispatch 1.50x Rollover, 5.0x Precision, and 10.0x Mega slips daily at <b>10:00 AM WAT</b>.\n"
                 "Adaptive Calendar Engine is active (Weekend Strict Zero-Overlap | Weekday Smart Hybrid)."
             )
         elif " off" in t_clean or t_clean in ("/stop_auto", "/autooff") or "disable" in t_clean or "pause" in t_clean:
@@ -295,16 +298,16 @@ class StatIQTelegramBot:
             f"📅 <b>Active Days:</b> <b>{days_label}</b>\n"
             "🔒 <b>Zero-Overlap Guarantee:</b> 100% Unique Fixtures Across All Daily Slips\n\n"
             "<b>📅 Daily VIP Slips (100% Zero-Overlap):</b>\n"
-            f"• 🎯 <b>2.0x Rollover:</b> {ro_icon} (3–4 Banker Legs, 100% Isolated)\n"
-            f"• ⚡ <b>10.0x Mega Slip #1:</b> {acca10_icon} (10–13 High-Dominance Legs)\n"
-            f"• ⚡ <b>10.0x Mega Slip #2:</b> {acca10_icon} (10–13 High-Dominance Legs, 100% Unique)\n\n"
+            f"• 🎯 <b>1.50x Rollover:</b> {ro_icon} (2–3 Banker Legs, 100% Isolated)\n"
+            f"• ⚡ <b>10.0x Mega Slip #1:</b> {acca10_icon} (8–10 High-Dominance Legs)\n"
+            f"• ⚡ <b>10.0x Mega Slip #2:</b> {acca10_icon} (8–10 High-Dominance Legs, 100% Unique)\n\n"
             "<i>Tap any button below to toggle tickets on/off, cycle active days, or dispatch today's slips instantly:</i>"
         )
 
         keyboard = {
             "inline_keyboard": [
                 [
-                    {"text": f"🎯 2.0x Rollover ({'ON' if ro_on else 'OFF'})", "callback_data": "auto:toggle:ro"},
+                    {"text": f"🎯 1.50x Rollover ({'ON' if ro_on else 'OFF'})", "callback_data": "auto:toggle:ro"},
                     {"text": f"⚡ 10.0x Mega ({'ON' if acca10_on else 'OFF'})", "callback_data": "auto:toggle:10x"}
                 ],
                 [
@@ -363,18 +366,18 @@ class StatIQTelegramBot:
             msg = (
                 "🏆 <b>StatIQ Compounding Challenge Ladder</b>\n\n"
                 "There is currently no active compounding challenge running.\n\n"
-                "Tap below to kick off a fresh compounding run with automated daily 2.0x compounding stakes:"
+                "Tap below to kick off a fresh compounding run with automated daily 1.50x compounding stakes:"
             )
             keyboard = {
                 "inline_keyboard": [
                     [
-                        {"text": "🚀 Start 3-Day Challenge (₦5k ➔ ₦40k)", "callback_data": "camp:start:3"}
+                        {"text": "🚀 Start 3-Day Challenge (₦5k ➔ ₦17k)", "callback_data": "camp:start:3"}
                     ],
                     [
-                        {"text": "🔥 Start 5-Day Challenge (₦5k ➔ ₦160k)", "callback_data": "camp:start:5"}
+                        {"text": "🔥 Start 5-Day Challenge (₦5k ➔ ₦38k)", "callback_data": "camp:start:5"}
                     ],
                     [
-                        {"text": "🎯 Generate 2.0x Rollover Slip Now", "callback_data": "gen:rollover"}
+                        {"text": "🎯 Generate 1.50x Rollover Slip Now", "callback_data": "gen:rollover"}
                     ]
                 ]
             }
@@ -383,7 +386,7 @@ class StatIQTelegramBot:
         curr_day = camp.get("current_day", 1)
         tot_days = camp.get("total_days", 3)
         curr_stake = camp.get("current_stake", 5000)
-        target_odds = camp.get("target_odds", 2.0)
+        target_odds = camp.get("target_odds", 1.50)
         pot_win = round(curr_stake * target_odds)
         won_cnt = camp.get("won_count", 0)
         final_goal = camp.get("final_goal", round(camp.get("starting_stake", 5000) * (target_odds ** tot_days)))
@@ -445,7 +448,7 @@ class StatIQTelegramBot:
 
         self.send_message(
             chat_id,
-            "⏳ <b>StatIQ Daily VIP Automation:</b> Querying today's fixtures and generating <b>2.0x Rollover, 5.0x Precision, and 10.0x Mega slips</b> with <b>Strict Zero-Overlap</b>..."
+            "⏳ <b>StatIQ Daily VIP Automation:</b> Querying today's fixtures and generating <b>1.50x Rollover, 5.0x Precision, and 10.0x Mega slips</b> with <b>Strict Zero-Overlap</b>..."
         )
 
         try:
@@ -474,18 +477,18 @@ class StatIQTelegramBot:
 
             # If this command was run outside the VIP main channel, also forward the slips to the requester's chat
             if not is_same_channel:
-                # 1. Rollover slip (2.0x)
+                # 1. Rollover slip (1.50x)
                 ro_ticket = trio_res.get("rollover_ticket")
                 if ro_ticket and ro_ticket.get("picks"):
                     self._dispatch_ticket_message(
                         chat_id=chat_id,
-                        title="🎯 StatIQ 2.0x Rollover Slip",
+                        title="🎯 StatIQ 1.50x Elite Rollover Slip",
                         booking_code=ro_ticket.get("booking_code"),
                         share_url=ro_ticket.get("share_url"),
-                        total_odds=ro_ticket.get("actual_odds", 2.0),
-                        confidence=ro_ticket.get("confidence_score", 88.0),
+                        total_odds=ro_ticket.get("actual_odds", 1.50),
+                        confidence=ro_ticket.get("confidence_score", 90.0),
                         picks=ro_ticket.get("picks", []),
-                        extra_note="Daily VIP Slip 1 of 3 · 🎯 2.0x Rollover (100% Isolated Banker Legs) · Min Odds ≥ 1.15x"
+                        extra_note="Daily VIP Slip 1 of 3 · 🎯 1.50x Rollover (2–3 Banker Matches · 100% Isolated) · Min Odds ≥ 1.15x"
                     )
                     dispatched_count += 1
 
@@ -528,7 +531,7 @@ class StatIQTelegramBot:
                 )
 
             if dispatched_count > 0:
-                cal_mode = "Daily VIP Banker Suite (2.0x + 5.0x + 10.0x)"
+                cal_mode = "Daily VIP Banker Suite (1.50x + 5.0x + 10.0x)"
                 self.send_message(
                     chat_id,
                     f"✅ <b>Daily VIP Automation Complete!</b> Dispatched {dispatched_count} slips via <b>{cal_mode}</b> with <b>{trio_res.get('total_unique_fixtures', 0)} unique fixtures</b>."
@@ -538,9 +541,9 @@ class StatIQTelegramBot:
             self.send_message(chat_id, f"❌ <b>Error:</b> Dispatch failed ({_esc(str(e))}).")
 
     def handle_rollover_command(self, chat_id: int | str):
-        """Generates and delivers today's Elite Rollover ticket on demand."""
+        """Generates and delivers today's Elite Rollover ticket on demand (1.50x - 1.65x across 2-3 banker games)."""
         self.send_chat_action(chat_id, "typing")
-        self.send_message(chat_id, "⏳ <b>StatIQ Elite Rollover Engine:</b> Querying today's fixtures and calculating low-variance Poisson probabilities...")
+        self.send_message(chat_id, "⏳ <b>StatIQ Elite Rollover Engine:</b> Querying today's fixtures and calculating low-variance Poisson probabilities (1.50x Target)...")
 
         try:
             from app.services.elite_rollover_engine import EliteRolloverEngine
@@ -551,7 +554,7 @@ class StatIQTelegramBot:
             try:
                 res = loop.run_until_complete(
                     EliteRolloverEngine.book_and_dispatch_rollover(
-                        target_odds=2.00,
+                        target_odds=1.50,
                         send_telegram=False,
                         max_leg_odds=1.45
                     )
@@ -566,10 +569,10 @@ class StatIQTelegramBot:
                     title="🎯 StatIQ Elite Rollover Slip",
                     booking_code=res.get("booking_code"),
                     share_url=res.get("share_url"),
-                    total_odds=res.get("actual_odds", 2.0),
-                    confidence=res.get("confidence_score", 88.0),
+                    total_odds=res.get("actual_odds", 1.50),
+                    confidence=res.get("confidence_score", 90.0),
                     picks=res.get("picks", []),
-                    extra_note="Automated via StatIQ Telegram Controller · Min Odds ≥ 1.15x"
+                    extra_note="Automated via StatIQ Telegram Controller · 2–3 Banker Matches · Min Odds ≥ 1.15x"
                 )
             else:
                 msg = f"⚠️ <b>Rollover Notice:</b> {res.get('message', 'Unable to build rollover slip at this moment.')}"
@@ -578,14 +581,22 @@ class StatIQTelegramBot:
             logger.error(f"[TelegramBot] Rollover error: {e}", exc_info=True)
             self.send_message(chat_id, f"❌ <b>Error:</b> Rollover engine failed ({_esc(str(e))}). Please try again.")
 
-    def handle_odds_command(self, chat_id: int | str, target_odds: float, num_tickets: int = 1):
+    def handle_odds_command(
+        self,
+        chat_id: int | str,
+        target_odds: float,
+        num_tickets: int = 1,
+        time_horizon: str = "TODAY",
+        allow_lower_leagues: bool = False
+    ):
         """Generates an AI accumulator targeting a specific odds multiplier (1 or more slips)."""
         num_tickets = max(1, min(4, int(num_tickets or 1)))
         self.send_chat_action(chat_id, "typing")
         variant_desc = f"<b>{num_tickets} Zero-Overlap Variant Slips</b>" if num_tickets > 1 else "1 core slip"
+        horizon_desc = " (Weekend Horizon)" if time_horizon == "WEEKEND" else (" (Midweek UCL/European Cups)" if time_horizon == "MIDWEEK_UCL" else "")
         self.send_message(
             chat_id,
-            f"⏳ <b>StatIQ Elite Selection Engine:</b> Building {variant_desc} targeting <b>{target_odds:.2f}x</b> odds (Min Odds ≥ 1.15x)..."
+            f"⏳ <b>StatIQ Elite Selection Engine:</b> Building {variant_desc} targeting <b>{target_odds:.2f}x</b> odds{horizon_desc} (Min Odds ≥ 1.15x)..."
         )
 
         try:
@@ -597,14 +608,16 @@ class StatIQTelegramBot:
                 portfolio = loop.run_until_complete(
                     EliteRolloverEngine.generate_elite_accumulator(
                         target_odds=target_odds,
-                        num_tickets=num_tickets
+                        num_tickets=num_tickets,
+                        time_horizon=time_horizon,
+                        allow_lower_leagues=allow_lower_leagues
                     )
                 )
             finally:
                 loop.close()
 
-            # Fallback to ticket builder if elite accumulator returned empty
-            if not portfolio:
+            # Fallback to ticket builder if elite accumulator returned empty (only if TODAY and allow_lower_leagues)
+            if not portfolio and time_horizon == "TODAY" and allow_lower_leagues:
                 from app.api.endpoints.ticket_builder import BuildTicketRequest, build_ai_ticket
                 req = BuildTicketRequest(
                     target_odds=target_odds,
@@ -624,6 +637,7 @@ class StatIQTelegramBot:
                     loop.close()
 
             dispatched = 0
+            best_odds = 0.0
             for slip in portfolio:
                 slip_idx = slip.get("ticket_index", dispatched + 1)
                 approved_legs = slip.get("approved_legs") or []
@@ -633,17 +647,19 @@ class StatIQTelegramBot:
                 booking_code = slip.get("booking_code")
                 share_url = slip.get("share_url")
                 acc_odds = slip.get("accumulated_odds") or target_odds
+                best_odds = max(best_odds, float(acc_odds))
                 comb_prob = (slip.get("combined_probability") or 0.65) * 100.0
 
+                tier_note = "Vetted Mid-Tier Leagues Included (AI Poisson Modeled)" if allow_lower_leagues else "Senior Top-Flight Only"
                 title = (
                     f"🎯 StatIQ Elite Multiplier — Slip #{slip_idx} of {len(portfolio)} ({len(approved_legs)} Legs)"
                     if len(portfolio) > 1
                     else f"🎯 StatIQ Elite Multiplier ({len(approved_legs)} Legs)"
                 )
                 extra_note = (
-                    f"Target: {target_odds:.2f}x · 🔒 Zero-Overlap Guarantee (100% Unique Fixtures) · Min Odds ≥ 1.15x"
+                    f"Target: {target_odds:.2f}x · 🔒 Zero-Overlap Guarantee (100% Unique Fixtures) · Min Odds ≥ 1.15x · {tier_note}"
                     if len(portfolio) > 1
-                    else f"Target: {target_odds:.2f}x · Top-Tier Dominance Only · Min Odds ≥ 1.15x"
+                    else f"Target: {target_odds:.2f}x · {tier_note} · Min Odds ≥ 1.15x"
                 )
 
                 self._dispatch_ticket_message(
@@ -658,8 +674,53 @@ class StatIQTelegramBot:
                 )
                 dispatched += 1
 
-            if dispatched == 0:
-                self.send_message(chat_id, "⚠️ <b>Notice:</b> No suitable elite fixtures available meeting safety & odds floor right now.")
+            if dispatched > 0 and best_odds < (target_odds * 0.85) and not allow_lower_leagues:
+                # Two-tier waterfall opt-in button
+                markup = {
+                    "inline_keyboard": [
+                        [
+                            {
+                                "text": f"🎯 Hit Full {target_odds:.0f}x Target (Include Vetted Mid-Tier Leagues)",
+                                "callback_data": f"expand_lower:{target_odds:.1f}:{time_horizon}"
+                            }
+                        ]
+                    ]
+                }
+                self.send_message(
+                    chat_id,
+                    f"💡 <b>Senior Top-Flight Board Notice:</b>\n"
+                    f"Today's pure senior top-flight matches safely reached <b>{best_odds:.2f}x</b>.\n\n"
+                    f"🎯 <b>Want the full {target_odds:.0f}x target?</b>\n"
+                    f"You can expand the selection to include competitive <b>vetted mid-tier leagues</b> (e.g. Championship, 2. Bundesliga, Eerste Divisie, Segunda Division).\n\n"
+                    f"🛡️ <i>StatIQ's AI prediction engine still strictly applies Poisson goal-expectancy models, H2H dominance, and safety cushions to ensure maximum prediction accuracy on these matches. (Under-21s, youth, and low-tier divisions remain 100% excluded).</i>",
+                    reply_markup=markup
+                )
+            elif dispatched == 0:
+                if not allow_lower_leagues:
+                    markup = {
+                        "inline_keyboard": [
+                            [
+                                {
+                                    "text": f"🎯 Build {target_odds:.0f}x Target (Include Vetted Mid-Tier Leagues)",
+                                    "callback_data": f"expand_lower:{target_odds:.1f}:{time_horizon}"
+                                }
+                            ]
+                        ]
+                    }
+                    self.send_message(
+                        chat_id,
+                        f"⚠️ <b>Senior Top-Flight Board Notice:</b>\n"
+                        f"Senior top-flight leagues alone do not have enough qualifying banker games to reach <b>{target_odds:.2f}x</b> right now without compromising our strict safety floor.\n\n"
+                        f"⚡ <b>Option:</b> Tap below to expand with competitive <b>vetted mid-tier leagues</b> (e.g. Championship, 2. Bundesliga, Eerste Divisie, Segunda Division).\n\n"
+                        f"🛡️ <i>Our AI prediction engine applies the exact same Poisson probability modeling, H2H dominance, and statistical safety cushions so every pick meets our high win-rate standards. (Under-21s, youth, and low-tier divisions remain strictly excluded).</i>",
+                        reply_markup=markup
+                    )
+                else:
+                    self.send_message(
+                        chat_id,
+                        f"⚠️ <b>Notice:</b> Even with vetted mid-tier leagues included, there are currently not enough qualifying fixtures meeting StatIQ's strict win probability and safety criteria for a <b>{target_odds:.2f}x</b> accumulator right now.\n\n"
+                        f"💡 <i>Tip: Try targeting lower odds (e.g. <code>/odds 1.5</code> or <code>/odds 5</code>) or check back closer to kickoff when more betting markets open!</i>"
+                    )
         except Exception as e:
             logger.error(f"[TelegramBot] Odds build error: {e}", exc_info=True)
             self.send_message(chat_id, f"❌ <b>Error:</b> Failed to generate ticket ({_esc(str(e))}).")
@@ -1850,6 +1911,16 @@ class StatIQTelegramBot:
 
         if data == "auto:dispatch":
             self.handle_dispatch_command(chat_id)
+        if data.startswith("expand_lower:"):
+            parts = data.split(":")
+            t_odds = float(parts[1])
+            t_horiz = parts[2] if len(parts) > 2 else "TODAY"
+            self.send_message(
+                chat_id,
+                f"🔄 <b>Expanding Board:</b> Ingesting competitive <b>vetted mid-tier fixtures</b> with full AI Poisson safety modeling to achieve your <b>{t_odds:.0f}x</b> target...\n"
+                f"🛡️ <i>Rigorous H2H dominance and goal expectancy models remain active; youth and low-tier divisions are strictly filtered out.</i>"
+            )
+            self.handle_odds_command(chat_id, target_odds=t_odds, num_tickets=1, time_horizon=t_horiz, allow_lower_leagues=True)
             return
 
         if data == "auto:menu":
@@ -1873,12 +1944,12 @@ class StatIQTelegramBot:
         if data.startswith("camp:start:"):
             days = int(data.split(":")[2])
             from app.services.rollover_cron_scheduler import rollover_scheduler
-            rollover_scheduler.start_challenge(days=days, starting_stake=5000, target_odds=2.0)
+            rollover_scheduler.start_challenge(days=days, starting_stake=5000, target_odds=1.50)
             self.send_message(chat_id, f"🚀 <b>Started Fresh {days}-Day Compounding Challenge!</b>")
             self.handle_challenge_command(chat_id)
             return
 
-        # Case 1: Generator button (e.g. gen:odds:2.0:1 or gen:odds:2.0:2, gen:games:10:2, gen:rollover)
+        # Case 1: Generator button (e.g. gen:odds:1.5:1 or gen:odds:5.0:1, gen:games:10:2, gen:rollover)
         if data.startswith("gen:"):
             parts = data.split(":")
             action = parts[1]
@@ -1887,7 +1958,7 @@ class StatIQTelegramBot:
             elif action == "duo":
                 self.handle_duo_command(chat_id, targets=[5.0, 10.0])
             elif action == "odds":
-                val = float(parts[2]) if len(parts) > 2 else 2.0
+                val = float(parts[2]) if len(parts) > 2 else 1.5
                 num_t = int(parts[3]) if len(parts) > 3 else 1
                 self.handle_odds_command(chat_id, val, num_tickets=num_t)
             elif action == "games":
@@ -2121,14 +2192,36 @@ class StatIQTelegramBot:
             self.handle_duo_command(chat_id, targets=targets)
             return
 
+        # Multi-Day / Weekend Horizon Accumulators: /weekend [odds], /longshot [odds], /weekend_acca
+        weekend_match = re.match(r"^/(?:weekend|longshot|weekend_acca|sat_sun)\s*(\d+\.?\d*)?(.*)", text, re.IGNORECASE)
+        if weekend_match and not text.lower().startswith("/weekend_guide"):
+            val_str = weekend_match.group(1)
+            val = float(val_str) if val_str else 50.0
+            self.handle_odds_command(chat_id, target_odds=val, num_tickets=1, time_horizon="WEEKEND")
+            return
+
+        # Midweek European Horizon: /ucl [odds], /championsleague [odds], /midweek [odds]
+        ucl_match = re.match(r"^/(?:ucl|championsleague|midweek|european)\s*(\d+\.?\d*)?(.*)", text, re.IGNORECASE)
+        if ucl_match:
+            val_str = ucl_match.group(1)
+            val = float(val_str) if val_str else 25.0
+            self.handle_odds_command(chat_id, target_odds=val, num_tickets=1, time_horizon="MIDWEEK_UCL")
+            return
+
         # 3. /odds <target_odds> [num_tickets] OR multi-odds (e.g. /odds 5 10)
         odds_match = re.match(r"^/(?:odds|build|target)\s*(\d+\.?\d*)(.*)", text, re.IGNORECASE)
         if odds_match:
             val = float(odds_match.group(1))
             rest = (odds_match.group(2) or "").lower().strip()
 
+            horizon = "TODAY"
+            if "weekend" in rest:
+                horizon = "WEEKEND"
+            elif any(k in rest for k in ["ucl", "champions league", "midweek"]):
+                horizon = "MIDWEEK_UCL"
+
             # Multi-target check: e.g. /odds 5 10 or /odds 5 and 10 or /odds 5, 10
-            more_nums = [float(n) for n in re.findall(r"\b(\d+\.?\d*)\b", rest) if not any(k in rest for k in ["ticket", "variant", "slip"])]
+            more_nums = [float(n) for n in re.findall(r"\b(\d+\.?\d*)\b", rest) if not any(k in rest for k in ["ticket", "variant", "slip", "weekend", "ucl"])]
             if more_nums:
                 all_targets = [val] + more_nums
                 self.handle_duo_command(chat_id, targets=all_targets)
@@ -2139,15 +2232,22 @@ class StatIQTelegramBot:
             if num_tickets > 1:
                 self.handle_duo_command(chat_id, targets=[val] * num_tickets)
             else:
-                self.handle_odds_command(chat_id, val, num_tickets=1)
+                self.handle_odds_command(chat_id, val, num_tickets=1, time_horizon=horizon)
             return
 
-        # Shortcuts: /2odds, /5odds, /10odds, /20odds [num_tickets]
-        shortcut_odds = re.match(r"^/(\d+)odds(.*)", text, re.IGNORECASE)
+        # Shortcuts: /2odds, /5odds, /10odds, /20odds, /1.5odds [num_tickets]
+        shortcut_odds = re.match(r"^/(\d+\.?\d*)odds(.*)", text, re.IGNORECASE)
         if shortcut_odds:
             val = float(shortcut_odds.group(1))
             rest = (shortcut_odds.group(2) or "").lower().strip()
-            more_nums = [float(n) for n in re.findall(r"\b(\d+\.?\d*)\b", rest) if not any(k in rest for k in ["ticket", "variant", "slip"])]
+
+            horizon = "TODAY"
+            if "weekend" in rest:
+                horizon = "WEEKEND"
+            elif any(k in rest for k in ["ucl", "champions league", "midweek"]):
+                horizon = "MIDWEEK_UCL"
+
+            more_nums = [float(n) for n in re.findall(r"\b(\d+\.?\d*)\b", rest) if not any(k in rest for k in ["ticket", "variant", "slip", "weekend", "ucl"])]
             if more_nums:
                 all_targets = [val] + more_nums
                 self.handle_duo_command(chat_id, targets=all_targets)
@@ -2157,7 +2257,7 @@ class StatIQTelegramBot:
             if num_tickets > 1:
                 self.handle_duo_command(chat_id, targets=[val] * num_tickets)
             else:
-                self.handle_odds_command(chat_id, val, num_tickets=1)
+                self.handle_odds_command(chat_id, val, num_tickets=1, time_horizon=horizon)
             return
 
         # 4. /games <count> [num_tickets]
@@ -2306,9 +2406,11 @@ class StatIQTelegramBot:
         commands = [
             {"command": "start", "description": "Show main menu & quick action buttons"},
             {"command": "duo", "description": "1x 5.0x + 1x 10.0x simultaneous slips (Zero Overlap)"},
-            {"command": "odds", "description": "Target odds (/odds 5 or /odds 5 10 or /odds 20)"},
+            {"command": "odds", "description": "Target odds (/odds 1.5, /odds 5, /odds 10)"},
             {"command": "portfolio", "description": "Split mega slip into 4 or 2 diversified tickets"},
-            {"command": "rollover", "description": "Generate today's 2.0x Safe Rollover slip"},
+            {"command": "rollover", "description": "Generate today's 1.50x Banker Rollover slip (2–3 legs)"},
+            {"command": "weekend", "description": "Weekend multi-league slips (/weekend 50)"},
+            {"command": "ucl", "description": "Midweek European cup slips (/ucl 25)"},
             {"command": "remove", "description": "Purge risky legs as-is (/remove CODE)"},
             {"command": "edit", "description": "Upgrade to safe SportyBet markets (/edit CODE)"},
             {"command": "auto", "description": "Daily 10 AM VIP Automation status & toggles"},

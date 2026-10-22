@@ -36,6 +36,8 @@ class EliteRolloverEngine:
     _today_cache = None
     _today_cache_time = 0.0
     _daily_dispatched_event_ids = set()
+    _upcoming_cache = None
+    _upcoming_cache_time = 0.0
 
     JUGGERNAUTS = {
         "celtic", "juventus", "lazio", "ac milan", "milan", "psg", "paris saint-germain",
@@ -46,16 +48,43 @@ class EliteRolloverEngine:
         "atalanta", "aston villa", "newcastle", "fenerbahce", "galatasaray", "besiktas"
     }
 
+    STRONG_TOP_FLIGHT_CLUBS = {
+        "real sociedad", "villarreal", "athletic bilbao", "girona", "sevilla", "betis", "celta vigo", "mallorca",
+        "monaco", "lille", "lens", "rennes", "lyon", "marseille", "nice", "strasbourg", "toulouse",
+        "stuttgart", "frankfurt", "leipzig", "rb leipzig", "freiburg", "wolfsburg", "hoffenheim", "mainz",
+        "bologna", "fiorentina", "torino", "monza", "udinese", "verona",
+        "az alkmaar", "twente", "feyenoord", "utrecht", "go ahead eagles",
+        "braga", "sporting braga", "vitoria guimaraes", "famalicao", "rio ave",
+        "union saint-gilloise", "club brugge", "anderlecht", "genk", "gent", "antwerp",
+        "salzburg", "sturm graz", "rapid wien", "austria wien", "lask", "young boys", "servette", "lugano", "basel",
+        "bodo/glimt", "molde", "brann", "viking", "rosenborg", "tromso",
+        "copenhagen", "midtjylland", "brondby", "nordsjaelland", "aarhus",
+        "malmo", "djurgarden", "aik", "hammarby", "hacken", "elfsborg",
+        "slavia prague", "sparta prague", "viktoria plzen",
+        "dinamo zagreb", "hajduk split", "rijeka",
+        "olympiacos", "paok", "aek athens", "panathinaikos",
+        "al hilal", "al nassr", "al ittihad", "al ahli", "al shabab",
+        "palmeiras", "flamengo", "botafogo", "atletico mineiro", "fluminense", "sao paulo", "internacional", "gremio", "corinthians", "cruzeiro",
+        "river plate", "boca juniors", "racing club", "velez", "estudiantes", "talleres", "san lorenzo",
+        "club america", "monterrey", "tigres", "cruz azul", "toluca", "chivas", "pachuca",
+        "inter miami", "columbus crew", "lafc", "la galaxy", "seattle sounders", "cincinnati", "real salt lake"
+    }
+
     @classmethod
-    async def fetch_sportybet_today_events(cls, max_pages: int = 6) -> List[Dict[str, Any]]:
+    async def fetch_sportybet_today_events(cls, max_pages: int = 6, today_only: bool = True) -> List[Dict[str, Any]]:
         """
-        Directly queries SportyBet's wapConfigurableEventsByOrder endpoint with todayGames=True.
-        Collects all unstarted fixtures playing today across all active tournaments.
+        Directly queries SportyBet's wapConfigurableEventsByOrder endpoint.
+        - When today_only=True: collects all unstarted fixtures playing today (standard daily VIP & rollover).
+        - When today_only=False: collects upcoming multi-day fixtures (weekend Fri-Sun or midweek UCL Tue-Wed).
         Cached in-memory for 60 seconds with parallel page fetching (<2 seconds).
         """
         now = time.time()
-        if cls._today_cache and (now - cls._today_cache_time) < 60:
-            return cls._today_cache
+        if today_only:
+            if cls._today_cache and (now - cls._today_cache_time) < 60:
+                return cls._today_cache
+        else:
+            if cls._upcoming_cache and (now - cls._upcoming_cache_time) < 120:
+                return cls._upcoming_cache
 
         import concurrent.futures
         from app.services.sportybet_ingestion import SportyBetIngestionService
@@ -70,7 +99,7 @@ class EliteRolloverEngine:
                 "sportId": "sr:sport:1",
                 "pageNum": page,
                 "pageSize": 50,
-                "todayGames": True,
+                "todayGames": today_only,
                 "withTwoUpMarket": True,
                 "withOneUpMarket": True
             }
@@ -102,13 +131,21 @@ class EliteRolloverEngine:
                             all_events.append(ev)
 
             if all_events:
-                cls._today_cache = all_events
-                cls._today_cache_time = now
-                logger.info(f"[EliteRollover] Ingested {len(all_events)} raw events directly from SportyBet today endpoint in parallel.")
+                if today_only:
+                    cls._today_cache = all_events
+                    cls._today_cache_time = now
+                    logger.info(f"[EliteRollover] Ingested {len(all_events)} raw events directly from SportyBet today endpoint.")
+                else:
+                    cls._upcoming_cache = all_events
+                    cls._upcoming_cache_time = now
+                    logger.info(f"[EliteRollover] Ingested {len(all_events)} upcoming multi-day events directly from SportyBet.")
         except Exception as e:
             logger.warning(f"[EliteRollover] Parallel fetch error: {e}")
 
-        return all_events or (cls._today_cache or [])
+        if today_only:
+            return all_events or (cls._today_cache or [])
+        else:
+            return all_events or (cls._upcoming_cache or [])
 
     @classmethod
     def _calculate_poisson_over15_prob(cls, h_odds: float, d_odds: float, a_odds: float, market_odds: Optional[float] = None) -> float:
@@ -135,22 +172,25 @@ class EliteRolloverEngine:
         cls,
         events: List[Dict[str, Any]],
         max_leg_odds: float = 1.45,
-        is_on_demand: bool = False
+        is_on_demand: bool = False,
+        time_horizon: str = "TODAY",
+        allow_lower_leagues: bool = False,
+        for_rollover: bool = False
     ) -> List[Dict[str, Any]]:
         """
-        Filters and ranks each fixture for Elite Rollover suitability.
+        Filters and ranks each fixture for Elite Rollover & Accumulator suitability.
         Applies strict low-variance selection gates:
         - Must be pre-match unstarted (status == 0) and >= 10 mins before kickoff.
-        - Must have reliable markets (Double Chance, Over 1.5 Goals, Team Over 0.5 Goals).
+        - Supports time_horizon: TODAY, WEEKEND (Fri-Sun), MIDWEEK_UCL (Tue-Wed).
         - Enforces strict Goldilocks corridor: 1.15 <= odds <= max_leg_odds (default 1.45).
-        - Requires model probability >= 80%.
-        - Scores candidates deterministically without random shuffling.
+        - Gated Waterfall: Defaults 100% to Senior Top Flights (European & Americas/Global).
+          Only admits lower leagues / reserves if allow_lower_leagues=True (explicit user opt-in).
+        - If for_rollover=True: Strictly bans Team Over 1.5 Goals to prevent 1-0 win cuts.
         """
         now_ms = time.time() * 1000.0
         candidates = []
 
         for ev in events:
-            # 1. Unstarted pre-match check
             # 1. Unstarted pre-match status check
             status_str = str(ev.get("status") or ev.get("matchStatus") or "").upper().strip()
             if status_str in ["LIVE", "STARTED", "1H", "2H", "HT", "FINISHED", "FT", "ENDED", "CANCELLED", "POSTPONED", "ABANDONED", "CLOSED", "CONCLUDED", "SUSPENDED", "NULLED_EXPIRED"]:
@@ -168,12 +208,25 @@ class EliteRolloverEngine:
             if isinstance(start_ms, (int, float)) and 0 < start_ms < 100000000000:
                 start_ms = start_ms * 1000.0
 
-            # Strict Kickoff Timing Gates (WAT Timezone):
-            # For 10:00 AM automation: >= 30m after now & concludes before 05:00 WAT next morning (settling hours before next dispatch).
-            # For On-Demand booking: >= 15m after now & allows next-day evening fixtures if late in the day.
+            # Adaptive Kickoff Timing Gates (WAT Timezone):
             wat_tz = datetime.timezone(datetime.timedelta(hours=1))
             now_wat = datetime.datetime.now(wat_tz)
-            if is_on_demand:
+            if time_horizon == "WEEKEND":
+                # Friday through Sunday 23:59:59 WAT (or Monday 05:00 WAT)
+                days_to_sun = (6 - now_wat.weekday()) % 7
+                if days_to_sun == 0 and now_wat.weekday() == 6:
+                    days_to_sun = 0  # Sunday itself
+                end_of_day_ms = (now_wat + datetime.timedelta(days=max(2, days_to_sun))).replace(hour=23, minute=59, second=59).timestamp() * 1000.0
+                min_kickoff_ms = now_ms + (10 * 60 * 1000.0)
+            elif time_horizon == "MIDWEEK_UCL":
+                # Tuesday through Wednesday 23:59:59 WAT (or Thursday 05:00 WAT)
+                days_ahead = 2 if now_wat.weekday() in (1, 2) else 3
+                end_of_day_ms = (now_wat + datetime.timedelta(days=days_ahead)).replace(hour=23, minute=59, second=59).timestamp() * 1000.0
+                min_kickoff_ms = now_ms + (10 * 60 * 1000.0)
+            elif time_horizon in ("MULTI_DAY", "3DAYS"):
+                end_of_day_ms = (now_wat + datetime.timedelta(days=3)).replace(hour=23, minute=59, second=59).timestamp() * 1000.0
+                min_kickoff_ms = now_ms + (10 * 60 * 1000.0)
+            elif is_on_demand:
                 min_kickoff_ms = now_ms + (15 * 60 * 1000.0)
                 end_of_day_ms = (now_wat + datetime.timedelta(days=1)).replace(hour=23, minute=59, second=0).timestamp() * 1000.0 if now_wat.hour >= 18 else now_wat.replace(hour=23, minute=59, second=0).timestamp() * 1000.0
             else:
@@ -199,48 +252,71 @@ class EliteRolloverEngine:
             comb_name_str = f" {h_team} {a_team} {c_name} {t_name} ".lower()
             is_continental_major = any(k in comp_full for k in [
                 "uefa champions league", "uefa europa league", "uefa conference league",
-                "libertadores", "sudamericana", "afc champions league elite", "afc champions league"
+                "libertadores", "sudamericana", "afc champions league elite", "afc champions league", "concacaf champions"
             ])
 
-            bad_tokens = [
-                "srl", "simulated reality", "simulated", "friendly", "friendlies",
-                "u23", "u21", "u20", "u19", "u18", "u17", "youth", "primavera", "reserve", "reserves",
-                "amateur", "women", "wfc", "damen", "femenino", "feminin", "frauen", "vrouwen",
-                "tercera", "regional", "karntner", "landesliga", "stadtliga", "regionalliga", "oberliga",
-                "isthmian", "northern premier", "southern league", "national league north", "national league south",
-                # Banish lower-tier filler leagues
-                "san marino", "armenia", "andorra", "gibraltar", "prva liga srbije", "division 3", "division 4",
-                # Banish lower-tier Brazil state/divisions & Swedish Ettan
-                "serie b2", "serie c", "serie d", "carioca", "copa rio",
-                "development league", "premier league 2", "professional development",
-                "kolmonen", "kakkonen", "primera c", "primera d",
-                # Banish obscure leagues with high upset rates and erratic data (proven bet-killers)
-                "kenya", "kakamega", "tanzania", "uganda", "nigeria", "ghana", "ethiopia",
-                "algeria", "algerian", "temouchent", "rouissat",
-                "thailand", "thai league", "thai", "vietnam", "v-league", "malaysia", "indonesia",
-                "lebanon", "jordan", "kuwait", "bahrain", "oman", "iraq", "syria", "yemen",
-                "india", "indian super", "i-league",
-                # Secondary Asian regional cups & volatile clubs (Cambodia, Malaysia, Singapore, Hong Kong)
-                "afc champions league two", "afc champions league 2", "afc challenge league", "afc cup",
-                "phnom penh", "lion city", "kitchee", "kuching city", "tai po", "cambodia", "malaysia", "singapore", "hong kong", "macau", "philippines",
-                # Japan domestic cups & lower tiers (reserve/youth squad rotations in J2/J3)
-                "j.league cup", "j-league cup", "emperor cup", "emperor's cup", "j2 league", "j3 league",
-                # Obscure European lower tiers / domestic preliminary cups
-                "northern ireland", "wales", "cymru", "cyprus cup", "slovensky pohar", "slovakia cup",
-                "kosovo", "albania", "macedonia", "montenegro", "bosnia", "latvia", "lithuania", "estonia",
-                "belarus", "moldova", "luxembourg", "malta", "faroe islands",
-                "3. liga", "norway 2.", "norway 3.", "2. divisjon", "3. divisjon", "sweden division 1",
-                # Non-league / FA Trophy / Preliminary Qualifiers
-                "atherton", "collieries", "spennymoor", "harborough", "fylde", "aldershot", "tadley", "calleva",
-                "merthyr", "stamford afc", "bedford", "fa trophy", "qualification round", "preliminary round",
-                "fa cup qualifying", "fa cup, qualification", "phonix lubeck", "kickers emden", "lokeren temse", "aec mons",
-                # Obscure lower-tier leagues & volatile regional club cups
-                "liga 2", "copa peru", "cantolao", "cs santos",
-                "botola 2", "difaa hassani", "tetouan",
-                "usl-1", "usl league one", "corpus christi", "richmond kickers",
-                "caf champions league", "caf confederation", "afc champions league two", "afc challenge league",
-                "young africans", "petroleos de luanda", "mc alger", "asec mimosas", "enugu rangers", "cffa"
-            ]
+            if allow_lower_leagues:
+                # Gated Opt-In: Permitted only when user explicitly opts in for vetted mid-tier leagues to fill a thin board
+                # Strictly keeps youth, reserves, U21, amateur, and low-level divisions banned!
+                bad_tokens = [
+                    "srl", "simulated reality", "simulated", "friendly", "friendlies",
+                    "u23", "u21", "u20", "u19", "u18", "u17", "youth", "primavera", "reserve", "reserves",
+                    "amateur", "women", "wfc", "damen", "femenino", "feminin", "frauen", "vrouwen",
+                    "development league", "premier league 2", "professional development",
+                    "tercera", "regional", "karntner", "landesliga", "stadtliga",
+                    "san marino", "andorra", "gibraltar", "division 3", "division 4", "3. liga",
+                    "serie b2", "serie d", "carioca", "copa rio",
+                    "kolmonen", "kakkonen", "primera c", "primera d",
+                    "kenya", "tanzania", "uganda", "nigeria", "ghana", "ethiopia",
+                    "thailand", "vietnam", "malaysia", "indonesia", "india",
+                    "cambodia", "macau", "philippines",
+                    "northern ireland", "wales", "cymru",
+                    "kosovo", "albania", "macedonia", "montenegro", "bosnia",
+                    "belarus", "moldova", "luxembourg", "malta", "faroe islands",
+                    "fa trophy", "qualification round", "preliminary round",
+                    "copa peru", "usl league one"
+                ]
+            else:
+                bad_tokens = [
+                    "srl", "simulated reality", "simulated", "friendly", "friendlies",
+                    "u23", "u21", "u20", "u19", "u18", "u17", "youth", "primavera", "reserve", "reserves",
+                    "amateur", "women", "wfc", "damen", "femenino", "feminin", "frauen", "vrouwen",
+                    "tercera", "regional", "karntner", "landesliga", "stadtliga", "regionalliga", "oberliga",
+                    "isthmian", "northern premier", "southern league", "national league north", "national league south",
+                    # Banish lower-tier filler leagues
+                    "san marino", "armenia", "andorra", "gibraltar", "prva liga srbije", "division 3", "division 4",
+                    # Banish lower-tier Brazil state/divisions & Swedish Ettan
+                    "serie b2", "serie c", "serie d", "carioca", "copa rio",
+                    "development league", "premier league 2", "professional development",
+                    "kolmonen", "kakkonen", "primera c", "primera d",
+                    # Banish obscure leagues with high upset rates and erratic data (proven bet-killers)
+                    "kenya", "kakamega", "tanzania", "uganda", "nigeria", "ghana", "ethiopia",
+                    "algeria", "algerian", "temouchent", "rouissat",
+                    "thailand", "thai league", "thai", "vietnam", "v-league", "malaysia", "indonesia",
+                    "lebanon", "jordan", "kuwait", "bahrain", "oman", "iraq", "syria", "yemen",
+                    "india", "indian super", "i-league",
+                    # Secondary Asian regional cups & volatile clubs (Cambodia, Malaysia, Singapore, Hong Kong)
+                    "afc champions league two", "afc champions league 2", "afc challenge league", "afc cup",
+                    "phnom penh", "lion city", "kitchee", "kuching city", "tai po", "cambodia", "malaysia", "singapore", "hong kong", "macau", "philippines",
+                    # Japan domestic cups & lower tiers (reserve/youth squad rotations in J2/J3)
+                    "j.league cup", "j-league cup", "emperor cup", "emperor's cup", "j2 league", "j3 league",
+                    # Obscure European lower tiers / domestic preliminary cups
+                    "northern ireland", "wales", "cymru", "cyprus cup", "slovensky pohar", "slovakia cup",
+                    "kosovo", "albania", "macedonia", "montenegro", "bosnia", "latvia", "lithuania", "estonia",
+                    "belarus", "moldova", "luxembourg", "malta", "faroe islands",
+                    "3. liga", "norway 2.", "norway 3.", "2. divisjon", "3. divisjon", "sweden division 1",
+                    # Non-league / FA Trophy / Preliminary Qualifiers
+                    "atherton", "collieries", "spennymoor", "harborough", "fylde", "aldershot", "tadley", "calleva",
+                    "merthyr", "stamford afc", "bedford", "fa trophy", "qualification round", "preliminary round",
+                    "fa cup qualifying", "fa cup, qualification", "phonix lubeck", "kickers emden", "lokeren temse", "aec mons",
+                    # Obscure lower-tier leagues & volatile regional club cups
+                    "liga 2", "copa peru", "cantolao", "cs santos",
+                    "botola 2", "difaa hassani", "tetouan",
+                    "usl-1", "usl league one", "corpus christi", "richmond kickers",
+                    "caf champions league", "caf confederation", "afc champions league two", "afc challenge league",
+                    "young africans", "petroleos de luanda", "mc alger", "asec mimosas", "enugu rangers", "cffa"
+                ]
+
             if not is_continental_major:
                 bad_tokens.extend([
                     "dimayor", "torneo dimayor", "copa dimayor", "copa colombia", "colombia b", "primera b",
@@ -260,7 +336,7 @@ class EliteRolloverEngine:
             if comp_clean.endswith(" w") or comp_clean.endswith("(w)") or " games w" in comp_clean or " women" in comp_clean:
                 continue
 
-            # Strict check for team name reserve suffixes (e.g. " ii", " b", " 2", " u21", " u23")
+            # Strict check for team name reserve suffixes (always enforced: never allow youth / U21 / reserve teams)
             is_noise_team = False
             for team_str in [h_team.lower(), a_team.lower()]:
                 padded = f" {team_str} "
@@ -336,11 +412,28 @@ class EliteRolloverEngine:
                     is_tier_2 = True
                 elif "saudi" in c_lower and "pro league" in t_lower:
                     is_tier_2 = True
-                elif any(k in comp_full for k in ["libertadores", "sudamericana", "afc champions league elite", "afc champions league"]):
+                elif any(k in comp_full for k in ["libertadores", "sudamericana", "afc champions league elite", "afc champions league", "concacaf champions"]):
                     is_tier_2 = True
                 elif ("japan" in c_lower and "j1" in t_lower) or "j1 league" in comp_full:
                     is_tier_2 = True
                 elif "brazil" in c_lower and ("serie a" in t_lower or "brasileiro" in t_lower):
+                    is_tier_2 = True
+                # Americas & Senior Top Flights (Recognized Top Standard)
+                elif "mls" in comp_full or (("usa" in c_lower or "united states" in c_lower) and "mls" in t_lower):
+                    is_tier_2 = True
+                elif "mexico" in c_lower and any(k in t_lower for k in ["liga mx", "primera division"]):
+                    is_tier_2 = True
+                elif "argentina" in c_lower and any(k in t_lower for k in ["liga profesional", "primera division", "copa de la liga"]):
+                    is_tier_2 = True
+                elif "colombia" in c_lower and any(k in t_lower for k in ["primera a", "liga betplay"]):
+                    is_tier_2 = True
+                elif "chile" in c_lower and "primera division" in t_lower:
+                    is_tier_2 = True
+                elif "korea" in c_lower and "k league 1" in t_lower:
+                    is_tier_2 = True
+                elif "australia" in c_lower and "a-league" in t_lower:
+                    is_tier_2 = True
+                elif any(k in comp_full for k in ["world cup qualification", "nations league", "euro qualification", "copa america", "afcon qualification"]):
                     is_tier_2 = True
 
                 if is_tier_2:
@@ -365,8 +458,6 @@ class EliteRolloverEngine:
                         is_tier_3 = True
                     elif ("turkey" in c_lower or "turkiye" in c_lower) and "1. lig" in t_lower:
                         is_tier_3 = True
-                    elif "mls" in comp_full or (("usa" in c_lower or "united states" in c_lower) and "mls" in t_lower):
-                        is_tier_3 = True
                     elif "norway" in c_lower and ("1st division" in t_lower or "1. divisjon" in t_lower or "obos" in t_lower):
                         is_tier_3 = True
                     elif "canada" in c_lower and "canadian championship" in t_lower:
@@ -384,9 +475,12 @@ class EliteRolloverEngine:
                     if is_tier_3:
                         pedigree_bonus = 30.0
                         tier_label = "Tier 3 Professional"
+                    elif allow_lower_leagues:
+                        # User explicitly opted in for vetted mid-tier leagues: qualify with calibrated bonus
+                        pedigree_bonus = 20.0
+                        tier_label = "Vetted Mid-Tier League"
 
             # HARD-BLOCK UNRANKED / OBSCURE TOURNAMENTS
-            # Prevents obscure lower leagues (e.g. Egyptian 2nd tier, filler cups) from contaminating VIP slips
             if pedigree_bonus < 0:
                 continue
 
@@ -414,26 +508,24 @@ class EliteRolloverEngine:
             dog_odds = max(h_odds, a_odds)
             dominance_ratio = dog_odds / max(1.01, fav_odds)
 
-            # Juggernaut Priority Detection: Top European & Scottish Giants (Celtic, Juventus, Lazio, AC Milan, PSG, Man City, etc.)
+            # Juggernaut Priority Detection: Top European Giants & Strong Top Flight Clubs
             fav_team_name = h_team if is_home_fav else a_team
             dog_team_name = a_team if is_home_fav else h_team
             fav_is_juggernaut = any(jg in fav_team_name.lower() for jg in cls.JUGGERNAUTS)
+            fav_is_strong_club = any(sc in fav_team_name.lower() for sc in cls.STRONG_TOP_FLIGHT_CLUBS)
             dog_is_juggernaut = any(jg in dog_team_name.lower() for jg in cls.JUGGERNAUTS)
             is_heavyweight_derby = fav_is_juggernaut and dog_is_juggernaut
-            juggernaut_bonus = 45.0 if (fav_is_juggernaut and dominance_ratio >= 1.45 and not is_heavyweight_derby) else 0.0
+            juggernaut_bonus = 45.0 if (fav_is_juggernaut and dominance_ratio >= 1.45 and not is_heavyweight_derby) else (25.0 if fav_is_strong_club and dominance_ratio >= 1.28 else 0.0)
 
             # Calibrated Dominant Favorite Gate:
-            # - Tier 1 (UEFA Europa, Conference, Champions, EPL, LaLiga, Serie A, etc.): Home/away favorites up to 2.55 with dominance >= 1.18
-            # - Tier 2: Established top flights & Championship (odds <= 2.45, dominance >= 1.20)
-            # - Tier 3: Recognized professional tiers (odds <= 2.30, dominance >= 1.22).
             if is_tier_1:
-                fav_is_genuine_banker = (fav_odds <= 2.55 and dominance_ratio >= 1.18) or fav_is_juggernaut
+                fav_is_genuine_banker = (fav_odds <= 2.55 and dominance_ratio >= 1.18) or fav_is_juggernaut or (fav_is_strong_club and dominance_ratio >= 1.18)
                 min_dominance = 1.18
             elif is_tier_2:
-                fav_is_genuine_banker = (fav_odds <= 2.45 and dominance_ratio >= 1.20) or (fav_is_juggernaut and dominance_ratio >= 1.20)
+                fav_is_genuine_banker = (fav_odds <= 2.45 and dominance_ratio >= 1.20) or (fav_is_juggernaut and dominance_ratio >= 1.20) or (fav_is_strong_club and dominance_ratio >= 1.20)
                 min_dominance = 1.20
             else:
-                fav_is_genuine_banker = (fav_odds <= 2.30 and dominance_ratio >= 1.22) or (fav_is_juggernaut and dominance_ratio >= 1.20)
+                fav_is_genuine_banker = (fav_odds <= 2.30 and dominance_ratio >= 1.22) or (fav_is_juggernaut and dominance_ratio >= 1.20) or (fav_is_strong_club and dominance_ratio >= 1.20)
                 min_dominance = 1.22
 
             # Evaluate each eligible low-variance market in the fixture
@@ -638,6 +730,9 @@ class EliteRolloverEngine:
                                 })
 
                         elif is_line_15 and "over" in oc_desc and 1.15 <= odds <= min(max_leg_odds, 1.45):
+                            if for_rollover:
+                                # Strictly forbid Team Over 1.5 in rollover slips to avoid 1-0 scoreline cut traps
+                                continue
                             prob = round(min(0.88, (1.0 / odds) * 0.94), 4)
                             sel_desc = f"{fav_team} Over 1.5 Goals"
                             stats_3p = evaluate_fixture_3pillar_metrics(h_team, a_team, f"{fav_team} Team Goals 1.5", sel_desc, odds)
@@ -940,22 +1035,28 @@ class EliteRolloverEngine:
     def assemble_optimal_rollover_slip(
         cls,
         candidates: List[Dict[str, Any]],
-        target_odds: float = 2.00
+        target_odds: float = 1.50
     ) -> List[Dict[str, Any]]:
         """
-        Deterministically selects the top 1 to 4 distinct fixtures that combine
-        closest to target_odds (1.50 or 2.00) while maximizing joint win probability.
+        Deterministically selects the top 2 to 3 distinct banker fixtures that combine
+        closest to target_odds (1.50x - 1.65x) while maximizing joint win probability.
         Strictly zero random shuffling: highest statistical quality is guaranteed.
         """
         if not candidates:
             return []
 
         # STRICT SAFETY DIRECTIVE (User Directive):
-        # 1. 1st Half Over 0.5 is 100% PROHIBITED in the 2.0x Rollover Slip.
-        # 2. Heavyweight Derbies (e.g. Juve vs Lazio, Milan vs Atalanta, Chelsea vs Liverpool)
+        # 1. 1st Half Over 0.5 is 100% PROHIBITED in the Rollover Slip.
+        # 2. Team Over 1.5 is 100% PROHIBITED to prevent 1-0 win cut traps.
+        # 3. Heavyweight Derbies (e.g. Juve vs Lazio, Milan vs Atalanta, Chelsea vs Liverpool)
         #    are 100% PROHIBITED from compounding rollover capital. Rollover relies strictly on
         #    dominant juggernauts playing against non-heavyweights.
-        candidates = [c for c in candidates if c.get("market_type") != "FIRST_HALF_OVER_05" and not c.get("is_heavyweight_derby")]
+        candidates = [
+            c for c in candidates
+            if c.get("market_type") != "FIRST_HALF_OVER_05"
+            and c.get("market_type") != "TEAM_OVER_15"
+            and not c.get("is_heavyweight_derby")
+        ]
         if not candidates:
             return []
 
@@ -975,7 +1076,7 @@ class EliteRolloverEngine:
             return []
 
         # JUGGERNAUT FIRST DIBS: Dominant juggernauts (Celtic, Juventus, Lazio, AC Milan, PSG, Man City, etc.)
-        # get first priority for the 2.0x Rollover compounding capital rather than being passed over.
+        # get first priority for the Rollover compounding capital rather than being passed over.
         ranked_pool.sort(
             key=lambda x: (
                 1 if x.get("is_juggernaut") and x.get("dominance_ratio", 0) >= 1.5 else 0,
@@ -993,8 +1094,8 @@ class EliteRolloverEngine:
         import itertools
         top_slice = ranked_pool[:50]
 
-        # For 1.50x target: test 1-leg (~1.45-1.55) and 2-leg (~1.20 x 1.25)
-        # For 2.00x target: test 4-leg first (proven 70% win-rate formula), fallback to 3-leg
+        # For 1.50x target: test 2-leg (~1.22 x 1.25) and 3-leg (~1.15 x 1.15 x 1.15)
+        # For 2.00x target: test 4-leg first, fallback to 3-leg
         if target <= 1.45:
             leg_options = (1, 2)
         elif target <= 1.70:
@@ -1021,12 +1122,17 @@ class EliteRolloverEngine:
 
                 avg_quality = quality_sum / k
                 odds_diff = abs(tot_odds - target)
-                # Must be within reasonable bound of target odds (e.g. 1.85x - 2.20x for 2.0x target)
-                if tot_odds < (target * 0.90) or tot_odds > (target * 1.15):
+                # Must be within reasonable bound of target odds (e.g. 1.45x - 1.70x for 1.50x target)
+                if tot_odds < (target * 0.95) or tot_odds > (target * 1.15):
                     continue
 
-                # Objective: prioritize 4-leg sweet spot for 2.0x, heavily weight joint probability and quality
-                leg_penalty = 0.0 if k == 4 else (abs(k - 4) * 4.0)
+                # Objective: heavily weight joint probability and quality
+                if target <= 1.70:
+                    ideal_legs = 2 if target <= 1.55 else 3
+                    leg_penalty = 0.0 if k in (2, 3) else (abs(k - ideal_legs) * 5.0)
+                else:
+                    leg_penalty = 0.0 if k == 4 else (abs(k - 4) * 4.0)
+
                 unique_mkts = len(set(leg.get("market_type") for leg in combo))
                 diversity_bonus = (unique_mkts - 1) * 10.0
                 dc_count = sum(1 for leg in combo if leg.get("market_type") == "DOUBLE_CHANCE")
@@ -1040,7 +1146,7 @@ class EliteRolloverEngine:
         # Fallback if no exact combination met strict window: pick top legs greedily up to target with diversity guard
         if not best_combo:
             curr_odds = 1.0
-            max_legs = 2 if target <= 1.45 else (3 if target <= 1.70 else 4)
+            max_legs = 2 if target <= 1.55 else (3 if target <= 1.70 else 4)
             max_per_market = 1 if max_legs <= 3 else 2
             market_counts = collections.defaultdict(int)
             used_fids = set()
@@ -1063,7 +1169,7 @@ class EliteRolloverEngine:
     @classmethod
     async def book_and_dispatch_rollover(
         cls,
-        target_odds: float = 2.00,
+        target_odds: float = 1.50,
         send_telegram: bool = True,
         max_leg_odds: float = 1.45,
         challenge_day_info: Optional[str] = None,
@@ -1073,7 +1179,7 @@ class EliteRolloverEngine:
         Full Autonomous Pipeline:
         1. Query SportyBet today's endpoint directly.
         2. Filter elite low-variance picks with Dixon-Coles/Poisson models.
-        3. Assemble optimal 1.50x or 2.00x ticket with odds strictly between 1.15 and max_leg_odds.
+        3. Assemble optimal 1.50x ticket across 2-3 banker games with odds strictly between 1.15 and max_leg_odds.
         4. Generate live SportyBet shareCode via /orders/share.
         5. Dispatch rich alert to Telegram.
         6. Persist to StatIQ database.
@@ -1086,7 +1192,7 @@ class EliteRolloverEngine:
                 "message": "SportyBet today endpoint returned 0 active fixtures."
             }
 
-        candidates = cls.evaluate_elite_rollover_candidates(raw_events, max_leg_odds=max_leg_odds)
+        candidates = cls.evaluate_elite_rollover_candidates(raw_events, max_leg_odds=max_leg_odds, for_rollover=True)
         if not candidates:
             return {
                 "status": "NO_QUALIFIED_PICKS",
@@ -1277,9 +1383,9 @@ class EliteRolloverEngine:
 
         target = float(target_odds)
 
-        # For 10.0x targets: prioritize sweet-spot odds (1.20 - 1.36) per fixture
-        # so target odds of 10.0x are achieved in 9-11 high-assurance legs rather than 16+ low-odds legs
-        if target >= 9.5:
+        # For 10.0x and high-multiplier targets: prioritize sweet-spot odds (1.20 - 1.36) per fixture
+        # so target odds of 10.0x are achieved in 8-10 high-assurance legs rather than 16+ low-odds legs
+        if target >= 8.5:
             for fid in fixture_candidates:
                 fixture_candidates[fid].sort(
                     key=lambda x: (
@@ -1291,18 +1397,18 @@ class EliteRolloverEngine:
                 )
 
         # PASS 1: Targeted Market Diversity Mix
-        # Initial preference: balance Team Over 0.5, Over 1.5, Win Either Half, Double Chance, and Unders
-        max_dc = max(2, int(min_legs * 0.45))
-        max_per_market = max(3, int(max_legs * 0.40))
+        # Initial preference: balance Team Over 0.5, Over 1.5, Win Either Half, Double Chance
+        max_dc = max(3, int(max_legs * 0.50)) if target >= 8.5 else max(2, int(min_legs * 0.45))
+        max_per_market = max(4, int(max_legs * 0.50)) if target >= 8.5 else max(3, int(max_legs * 0.40))
         market_counts: Dict[str, int] = collections.defaultdict(int)
 
         selected_legs: List[Dict[str, Any]] = []
         selected_fids = set()
         curr_odds = 1.0
 
-        target_floor = (target * 0.95) if target >= 9.5 else (target * 0.92)
-        target_ceiling = (target * 1.08) if target >= 9.5 else (target * 1.15)
-        effective_max_legs = max_legs + (3 if target >= 9.5 else 2)
+        target_floor = (target * 0.95) if target >= 8.5 else (target * 0.92)
+        target_ceiling = (target * 1.08) if target >= 8.5 else (target * 1.15)
+        effective_max_legs = max_legs + (5 if target >= 20.0 else (3 if target >= 8.5 else 2))
 
         for fid in sorted_fixtures:
             opts = fixture_candidates[fid]
@@ -1352,6 +1458,40 @@ class EliteRolloverEngine:
                 if len(selected_legs) >= effective_max_legs:
                     break
                 if curr_odds >= target_ceiling and len(selected_legs) >= min_legs:
+                    break
+
+        # PASS 3: Odds Sweet-Spot Optimization & Leg Upgrades
+        # If after Pass 1 & 2 the slip is below target_floor:
+        # A. Attempt to upgrade existing legs by swapping to higher-odds vetted markets for that same fixture
+        #    (e.g., swapping a 1.16 Team Over 0.5 for a 1.28 Over 1.5 or 1.25 Win Either Half)
+        if curr_odds < target_floor:
+            for i, leg in enumerate(selected_legs):
+                fid = leg["event_id"]
+                opts = fixture_candidates.get(fid, [])
+                for alt in opts:
+                    if alt["odds"] > leg["odds"] and alt["model_probability"] >= 0.72:
+                        old_odds = leg["odds"]
+                        new_slip_odds = (curr_odds / old_odds) * alt["odds"]
+                        if new_slip_odds <= target_ceiling * 1.05:
+                            selected_legs[i] = alt
+                            curr_odds = new_slip_odds
+                            break
+                if curr_odds >= target_floor:
+                    break
+
+        # B. If still below target_floor, draw additional top-ranked fixtures up to effective_max_legs
+        if curr_odds < target_floor and len(selected_legs) < effective_max_legs:
+            for fid in sorted_fixtures:
+                if fid in selected_fids:
+                    continue
+                opts = fixture_candidates[fid]
+                if not opts:
+                    continue
+                chosen = opts[0]
+                selected_legs.append(chosen)
+                selected_fids.add(fid)
+                curr_odds *= chosen["odds"]
+                if curr_odds >= target_floor or len(selected_legs) >= effective_max_legs:
                     break
 
         # Verify accumulator reached required odds threshold; adaptively support lean boards
@@ -1465,21 +1605,22 @@ class EliteRolloverEngine:
         enable_5odds: bool = False,
         send_telegram: bool = True,
         rollover_stake: float = 5000.0,
+        rollover_target_odds: float = 1.50,
         challenge_day_info: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Unified 10:00 AM WAT Automation Hub with Adaptive Calendar Engine:
-        1. Saturdays & Sundays (Weekends): Strict Mode (100% Zero-Overlap across all 3 slips).
+        1. Saturdays & Sundays (Weekends): Strict Mode (100% Zero-Overlap across all slips).
            Zero fixtures are repeated anywhere.
         2. Mondays – Fridays (Weekdays): Smart Hybrid Mode:
-           - 2.0x Rollover is 100% sacred & isolated (0 shared fixtures anywhere).
+           - 1.50x Rollover is 100% sacred & isolated (0 shared fixtures anywhere, 2–3 banker games).
            - 10.0x and 20.0x slips can share at most 2–3 Elite Giants (different markets only:
              e.g., Over 1.5 Goals on 10x, Win Either Half or Double Chance on 20x).
            - 80%+ of fixtures on each slip remain completely unique.
         3. Slips:
-           - Slip 1: 2.0x Rollover (3–4 banker legs, ~2.00x)
-           - Slip 2: 10.0x Mega Slip (10–13 legs max, target 9.80x–10.50x, strictly capped at 13 legs)
-           - Slip 3: 20.0x Monster Acca (15–18 vetted legs, target 19.0x–22.0x, replacing 5.0x)
+           - Slip 1: 1.50x Rollover (2–3 banker legs, ~1.50x - 1.65x)
+           - Slip 2: 10.0x Mega Slip (8–12 legs, target 9.80x–10.50x)
+           - Slip 3: 20.0x Monster Acca (14–18 vetted legs, target 19.0x–22.0x)
         """
         logger.info(f"[EliteRollover] Executing Daily VIP Automation (Rollover: {enable_rollover}, 10x: {enable_10odds}, 20x: {enable_20odds})...")
         raw_events = await cls.fetch_sportybet_today_events(max_pages=35)
@@ -1490,7 +1631,7 @@ class EliteRolloverEngine:
             }
 
         # Evaluate candidate pool strictly with pure banker odds floor & ceiling (1.15 to 1.45, 78%+ win probability)
-        banker_candidates = cls.evaluate_elite_rollover_candidates(raw_events, max_leg_odds=1.45)
+        banker_candidates = cls.evaluate_elite_rollover_candidates(raw_events, max_leg_odds=1.45, for_rollover=False)
 
         if not banker_candidates:
             return {
@@ -1523,10 +1664,10 @@ class EliteRolloverEngine:
             "total_unique_fixtures": 0
         }
 
-        # ── 1. SLIP 1: 2.0x ROLLOVER (Highest Assurance Banker Legs - 100% SACRED & ISOLATED) ──
+        # ── 1. SLIP 1: 1.50x ROLLOVER (Highest Assurance Banker Legs - 100% SACRED & ISOLATED) ──
         if enable_rollover:
-            unclaimed_ro = [c for c in banker_candidates if c["event_id"] not in claimed_event_ids]
-            ro_legs = cls.assemble_optimal_rollover_slip(unclaimed_ro, target_odds=2.00)
+            unclaimed_ro = [c for c in banker_candidates if c["event_id"] not in claimed_event_ids and c.get("market_type") != "TEAM_OVER_15"]
+            ro_legs = cls.assemble_optimal_rollover_slip(unclaimed_ro, target_odds=rollover_target_odds)
             if ro_legs:
                 for leg in ro_legs:
                     claimed_event_ids.add(leg["event_id"])
@@ -1538,15 +1679,15 @@ class EliteRolloverEngine:
                 ro_ticket_id = f"ROLLOVER-{now_ts}"
                 current_stake = float(rollover_stake or 5000.0)
 
-                cls._persist_ticket_record(ro_ticket_id, ro_code, "ROLLOVER", 2.00, ro_odds, current_stake, ro_legs)
+                cls._persist_ticket_record(ro_ticket_id, ro_code, "ROLLOVER", rollover_target_odds, ro_odds, current_stake, ro_legs)
 
                 ro_payload = {
                     "status": "SUCCESS",
                     "ticket_id": ro_ticket_id,
-                    "title": "2.0x Rollover Slip",
+                    "title": f"🎯 StatIQ Elite Rollover Slip ({rollover_target_odds:.2f}x)",
                     "booking_code": ro_code or "N/A",
                     "share_url": ro_url,
-                    "target_odds": 2.00,
+                    "target_odds": rollover_target_odds,
                     "actual_odds": ro_odds,
                     "confidence_score": ro_prob,
                     "date_str": today_str,
@@ -1709,7 +1850,7 @@ class EliteRolloverEngine:
         trio_result["total_unique_fixtures"] = len(claimed_event_ids)
 
         # STRICT QUALITY & DELIVERY GATE:
-        # 1. 2.0x Rollover slip is the mandatory VIP anchor. It MUST be successfully assembled & booked.
+        # 1. 1.50x Banker Rollover slip is the mandatory VIP anchor. It MUST be successfully assembled & booked.
         # 2. Secondary accumulators (5x, 10x, 20x): If they have assembled legs, they MUST be booked successfully.
         #    If a secondary slip was rested due to zero-overlap fixture exhaustion on a lean board, that is an
         #    intentional capital-preservation decision, NOT a delivery failure!
@@ -1719,7 +1860,7 @@ class EliteRolloverEngine:
             ro_t = trio_result.get("rollover_ticket")
             if not ro_t or ro_t.get("booking_code") in (None, "N/A", "", "RESTED"):
                 delivery_failed = True
-                fail_reasons.append("2.0x Rollover slip")
+                fail_reasons.append("1.50x Banker Rollover slip")
 
         if enable_5odds and acca5_legs:
             a5_t = trio_result.get("acca_5x_ticket")
@@ -1779,18 +1920,29 @@ class EliteRolloverEngine:
         target_odds: Optional[float] = None,
         target_games: Optional[int] = None,
         num_tickets: int = 1,
-        excluded_event_ids: Optional[set] = None
+        excluded_event_ids: Optional[set] = None,
+        time_horizon: str = "TODAY",
+        allow_lower_leagues: bool = False
     ) -> List[Dict[str, Any]]:
         """
         Unified On-Demand Generator using the exact same Elite Vetted Selection Engine:
-        Powers Telegram /odds, /games, and the Web Ticket Builder with Zero Overlap.
+        Powers Telegram /odds, /games, /weekend, /ucl, and Web Ticket Builder with Zero Overlap.
+        Supports time_horizon (TODAY, WEEKEND, MIDWEEK_UCL) and explicit allow_lower_leagues opt-in.
         Strict Tier-1/Tier-2 dominance, Poisson scoring, and Min Odds >= 1.15.
         """
-        raw_events = await cls.fetch_sportybet_today_events(max_pages=20)
+        today_only = (time_horizon == "TODAY")
+        raw_events = await cls.fetch_sportybet_today_events(max_pages=25 if not today_only else 20, today_only=today_only)
         if not raw_events:
             return []
 
-        candidates = cls.evaluate_elite_rollover_candidates(raw_events, max_leg_odds=1.55, is_on_demand=True)
+        candidates = cls.evaluate_elite_rollover_candidates(
+            raw_events,
+            max_leg_odds=1.55,
+            is_on_demand=True,
+            time_horizon=time_horizon,
+            allow_lower_leagues=allow_lower_leagues,
+            for_rollover=False
+        )
         if not candidates:
             return []
 
@@ -1882,10 +2034,14 @@ class EliteRolloverEngine:
                 if t_odds <= 2.2:
                     slip_legs = cls.assemble_optimal_rollover_slip(unclaimed, target_odds=t_odds)
                 else:
-                    if t_odds >= 18.0:
-                        min_l, max_l = 10, 14
+                    if t_odds >= 50.0:
+                        min_l, max_l = 18, 25
+                    elif t_odds >= 25.0:
+                        min_l, max_l = 14, 20
+                    elif t_odds >= 18.0:
+                        min_l, max_l = 10, 15
                     elif t_odds >= 14.0:
-                        min_l, max_l = 9, 13
+                        min_l, max_l = 9, 14
                     elif t_odds >= 8.5:
                         min_l, max_l = 8, 12
                     elif t_odds >= 4.5:
@@ -1990,8 +2146,8 @@ class EliteRolloverEngine:
                 title = f"🎯 5.0x Precision Multiplier{variant_suffix}"
             elif 8.5 <= t_odds <= 12.0:
                 title = f"🚀 10.0x Mega Multiplier{variant_suffix}"
-            elif 1.8 <= t_odds <= 2.5:
-                title = f"🛡️ 2.0x Rollover Slip{variant_suffix}"
+            elif 1.4 <= t_odds <= 2.5:
+                title = f"🛡️ {t_odds:.2f}x Banker Rollover Slip{variant_suffix}" if abs(t_odds - 1.5) < 0.2 else f"🛡️ {t_odds:.1f}x Rollover Slip{variant_suffix}"
             else:
                 title = f"🎯 {t_odds:.1f}x Multiplier{variant_suffix}"
 

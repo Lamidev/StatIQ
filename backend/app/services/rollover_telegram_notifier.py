@@ -53,19 +53,19 @@ class RolloverTelegramNotifier:
         Formats and sends a high-assurance Rollover ticket alert to Telegram.
         """
         code = ticket_data.get("booking_code") or "N/A"
-        target_odds = ticket_data.get("target_odds", 2.0)
+        target_odds = ticket_data.get("target_odds", 1.50)
         actual_odds = ticket_data.get("actual_odds", target_odds)
-        confidence = ticket_data.get("confidence_score", 88.5)
+        confidence = ticket_data.get("confidence_score", 90.0)
         picks = ticket_data.get("picks", [])
         date_str = ticket_data.get("date_str", "Today")
         share_url = ticket_data.get("share_url") or f"https://www.sportybet.com/ng/?shareCode={code}"
-        title_line = "🎯 <b>StatIQ Elite Rollover Slip</b>"
+        title_line = f"🎯 <b>StatIQ Elite Rollover Slip ({actual_odds:.2f}x)</b>"
 
         lines = [
             title_line,
             f"📅 <b>Date:</b> {date_str} (10:00 AM WAT Dispatch)",
-            f"⚡ <b>Target Odds:</b> {actual_odds:.2f}x | <b>Combined Confidence:</b> {confidence:.1f}%",
-            f"📊 <b>Leg Count:</b> {len(picks)} Banker Matches\n"
+            f"⚡ <b>Target Multiplier:</b> {actual_odds:.2f}x | <b>Combined Confidence:</b> {confidence:.1f}%",
+            f"📊 <b>Leg Count:</b> {len(picks)} Banker Matches (2–3 Low-Variance Cushions)\n"
         ]
 
         for i, p in enumerate(picks, 1):
@@ -83,7 +83,7 @@ class RolloverTelegramNotifier:
         lines.append(f"\n🔥 <b>Total Multiplier:</b> {actual_odds:.2f}x")
         lines.append(f"🎟️ <b>SportyBet Code:</b> <code>{code}</code>")
         lines.append(f"🔗 <a href=\"{share_url}\"><b>Click to Pre-Load on SportyBet</b></a>\n")
-        lines.append("🤖 <i>Automated via StatIQ Elite Rollover Scheduler</i>")
+        lines.append("🤖 <i>Automated via StatIQ Elite Rollover Scheduler · 1.50x Compounding Corridor</i>")
 
         msg = "\n".join(lines)
         return cls.send_message(msg)

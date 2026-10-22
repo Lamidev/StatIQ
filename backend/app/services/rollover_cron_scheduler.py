@@ -17,11 +17,11 @@ CONFIG_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."
 DEFAULT_CONFIG = {
     "is_enabled": True,
     "active_days": ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"],  # Daily VIP Suite (Mon-Sun)
-    "enable_rollover_2x": True,            # Slip 1: 2.0x Rollover (3–4 banker legs)
+    "enable_rollover_2x": True,            # Slip 1: 1.50x Rollover (2–3 banker legs)
     "enable_acca_5x": True,                # Slip 2: 5.0x Precision Acca (7–8 banker legs)
     "enable_acca_10x": True,               # Slip 3: 10.0x Mega Multiplier (10–12 banker legs)
     "enable_acca_20x": False,              # Disabled by default
-    "target_odds": 2.00,                   # 1.50 or 2.00
+    "target_odds": 1.50,                   # 1.50x Rollover sweet spot (2–3 banker games)
     "max_leg_odds": 1.35,                  # Banker safety corridor
     "dispatch_time": "10:00",              # 10:00 AM WAT sharp
     "campaign_mode": "CONTINUOUS",         # "CONTINUOUS" or "CHALLENGE"
@@ -167,7 +167,7 @@ class RolloverCronScheduler:
                     if (current_day_code in active_days) and (current_time_str >= dispatch_time) and (last_run != today_str) and (self._last_dispatched_date != today_str) and (now_wat.hour < 21):
                         self._last_dispatched_date = today_str
                         logger.info(f"[RolloverScheduler] Triggering scheduled Daily VIP run for {current_day_code} ({today_str} @ {current_time_str})...")
-                        target_odds = float(cfg.get("target_odds", 2.00))
+                        target_odds = float(cfg.get("target_odds", 1.50))
 
                         challenge_info = None
                         current_stake = float(cfg.get("starting_stake", 5000))
@@ -193,6 +193,7 @@ class RolloverCronScheduler:
                                 enable_5odds=en_5x,
                                 send_telegram=True,
                                 rollover_stake=current_stake,
+                                rollover_target_odds=target_odds,
                                 challenge_day_info=challenge_info
                             )
                         )
@@ -270,7 +271,7 @@ class RolloverCronScheduler:
         enable_5odds: Optional[bool] = None
     ) -> Dict[str, Any]:
         """
-        Manually triggers an immediate run of the Daily VIP Trio (2.0x Rollover + 10.0x Mega + 20.0x Monster).
+        Manually triggers an immediate run of the Daily VIP Trio (1.50x Rollover + 5.0x Precision + 10.0x Mega).
         """
         cfg = self.get_config()
         en_ro = enable_rollover if enable_rollover is not None else bool(cfg.get("enable_rollover_2x", True))
@@ -280,7 +281,7 @@ class RolloverCronScheduler:
 
         challenge_info = None
         current_stake = float(cfg.get("starting_stake", 5000))
-        odds = target_odds if target_odds is not None else float(cfg.get("target_odds", 2.00))
+        odds = target_odds if target_odds is not None else float(cfg.get("target_odds", 1.50))
         if cfg.get("campaign_mode") == "CHALLENGE":
             curr_day = int(cfg.get("challenge_day_current", 1))
             tot_days = int(cfg.get("challenge_days", 10))
@@ -495,7 +496,7 @@ class RolloverCronScheduler:
         self.save_config(cfg)
         return {"status": "SUCCESS", "message": "Campaign concluded and removed."}
 
-    def start_challenge(self, days: int = 3, starting_stake: float = 5000.0, target_odds: float = 2.0) -> Dict[str, Any]:
+    def start_challenge(self, days: int = 3, starting_stake: float = 5000.0, target_odds: float = 1.50) -> Dict[str, Any]:
         """Starts a fresh compounding challenge ladder."""
         today_str = datetime.date.today().isoformat()
         end_date = (datetime.date.today() + datetime.timedelta(days=days - 1)).isoformat()
