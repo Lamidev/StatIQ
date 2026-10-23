@@ -124,6 +124,7 @@ class SportyBetClient:
         Fetches full detailed event payload with all deep markets from pcEventDetails or eventDetail.
         """
         urls = [
+            f"{self.BASE_URL}/{self.region}/factsCenter/event?eventId={event_id}",
             f"{self.BASE_URL}/{self.region}/factsCenter/pcEventDetails?eventId={event_id}",
             f"{self.BASE_URL}/{self.region}/factsCenter/eventDetail?eventId={event_id}",
         ]

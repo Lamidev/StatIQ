@@ -965,7 +965,7 @@ class StatIQTelegramBot:
                 total_odds=actual_odds,
                 confidence=conf,
                 picks=picks,
-                extra_note="Mono-Market Discipline: 100% Goal Kicks Under Cushions"
+                extra_note="Mono-Market Discipline: 100% Goal Kicks Under Cushions (Odds: 1.30–1.55)"
             )
 
             if scout_analysis:
