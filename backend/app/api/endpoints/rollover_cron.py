@@ -15,6 +15,10 @@ class ScheduleUpdateRequest(BaseModel):
     enable_acca_10x: Optional[bool] = None
     enable_acca_20x: Optional[bool] = None
     target_odds: Optional[float] = None
+    rollover_target_odds: Optional[float] = None
+    acca_5x_target_odds: Optional[float] = None
+    acca_10x_target_odds: Optional[float] = None
+    acca_20x_target_odds: Optional[float] = None
     max_leg_odds: Optional[float] = None      # e.g. 1.35, 1.40, 1.45, 1.50
     dispatch_time: Optional[str] = None
     campaign_mode: Optional[str] = None       # "CONTINUOUS" or "CHALLENGE"
@@ -27,6 +31,10 @@ class ScheduleUpdateRequest(BaseModel):
 
 class RunNowRequest(BaseModel):
     target_odds: Optional[float] = None
+    rollover_target_odds: Optional[float] = None
+    acca_5x_target_odds: Optional[float] = None
+    acca_10x_target_odds: Optional[float] = None
+    acca_20x_target_odds: Optional[float] = None
     max_leg_odds: Optional[float] = None
     enable_rollover_2x: Optional[bool] = None
     enable_acca_5x: Optional[bool] = None
@@ -116,6 +124,16 @@ def update_schedule(req: ScheduleUpdateRequest):
         update_data["active_days"] = cleaned
     if req.target_odds is not None:
         update_data["target_odds"] = round(float(req.target_odds), 2)
+        update_data["rollover_target_odds"] = round(float(req.target_odds), 2)
+    if req.rollover_target_odds is not None:
+        update_data["rollover_target_odds"] = round(float(req.rollover_target_odds), 2)
+        update_data["target_odds"] = round(float(req.rollover_target_odds), 2)
+    if req.acca_5x_target_odds is not None:
+        update_data["acca_5x_target_odds"] = round(float(req.acca_5x_target_odds), 2)
+    if req.acca_10x_target_odds is not None:
+        update_data["acca_10x_target_odds"] = round(float(req.acca_10x_target_odds), 2)
+    if req.acca_20x_target_odds is not None:
+        update_data["acca_20x_target_odds"] = round(float(req.acca_20x_target_odds), 2)
     if req.max_leg_odds is not None:
         update_data["max_leg_odds"] = round(float(req.max_leg_odds), 2)
     if req.dispatch_time is not None:
@@ -136,10 +154,19 @@ def update_schedule(req: ScheduleUpdateRequest):
         update_data["challenge_status"] = req.challenge_status.upper()
 
     rollover_scheduler.save_config(update_data)
+    new_cfg = rollover_scheduler.get_config()
+
+    # Automatically notify Telegram chat of updated settings
+    try:
+        RolloverTelegramNotifier.notify_schedule_updated(new_cfg)
+    except Exception as e:
+        import logging
+        logging.getLogger("rollover_cron").warning(f"Could not dispatch schedule update alert to Telegram: {e}")
+
     return {
         "status": "SUCCESS",
         "message": "Rollover Cron configuration updated successfully.",
-        "config": rollover_scheduler.get_config()
+        "config": new_cfg
     }
 
 @router.post("/challenge/reset")
@@ -176,6 +203,10 @@ async def run_now(req: RunNowRequest = Body(default=RunNowRequest())):
     try:
         res = await rollover_scheduler.run_now(
             target_odds=req.target_odds,
+            rollover_target_odds=req.rollover_target_odds,
+            acca_5x_target_odds=req.acca_5x_target_odds,
+            acca_10x_target_odds=req.acca_10x_target_odds,
+            acca_20x_target_odds=req.acca_20x_target_odds,
             max_leg_odds=req.max_leg_odds,
             enable_rollover=req.enable_rollover_2x,
             enable_10odds=req.enable_acca_10x,

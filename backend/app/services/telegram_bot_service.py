@@ -271,10 +271,16 @@ class StatIQTelegramBot:
 
         master_on = cfg.get("is_enabled", True)
         ro_on = cfg.get("enable_rollover_2x", True)
+        acca5_on = cfg.get("enable_acca_5x", True)
         acca10_on = cfg.get("enable_acca_10x", True)
-        acca20_on = cfg.get("enable_acca_20x", True)
+        acca20_on = cfg.get("enable_acca_20x", False)
         disp_time = cfg.get("dispatch_time", "10:00")
         active_days = cfg.get("active_days", ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"])
+
+        ro_odds = float(cfg.get("rollover_target_odds") or cfg.get("target_odds") or 1.50)
+        a5_odds = float(cfg.get("acca_5x_target_odds") or 5.00)
+        a10_odds = float(cfg.get("acca_10x_target_odds") or 10.00)
+        a20_odds = float(cfg.get("acca_20x_target_odds") or 20.00)
 
         active_days_set = set(d.upper() for d in active_days)
         if active_days_set >= {"MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"}:
@@ -287,6 +293,7 @@ class StatIQTelegramBot:
             days_label = ", ".join(active_days)
 
         ro_icon = "✅ ON" if ro_on else "❌ OFF"
+        acca5_icon = "✅ ON" if acca5_on else "❌ OFF"
         acca10_icon = "✅ ON" if acca10_on else "❌ OFF"
         acca20_icon = "✅ ON" if acca20_on else "❌ OFF"
         master_icon = "🟢 ACTIVE" if master_on else "⏸️ PAUSED"
@@ -298,24 +305,26 @@ class StatIQTelegramBot:
             f"📅 <b>Active Days:</b> <b>{days_label}</b>\n"
             "🔒 <b>Zero-Overlap Guarantee:</b> 100% Unique Fixtures Across All Daily Slips\n\n"
             "<b>📅 Daily VIP Slips (100% Zero-Overlap):</b>\n"
-            f"• 🎯 <b>1.50x Rollover:</b> {ro_icon} (2–3 Banker Legs, 100% Isolated)\n"
-            f"• ⚡ <b>10.0x Mega Slip #1:</b> {acca10_icon} (8–10 High-Dominance Legs)\n"
-            f"• ⚡ <b>10.0x Mega Slip #2:</b> {acca10_icon} (8–10 High-Dominance Legs, 100% Unique)\n\n"
+            f"• 🎯 <b>{ro_odds:.2f}x Rollover:</b> {ro_icon} (2–4 Banker Legs, 100% Isolated)\n"
+            f"• ⚡ <b>{a5_odds:.1f}x Precision:</b> {acca5_icon} (High-Assurance Cushions)\n"
+            f"• 🚀 <b>{a10_odds:.1f}x Mega:</b> {acca10_icon} (Zero-Overlap Multiplier)\n"
+            f"• ⚡ <b>{a20_odds:.1f}x Monster:</b> {acca20_icon} (Max Dominance Accumulator)\n\n"
             "<i>Tap any button below to toggle tickets on/off, cycle active days, or dispatch today's slips instantly:</i>"
         )
 
         keyboard = {
             "inline_keyboard": [
                 [
-                    {"text": f"🎯 1.50x Rollover ({'ON' if ro_on else 'OFF'})", "callback_data": "auto:toggle:ro"},
-                    {"text": f"⚡ 10.0x Mega ({'ON' if acca10_on else 'OFF'})", "callback_data": "auto:toggle:10x"}
+                    {"text": f"🎯 {ro_odds:.2f}x Rollover ({'ON' if ro_on else 'OFF'})", "callback_data": "auto:toggle:ro"},
+                    {"text": f"⚡ {a5_odds:.1f}x Precision ({'ON' if acca5_on else 'OFF'})", "callback_data": "auto:toggle:5x"}
                 ],
                 [
-                    {"text": f"🚀 20.0x Monster ({'ON' if acca20_on else 'OFF'})", "callback_data": "auto:toggle:20x"},
-                    {"text": f"🤖 Master ({'Active' if master_on else 'Paused'})", "callback_data": "auto:toggle:master"}
+                    {"text": f"🚀 {a10_odds:.1f}x Mega ({'ON' if acca10_on else 'OFF'})", "callback_data": "auto:toggle:10x"},
+                    {"text": f"⚡ {a20_odds:.1f}x Monster ({'ON' if acca20_on else 'OFF'})", "callback_data": "auto:toggle:20x"}
                 ],
                 [
-                    {"text": f"📅 Active Days: {days_label}", "callback_data": "auto:cycle:days"}
+                    {"text": f"🤖 Master ({'Active' if master_on else 'Paused'})", "callback_data": "auto:toggle:master"},
+                    {"text": f"📅 Days: {days_label}", "callback_data": "auto:cycle:days"}
                 ],
                 [
                     {"text": "🚀 Dispatch Today's Slips Now", "callback_data": "auto:dispatch"}
@@ -477,48 +486,67 @@ class StatIQTelegramBot:
 
             # If this command was run outside the VIP main channel, also forward the slips to the requester's chat
             if not is_same_channel:
-                # 1. Rollover slip (1.50x)
+                # 1. Rollover slip
                 ro_ticket = trio_res.get("rollover_ticket")
                 if ro_ticket and ro_ticket.get("picks"):
+                    ro_target = ro_ticket.get("target_odds", 1.50)
                     self._dispatch_ticket_message(
                         chat_id=chat_id,
-                        title="🎯 StatIQ 1.50x Elite Rollover Slip",
+                        title=ro_ticket.get("title") or f"🎯 StatIQ {ro_target:.2f}x Elite Rollover Slip",
                         booking_code=ro_ticket.get("booking_code"),
                         share_url=ro_ticket.get("share_url"),
-                        total_odds=ro_ticket.get("actual_odds", 1.50),
+                        total_odds=ro_ticket.get("actual_odds", ro_target),
                         confidence=ro_ticket.get("confidence_score", 90.0),
                         picks=ro_ticket.get("picks", []),
-                        extra_note="Daily VIP Slip 1 of 3 · 🎯 1.50x Rollover (2–3 Banker Matches · 100% Isolated) · Min Odds ≥ 1.15x"
+                        extra_note=f"Daily VIP Slip 1 · 🎯 {ro_target:.2f}x Rollover ({len(ro_ticket.get('picks', []))} Banker Legs · 100% Isolated) · Min Odds ≥ 1.15x"
                     )
                     dispatched_count += 1
 
-                # 2. Midweek 5.0x Precision Multiplier (if present)
+                # 2. Precision Multiplier
                 acca5 = trio_res.get("acca_5x_ticket")
                 if acca5 and acca5.get("picks"):
+                    a5_target = acca5.get("target_odds", 5.0)
                     self._dispatch_ticket_message(
                         chat_id=chat_id,
-                        title="🎯 StatIQ 5.0x Precision Multiplier Slip",
+                        title=acca5.get("title") or f"🎯 StatIQ {a5_target:.1f}x Precision Multiplier Slip",
                         booking_code=acca5.get("booking_code"),
                         share_url=acca5.get("share_url"),
-                        total_odds=acca5.get("actual_odds", 5.0),
+                        total_odds=acca5.get("actual_odds", a5_target),
                         confidence=acca5.get("confidence_score", 65.0),
                         picks=acca5.get("picks", []),
-                        extra_note="Daily VIP Slip 2 of 3 · 🎯 5.0x Precision Acca (Elite European Selections) · Min Odds ≥ 1.15x"
+                        extra_note=f"Daily VIP Slip 2 · 🎯 {a5_target:.1f}x Precision Acca (High-Assurance Cushions) · Min Odds ≥ 1.15x"
                     )
                     dispatched_count += 1
 
-                # 3. Daily 10.0x Mega Multiplier Slip (Slip #3)
+                # 3. Mega Multiplier
                 acca10 = trio_res.get("acca_10x_ticket")
                 if acca10 and acca10.get("picks"):
+                    a10_target = acca10.get("target_odds", 10.0)
                     self._dispatch_ticket_message(
                         chat_id=chat_id,
-                        title="⚡ StatIQ 10.0x Mega Multiplier Slip",
+                        title=acca10.get("title") or f"⚡ StatIQ {a10_target:.1f}x Mega Multiplier Slip",
                         booking_code=acca10.get("booking_code"),
                         share_url=acca10.get("share_url"),
-                        total_odds=acca10.get("actual_odds", 10.0),
+                        total_odds=acca10.get("actual_odds", a10_target),
                         confidence=acca10.get("confidence_score", 52.0),
                         picks=acca10.get("picks", []),
-                        extra_note="Daily VIP Slip 3 of 3 · ⚡ 10.0x Mega Multiplier · 🔒 Zero-Overlap · Min Odds ≥ 1.15x"
+                        extra_note=f"Daily VIP Slip 3 · ⚡ {a10_target:.1f}x Mega Multiplier · 🔒 Zero-Overlap · Min Odds ≥ 1.15x"
+                    )
+                    dispatched_count += 1
+
+                # 4. Monster Multiplier (if present)
+                acca20 = trio_res.get("acca_20x_ticket")
+                if acca20 and acca20.get("picks"):
+                    a20_target = acca20.get("target_odds", 20.0)
+                    self._dispatch_ticket_message(
+                        chat_id=chat_id,
+                        title=acca20.get("title") or f"🚀 StatIQ {a20_target:.1f}x Monster Acca Slip",
+                        booking_code=acca20.get("booking_code"),
+                        share_url=acca20.get("share_url"),
+                        total_odds=acca20.get("actual_odds", a20_target),
+                        confidence=acca20.get("confidence_score", 35.0),
+                        picks=acca20.get("picks", []),
+                        extra_note=f"Daily VIP Slip 4 · 🚀 {a20_target:.1f}x Monster Acca · 🔒 Zero-Overlap · Min Odds ≥ 1.15x"
                     )
                     dispatched_count += 1
             else:
@@ -531,7 +559,7 @@ class StatIQTelegramBot:
                 )
 
             if dispatched_count > 0:
-                cal_mode = "Daily VIP Banker Suite (1.50x + 5.0x + 10.0x)"
+                cal_mode = "Daily VIP Banker Suite"
                 self.send_message(
                     chat_id,
                     f"✅ <b>Daily VIP Automation Complete!</b> Dispatched {dispatched_count} slips via <b>{cal_mode}</b> with <b>{trio_res.get('total_unique_fixtures', 0)} unique fixtures</b>."

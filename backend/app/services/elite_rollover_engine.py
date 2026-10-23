@@ -1495,10 +1495,9 @@ class EliteRolloverEngine:
                     break
 
         # Verify accumulator reached required odds threshold; adaptively support lean boards
-        if target >= 4.5 and (curr_odds < 3.2 or len(selected_legs) < 5):
-            logger.warning(f"[EliteRollover] Accumulator could only achieve {curr_odds:.2f}x across {len(selected_legs)} legs (target: {target:.2f}x). Insufficient qualified pool.")
-            return []
-        if target >= 9.5 and (curr_odds < 6.0 or len(selected_legs) < 7):
+        min_acc_odds = max(1.30, target * 0.70)
+        min_acc_legs = max(3, int(min_legs * 0.75))
+        if curr_odds < min_acc_odds or len(selected_legs) < min_acc_legs:
             logger.warning(f"[EliteRollover] Accumulator could only achieve {curr_odds:.2f}x across {len(selected_legs)} legs (target: {target:.2f}x). Insufficient qualified pool.")
             return []
 
@@ -1606,6 +1605,9 @@ class EliteRolloverEngine:
         send_telegram: bool = True,
         rollover_stake: float = 5000.0,
         rollover_target_odds: float = 1.50,
+        acca_5x_target_odds: float = 5.00,
+        acca_10x_target_odds: float = 10.00,
+        acca_20x_target_odds: float = 20.00,
         challenge_day_info: Optional[str] = None
     ) -> Dict[str, Any]:
         """
@@ -1613,16 +1615,17 @@ class EliteRolloverEngine:
         1. Saturdays & Sundays (Weekends): Strict Mode (100% Zero-Overlap across all slips).
            Zero fixtures are repeated anywhere.
         2. Mondays – Fridays (Weekdays): Smart Hybrid Mode:
-           - 1.50x Rollover is 100% sacred & isolated (0 shared fixtures anywhere, 2–3 banker games).
-           - 10.0x and 20.0x slips can share at most 2–3 Elite Giants (different markets only:
-             e.g., Over 1.5 Goals on 10x, Win Either Half or Double Chance on 20x).
+           - Rollover is 100% sacred & isolated (0 shared fixtures anywhere, 2–3 banker games).
+           - Secondary slips can share at most 2–3 Elite Giants (different markets only:
+             e.g., Over 1.5 Goals on Slip 2, Win Either Half or Double Chance on Slip 3).
            - 80%+ of fixtures on each slip remain completely unique.
         3. Slips:
-           - Slip 1: 1.50x Rollover (2–3 banker legs, ~1.50x - 1.65x)
-           - Slip 2: 10.0x Mega Slip (8–12 legs, target 9.80x–10.50x)
-           - Slip 3: 20.0x Monster Acca (14–18 vetted legs, target 19.0x–22.0x)
+           - Slip 1: Rollover (2–4 banker legs, dynamic target odds e.g. 1.50x)
+           - Slip 2: Precision Multiplier (dynamic target odds e.g. 5.0x)
+           - Slip 3: Mega Slip (dynamic target odds e.g. 10.0x)
+           - Slip 4: Monster Acca (dynamic target odds e.g. 20.0x)
         """
-        logger.info(f"[EliteRollover] Executing Daily VIP Automation (Rollover: {enable_rollover}, 10x: {enable_10odds}, 20x: {enable_20odds})...")
+        logger.info(f"[EliteRollover] Executing Daily VIP Automation (Rollover: {enable_rollover} @ {rollover_target_odds}x, 5x: {enable_5odds} @ {acca_5x_target_odds}x, 10x: {enable_10odds} @ {acca_10x_target_odds}x, 20x: {enable_20odds} @ {acca_20x_target_odds}x)...")
         raw_events = await cls.fetch_sportybet_today_events(max_pages=35)
         if not raw_events:
             return {
@@ -1656,7 +1659,7 @@ class EliteRolloverEngine:
             "date_str": today_str,
             "schedule_mode": "DAILY_VIP_TRIO",
             "zero_overlap_guaranteed": True,
-            "calendar_mode": "DAILY_2X_5X_10X_BANKER_SUITE",
+            "calendar_mode": "DAILY_VIP_BANKER_SUITE",
             "rollover_ticket": None,
             "acca_5x_ticket": None,
             "acca_10x_ticket": None,
@@ -1664,7 +1667,7 @@ class EliteRolloverEngine:
             "total_unique_fixtures": 0
         }
 
-        # ── 1. SLIP 1: 1.50x ROLLOVER (Highest Assurance Banker Legs - 100% SACRED & ISOLATED) ──
+        # ── 1. SLIP 1: ROLLOVER (Highest Assurance Banker Legs - 100% SACRED & ISOLATED) ──
         if enable_rollover:
             unclaimed_ro = [c for c in banker_candidates if c["event_id"] not in claimed_event_ids and c.get("market_type") != "TEAM_OVER_15"]
             ro_legs = cls.assemble_optimal_rollover_slip(unclaimed_ro, target_odds=rollover_target_odds)
@@ -1700,14 +1703,17 @@ class EliteRolloverEngine:
 
                 trio_result["rollover_ticket"] = ro_payload
 
-        # ── 2. SLIP 2: 5.0x PRECISION MULTIPLIER (7–9 Pure Elite Banker Legs) ──
+        # ── 2. SLIP 2: PRECISION MULTIPLIER (Dynamic Target Odds, High-Assurance Cushions) ──
         if enable_5odds:
+            target_5x = float(acca_5x_target_odds or 5.00)
+            min_5x_legs = max(3, int(target_5x * 1.2))
+            max_5x_legs = max(min_5x_legs + 2, int(target_5x * 1.8))
             unclaimed_5x = [c for c in banker_candidates if c["event_id"] not in ro_event_ids]
             acca5_legs = cls.assemble_optimal_accumulator_slip(
                 unclaimed_5x,
-                target_odds=5.00,
-                min_legs=7,
-                max_legs=9,
+                target_odds=target_5x,
+                min_legs=min_5x_legs,
+                max_legs=max_5x_legs,
                 excluded_event_ids=ro_event_ids
             )
             if acca5_legs:
@@ -1720,15 +1726,15 @@ class EliteRolloverEngine:
                 acca5_code, acca5_url = await cls._request_sportybet_share_code(acca5_legs)
                 acca5_ticket_id = f"ACCA5X-{now_ts}"
 
-                cls._persist_ticket_record(acca5_ticket_id, acca5_code, "VALUE_ACCA", 5.00, acca5_odds, 2000.0, acca5_legs)
+                cls._persist_ticket_record(acca5_ticket_id, acca5_code, "VALUE_ACCA", target_5x, acca5_odds, 2000.0, acca5_legs)
 
                 acca5_payload = {
                     "status": "SUCCESS",
                     "ticket_id": acca5_ticket_id,
-                    "title": "5.0x Precision Multiplier Slip",
+                    "title": f"🎯 StatIQ {target_5x:.1f}x Precision Multiplier Slip",
                     "booking_code": acca5_code or "N/A",
                     "share_url": acca5_url,
-                    "target_odds": 5.00,
+                    "target_odds": target_5x,
                     "actual_odds": acca5_odds,
                     "confidence_score": acca5_prob,
                     "date_str": today_str,
@@ -1739,27 +1745,29 @@ class EliteRolloverEngine:
                 }
                 trio_result["acca_5x_ticket"] = acca5_payload
             else:
-                logger.info("[EliteRollover] 5.0x Precision Multiplier rested today: insufficient zero-overlap vetted fixtures on board.")
+                logger.info(f"[EliteRollover] {target_5x:.1f}x Precision Multiplier rested today: insufficient zero-overlap vetted fixtures on board.")
                 trio_result["acca_5x_ticket"] = {
                     "status": "RESTED_LEAN_BOARD",
-                    "title": "5.0x Precision Multiplier Slip",
+                    "title": f"{target_5x:.1f}x Precision Multiplier Slip",
                     "booking_code": "RESTED",
-                    "message": "Zero-overlap preserved: 5.0x slip rested today due to lean match schedule.",
+                    "message": f"Zero-overlap preserved: {target_5x:.1f}x slip rested today due to lean match schedule.",
                     "telegram_dispatched": False
                 }
 
-        # ── 3. SLIP 3: 10.0x MEGA MULTIPLIER (Strict 100% Zero-Overlap Partition) ──
+        # ── 3. SLIP 3: MEGA MULTIPLIER (Strict 100% Zero-Overlap Partition) ──
         if enable_10odds:
-            # Strictly isolate from Rollover (ro_event_ids) AND 5.0x Acca (acca5_fids)
-            # Guarantees zero fixture contamination across all slips.
+            target_10x = float(acca_10x_target_odds or 10.00)
+            min_10x_legs = max(5, int(target_10x * 0.8))
+            max_10x_legs = max(min_10x_legs + 3, int(target_10x * 1.3))
+            # Strictly isolate from Rollover (ro_event_ids) AND Precision Acca (acca5_fids)
             excl_fids = ro_event_ids | acca5_fids
             pool_for_10x = [c for c in banker_candidates if c["event_id"] not in excl_fids]
 
             acca10_legs = cls.assemble_optimal_accumulator_slip(
                 pool_for_10x,
-                target_odds=10.00,
-                min_legs=7,
-                max_legs=12,
+                target_odds=target_10x,
+                min_legs=min_10x_legs,
+                max_legs=max_10x_legs,
                 excluded_event_ids=excl_fids
             )
             if acca10_legs:
@@ -1771,15 +1779,15 @@ class EliteRolloverEngine:
                 acca10_code, acca10_url = await cls._request_sportybet_share_code(acca10_legs)
                 acca10_ticket_id = f"ACCA10X-{now_ts}"
 
-                cls._persist_ticket_record(acca10_ticket_id, acca10_code, "MEGA_10X", 10.00, acca10_odds, 1000.0, acca10_legs)
+                cls._persist_ticket_record(acca10_ticket_id, acca10_code, "MEGA_10X", target_10x, acca10_odds, 1000.0, acca10_legs)
 
                 acca10_payload = {
                     "status": "SUCCESS",
                     "ticket_id": acca10_ticket_id,
-                    "title": "10.0x Mega Multiplier Slip",
+                    "title": f"🚀 StatIQ {target_10x:.1f}x Mega Multiplier Slip",
                     "booking_code": acca10_code or "N/A",
                     "share_url": acca10_url,
-                    "target_odds": 10.00,
+                    "target_odds": target_10x,
                     "actual_odds": acca10_odds,
                     "confidence_score": acca10_prob,
                     "date_str": today_str,
@@ -1790,23 +1798,26 @@ class EliteRolloverEngine:
                 }
                 trio_result["acca_10x_ticket"] = acca10_payload
             else:
-                logger.info("[EliteRollover] 10.0x Mega Multiplier rested today: insufficient zero-overlap vetted fixtures on board.")
+                logger.info(f"[EliteRollover] {target_10x:.1f}x Mega Multiplier rested today: insufficient zero-overlap vetted fixtures on board.")
                 trio_result["acca_10x_ticket"] = {
                     "status": "RESTED_LEAN_BOARD",
-                    "title": "10.0x Mega Multiplier Slip",
+                    "title": f"{target_10x:.1f}x Mega Multiplier Slip",
                     "booking_code": "RESTED",
-                    "message": "Zero-overlap preserved: 10.0x mega slip rested today due to lean match schedule.",
+                    "message": f"Zero-overlap preserved: {target_10x:.1f}x mega slip rested today due to lean match schedule.",
                     "telegram_dispatched": False
                 }
 
-        # ── 4. OPTIONAL: 20.0x MONSTER ACCA (If explicitly enabled) ──
+        # ── 4. OPTIONAL: MONSTER ACCA (If explicitly enabled) ──
         if enable_20odds:
+            target_20x = float(acca_20x_target_odds or 20.00)
+            min_20x_legs = max(10, int(target_20x * 0.65))
+            max_20x_legs = max(min_20x_legs + 3, int(target_20x * 0.9))
             pool_for_20x = [c for c in banker_candidates if c["event_id"] not in claimed_event_ids]
             acca20_legs = cls.assemble_optimal_accumulator_slip(
                 pool_for_20x,
-                target_odds=20.00,
-                min_legs=13,
-                max_legs=16,
+                target_odds=target_20x,
+                min_legs=min_20x_legs,
+                max_legs=max_20x_legs,
                 excluded_event_ids=claimed_event_ids
             )
             if acca20_legs:
@@ -1818,15 +1829,15 @@ class EliteRolloverEngine:
                 acca20_code, acca20_url = await cls._request_sportybet_share_code(acca20_legs)
                 acca20_ticket_id = f"ACCA20X-{now_ts}"
 
-                cls._persist_ticket_record(acca20_ticket_id, acca20_code, "MEGA_20X", 20.00, acca20_odds, 500.0, acca20_legs)
+                cls._persist_ticket_record(acca20_ticket_id, acca20_code, "MEGA_20X", target_20x, acca20_odds, 500.0, acca20_legs)
 
                 acca20_payload = {
                     "status": "SUCCESS",
                     "ticket_id": acca20_ticket_id,
-                    "title": "20.0x Monster Acca Slip",
+                    "title": f"⚡ StatIQ {target_20x:.1f}x Monster Acca Slip",
                     "booking_code": acca20_code or "N/A",
                     "share_url": acca20_url,
-                    "target_odds": 20.00,
+                    "target_odds": target_20x,
                     "actual_odds": acca20_odds,
                     "confidence_score": acca20_prob,
                     "date_str": today_str,
@@ -1837,12 +1848,12 @@ class EliteRolloverEngine:
                 }
                 trio_result["acca_20x_ticket"] = acca20_payload
             else:
-                logger.info("[EliteRollover] 20.0x Monster Acca rested today: insufficient zero-overlap vetted fixtures on board.")
+                logger.info(f"[EliteRollover] {target_20x:.1f}x Monster Acca rested today: insufficient zero-overlap vetted fixtures on board.")
                 trio_result["acca_20x_ticket"] = {
                     "status": "RESTED_LEAN_BOARD",
-                    "title": "20.0x Monster Acca Slip",
+                    "title": f"{target_20x:.1f}x Monster Acca Slip",
                     "booking_code": "RESTED",
-                    "message": "Zero-overlap preserved: 20.0x monster slip rested today due to lean match schedule.",
+                    "message": f"Zero-overlap preserved: {target_20x:.1f}x monster slip rested today due to lean match schedule.",
                     "telegram_dispatched": False
                 }
 

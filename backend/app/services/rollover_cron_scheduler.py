@@ -22,6 +22,10 @@ DEFAULT_CONFIG = {
     "enable_acca_10x": True,               # Slip 3: 10.0x Mega Multiplier (10–12 banker legs)
     "enable_acca_20x": False,              # Disabled by default
     "target_odds": 1.50,                   # 1.50x Rollover sweet spot (2–3 banker games)
+    "rollover_target_odds": 1.50,          # Configurable via web/telegram
+    "acca_5x_target_odds": 5.00,           # Configurable via web/telegram
+    "acca_10x_target_odds": 10.00,         # Configurable via web/telegram
+    "acca_20x_target_odds": 20.00,         # Configurable via web/telegram
     "max_leg_odds": 1.35,                  # Banker safety corridor
     "dispatch_time": "10:00",              # 10:00 AM WAT sharp
     "campaign_mode": "CONTINUOUS",         # "CONTINUOUS" or "CHALLENGE"
@@ -182,6 +186,11 @@ class RolloverCronScheduler:
                         en_20x = bool(cfg.get("enable_acca_20x", False))
                         en_5x = bool(cfg.get("enable_acca_5x", True))
 
+                        ro_target = float(cfg.get("rollover_target_odds") or cfg.get("target_odds") or 1.50)
+                        a5_target = float(cfg.get("acca_5x_target_odds") or 5.00)
+                        a10_target = float(cfg.get("acca_10x_target_odds") or 10.00)
+                        a20_target = float(cfg.get("acca_20x_target_odds") or 20.00)
+
                         # Execute async run in dedicated event loop
                         loop = asyncio.new_event_loop()
                         asyncio.set_event_loop(loop)
@@ -193,7 +202,10 @@ class RolloverCronScheduler:
                                 enable_5odds=en_5x,
                                 send_telegram=True,
                                 rollover_stake=current_stake,
-                                rollover_target_odds=target_odds,
+                                rollover_target_odds=ro_target,
+                                acca_5x_target_odds=a5_target,
+                                acca_10x_target_odds=a10_target,
+                                acca_20x_target_odds=a20_target,
                                 challenge_day_info=challenge_info
                             )
                         )
@@ -264,6 +276,10 @@ class RolloverCronScheduler:
     async def run_now(
         self,
         target_odds: Optional[float] = None,
+        rollover_target_odds: Optional[float] = None,
+        acca_5x_target_odds: Optional[float] = None,
+        acca_10x_target_odds: Optional[float] = None,
+        acca_20x_target_odds: Optional[float] = None,
         max_leg_odds: Optional[float] = None,
         enable_rollover: Optional[bool] = None,
         enable_10odds: Optional[bool] = None,
@@ -271,7 +287,7 @@ class RolloverCronScheduler:
         enable_5odds: Optional[bool] = None
     ) -> Dict[str, Any]:
         """
-        Manually triggers an immediate run of the Daily VIP Trio (1.50x Rollover + 5.0x Precision + 10.0x Mega).
+        Manually triggers an immediate run of the Daily VIP Trio with dynamic target odds.
         """
         cfg = self.get_config()
         en_ro = enable_rollover if enable_rollover is not None else bool(cfg.get("enable_rollover_2x", True))
@@ -279,16 +295,20 @@ class RolloverCronScheduler:
         en_20x = enable_20odds if enable_20odds is not None else bool(cfg.get("enable_acca_20x", False))
         en_5x = enable_5odds if enable_5odds is not None else bool(cfg.get("enable_acca_5x", True))
 
+        ro_target = rollover_target_odds if rollover_target_odds is not None else (target_odds if target_odds is not None else float(cfg.get("rollover_target_odds") or cfg.get("target_odds") or 1.50))
+        a5_target = acca_5x_target_odds if acca_5x_target_odds is not None else float(cfg.get("acca_5x_target_odds") or 5.00)
+        a10_target = acca_10x_target_odds if acca_10x_target_odds is not None else float(cfg.get("acca_10x_target_odds") or 10.00)
+        a20_target = acca_20x_target_odds if acca_20x_target_odds is not None else float(cfg.get("acca_20x_target_odds") or 20.00)
+
         challenge_info = None
         current_stake = float(cfg.get("starting_stake", 5000))
-        odds = target_odds if target_odds is not None else float(cfg.get("target_odds", 1.50))
         if cfg.get("campaign_mode") == "CHALLENGE":
             curr_day = int(cfg.get("challenge_day_current", 1))
             tot_days = int(cfg.get("challenge_days", 10))
             challenge_info = f"Day {curr_day} of {tot_days}"
-            current_stake = round(current_stake * (odds ** (curr_day - 1)))
+            current_stake = round(current_stake * (ro_target ** (curr_day - 1)))
 
-        logger.info(f"[RolloverScheduler] Executing manual 'Run Now' Daily VIP Trio (2x: {en_ro}, 10x: {en_10x}, 20x: {en_20x})...")
+        logger.info(f"[RolloverScheduler] Executing manual 'Run Now' Daily VIP Trio (ro: {en_ro} @ {ro_target}x, 5x: {en_5x} @ {a5_target}x, 10x: {en_10x} @ {a10_target}x)...")
         trio_res = await EliteRolloverEngine.book_and_dispatch_daily_trio(
             enable_rollover=en_ro,
             enable_10odds=en_10x,
@@ -296,6 +316,10 @@ class RolloverCronScheduler:
             enable_5odds=en_5x,
             send_telegram=True,
             rollover_stake=current_stake,
+            rollover_target_odds=ro_target,
+            acca_5x_target_odds=a5_target,
+            acca_10x_target_odds=a10_target,
+            acca_20x_target_odds=a20_target,
             challenge_day_info=challenge_info
         )
 

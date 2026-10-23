@@ -510,7 +510,11 @@ export default function TicketBuilderTab() {
     enable_acca_5x: true,
     enable_acca_10x: true,
     enable_acca_20x: false,
-    target_odds: 2.00,
+    target_odds: 1.50,
+    rollover_target_odds: 1.50,
+    acca_5x_target_odds: 5.00,
+    acca_10x_target_odds: 10.00,
+    acca_20x_target_odds: 20.00,
     max_leg_odds: 1.35,
     dispatch_time: "10:00",
     campaign_mode: "CONTINUOUS", // "CHALLENGE" or "CONTINUOUS"
@@ -652,6 +656,11 @@ export default function TicketBuilderTab() {
     setCronNotice(null);
     setCronError(null);
     try {
+      const roTarget = parseFloat(cronConfig.rollover_target_odds || cronConfig.target_odds || 1.50);
+      const a5Target = parseFloat(cronConfig.acca_5x_target_odds || 5.00);
+      const a10Target = parseFloat(cronConfig.acca_10x_target_odds || 10.00);
+      const a20Target = parseFloat(cronConfig.acca_20x_target_odds || 20.00);
+
       const res = await updateRolloverSchedule({
         is_enabled: cronConfig.is_enabled,
         active_days: cronConfig.active_days,
@@ -659,7 +668,11 @@ export default function TicketBuilderTab() {
         enable_acca_10x: cronConfig.enable_acca_10x,
         enable_acca_20x: cronConfig.enable_acca_20x,
         enable_acca_5x: cronConfig.enable_acca_5x,
-        target_odds: cronConfig.target_odds,
+        target_odds: roTarget,
+        rollover_target_odds: roTarget,
+        acca_5x_target_odds: a5Target,
+        acca_10x_target_odds: a10Target,
+        acca_20x_target_odds: a20Target,
         max_leg_odds: cronConfig.max_leg_odds || 1.45,
         dispatch_time: cronConfig.dispatch_time || "10:00",
         campaign_mode: cronConfig.campaign_mode || "CHALLENGE",
@@ -671,7 +684,7 @@ export default function TicketBuilderTab() {
         challenge_status: cronConfig.challenge_status || "ACTIVE"
       });
       if (res && res.status === "SUCCESS") {
-        setCronNotice("Daily VIP Automation settings saved successfully!");
+        setCronNotice("Daily VIP Automation settings saved successfully! Telegram notified.");
         setTimeout(() => setCronNotice(null), 4000);
       } else {
         setCronError("Failed to save schedule settings.");
@@ -713,12 +726,21 @@ export default function TicketBuilderTab() {
     setCronError(null);
     setCronNotice(null);
     try {
+      const roTarget = parseFloat(cronConfig.rollover_target_odds || cronConfig.target_odds || 1.50);
+      const a5Target = parseFloat(cronConfig.acca_5x_target_odds || 5.00);
+      const a10Target = parseFloat(cronConfig.acca_10x_target_odds || 10.00);
+      const a20Target = parseFloat(cronConfig.acca_20x_target_odds || 20.00);
+
       const res = await runRolloverNow({
         enable_rollover_2x: cronConfig.enable_rollover_2x,
         enable_acca_10x: cronConfig.enable_acca_10x,
         enable_acca_20x: cronConfig.enable_acca_20x,
         enable_acca_5x: cronConfig.enable_acca_5x,
-        target_odds: cronConfig.target_odds,
+        target_odds: roTarget,
+        rollover_target_odds: roTarget,
+        acca_5x_target_odds: a5Target,
+        acca_10x_target_odds: a10Target,
+        acca_20x_target_odds: a20Target,
         max_leg_odds: cronConfig.max_leg_odds || 1.45
       });
       if (res && res.status === "SUCCESS" && res.result) {
@@ -3091,11 +3113,21 @@ Slovakia vs Moldova`;
                   </div>
                   <div className="flex items-center gap-2 text-[11px] text-slate-500 font-medium mt-0.5 flex-wrap">
                     <span>Active Slips:</span>
-                    <span className={`font-bold ${cronConfig.enable_rollover_2x ? "text-emerald-700" : "text-slate-400 line-through"}`}>2.0x (3–4 legs max)</span>
+                    <span className={`font-bold ${cronConfig.enable_rollover_2x ? "text-emerald-700" : "text-slate-400 line-through"}`}>
+                      {(parseFloat(cronConfig.rollover_target_odds || cronConfig.target_odds || 1.50)).toFixed(2)}x Rollover
+                    </span>
                     <span>•</span>
-                    <span className={`font-bold ${cronConfig.enable_acca_10x ? "text-indigo-700" : "text-slate-400 line-through"}`}>10.0x (10–12 legs)</span>
+                    <span className={`font-bold ${cronConfig.enable_acca_5x ? "text-teal-700" : "text-slate-400 line-through"}`}>
+                      {(parseFloat(cronConfig.acca_5x_target_odds || 5.00)).toFixed(1)}x Precision
+                    </span>
                     <span>•</span>
-                    <span className={`font-bold ${cronConfig.enable_acca_20x ? "text-amber-700" : "text-slate-400 line-through"}`}>20.0x (15 legs max)</span>
+                    <span className={`font-bold ${cronConfig.enable_acca_10x ? "text-indigo-700" : "text-slate-400 line-through"}`}>
+                      {(parseFloat(cronConfig.acca_10x_target_odds || 10.00)).toFixed(1)}x Mega
+                    </span>
+                    <span>•</span>
+                    <span className={`font-bold ${cronConfig.enable_acca_20x ? "text-amber-700" : "text-slate-400 line-through"}`}>
+                      {(parseFloat(cronConfig.acca_20x_target_odds || 20.00)).toFixed(1)}x Monster
+                    </span>
                   </div>
                 </div>
               </div>
@@ -3167,68 +3199,270 @@ Slovakia vs Moldova`;
               <div className="p-4 sm:p-6 border-t border-slate-200 space-y-5 bg-slate-50/70">
                 {/* 1. Slips Selector Grid */}
                 <div className="space-y-2">
-                  <label className="text-xs font-black text-slate-800 uppercase tracking-wider block">
-                    1. Active Slips to Dispatch (Adaptive Calendar Engine)
-                  </label>
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                    {/* 2.0x Rollover Card */}
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-black text-slate-800 uppercase tracking-wider block">
+                      1. Active Slips to Dispatch & Dynamic Target Multipliers
+                    </label>
+                    <span className="text-[10px] text-indigo-600 font-bold bg-indigo-50 border border-indigo-200 px-2 py-0.5 rounded-full">
+                      Zero-Overlap Guaranteed
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                    {/* Card 1: Rollover Slip */}
                     <div
-                      onClick={() => setCronConfig(prev => ({ ...prev, enable_rollover_2x: !prev.enable_rollover_2x }))}
-                      className={`p-3 rounded-xl border transition-all cursor-pointer flex items-center justify-between ${
+                      className={`p-3 rounded-xl border transition-all flex flex-col justify-between ${
                         cronConfig.enable_rollover_2x
                           ? "bg-white border-emerald-500 ring-2 ring-emerald-500/20 shadow-xs"
                           : "bg-white/60 border-slate-200 opacity-60"
                       }`}
                     >
                       <div>
-                        <span className="text-xs font-black text-slate-900 block">🎯 2.0x Rollover</span>
-                        <span className="text-[10px] text-slate-500 font-medium">3–4 Banker Legs (100% Isolated)</span>
+                        <div
+                          onClick={() => setCronConfig(prev => ({ ...prev, enable_rollover_2x: !prev.enable_rollover_2x }))}
+                          className="flex items-center justify-between cursor-pointer"
+                        >
+                          <span className="text-xs font-black text-slate-900 block">🎯 Rollover Banker</span>
+                          <span className={`w-4 h-4 rounded-full border flex items-center justify-center ${
+                            cronConfig.enable_rollover_2x ? "bg-emerald-500 border-emerald-600 text-white" : "border-slate-300 bg-white"
+                          }`}>
+                            {cronConfig.enable_rollover_2x && <Check className="w-3 h-3 text-white" />}
+                          </span>
+                        </div>
+                        <span className="text-[10px] text-slate-500 font-medium block mt-0.5">2–4 Banker Legs (100% Isolated)</span>
+                        
+                        {/* Target Odds Input */}
+                        <div className="flex items-center gap-1.5 mt-2.5">
+                          <span className="text-[10px] font-bold text-slate-500 uppercase">Target:</span>
+                          <input
+                            type="number"
+                            step="0.05"
+                            min="1.20"
+                            max="3.00"
+                            value={cronConfig.rollover_target_odds || cronConfig.target_odds || 1.50}
+                            onChange={(e) => {
+                              const val = parseFloat(e.target.value) || 1.50;
+                              setCronConfig(prev => ({ ...prev, rollover_target_odds: val, target_odds: val }));
+                            }}
+                            className="w-16 px-1.5 py-0.5 text-xs font-black bg-white border border-slate-300 rounded-md text-slate-900 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                          />
+                          <span className="text-xs font-black text-slate-700">x</span>
+                        </div>
+
+                        {/* Preset Pills */}
+                        <div className="flex items-center gap-1 mt-2 flex-wrap">
+                          {[1.35, 1.50, 1.80, 2.00].map(p => {
+                            const cur = parseFloat(cronConfig.rollover_target_odds || cronConfig.target_odds || 1.50);
+                            const active = Math.abs(cur - p) < 0.02;
+                            return (
+                              <button
+                                key={p}
+                                type="button"
+                                onClick={() => setCronConfig(prev => ({ ...prev, rollover_target_odds: p, target_odds: p }))}
+                                className={`px-1.5 py-0.5 rounded text-[10px] font-black transition-all cursor-pointer ${
+                                  active
+                                    ? "bg-emerald-600 text-white shadow-xs"
+                                    : "bg-slate-100 text-slate-700 hover:bg-slate-200 border border-slate-200"
+                                }`}
+                              >
+                                {p.toFixed(2)}x
+                              </button>
+                            );
+                          })}
+                        </div>
                       </div>
-                      <span className={`w-4 h-4 rounded-full border flex items-center justify-center ${
-                        cronConfig.enable_rollover_2x ? "bg-emerald-500 border-emerald-600 text-white" : "border-slate-300 bg-white"
-                      }`}>
-                        {cronConfig.enable_rollover_2x && <Check className="w-3 h-3 text-white" />}
-                      </span>
                     </div>
 
-                    {/* 10.0x Mega Acca Card */}
+                    {/* Card 2: Precision Multiplier */}
                     <div
-                      onClick={() => setCronConfig(prev => ({ ...prev, enable_acca_10x: !prev.enable_acca_10x }))}
-                      className={`p-3 rounded-xl border transition-all cursor-pointer flex items-center justify-between ${
+                      className={`p-3 rounded-xl border transition-all flex flex-col justify-between ${
+                        cronConfig.enable_acca_5x
+                          ? "bg-white border-teal-500 ring-2 ring-teal-500/20 shadow-xs"
+                          : "bg-white/60 border-slate-200 opacity-60"
+                      }`}
+                    >
+                      <div>
+                        <div
+                          onClick={() => setCronConfig(prev => ({ ...prev, enable_acca_5x: !prev.enable_acca_5x }))}
+                          className="flex items-center justify-between cursor-pointer"
+                        >
+                          <span className="text-xs font-black text-slate-900 block">⚡ Precision Acca</span>
+                          <span className={`w-4 h-4 rounded-full border flex items-center justify-center ${
+                            cronConfig.enable_acca_5x ? "bg-teal-600 border-teal-700 text-white" : "border-slate-300 bg-white"
+                          }`}>
+                            {cronConfig.enable_acca_5x && <Check className="w-3 h-3 text-white" />}
+                          </span>
+                        </div>
+                        <span className="text-[10px] text-slate-500 font-medium block mt-0.5">5–8 Vetted Matches (High Cushions)</span>
+
+                        {/* Target Odds Input */}
+                        <div className="flex items-center gap-1.5 mt-2.5">
+                          <span className="text-[10px] font-bold text-slate-500 uppercase">Target:</span>
+                          <input
+                            type="number"
+                            step="0.1"
+                            min="2.00"
+                            max="8.00"
+                            value={cronConfig.acca_5x_target_odds || 5.00}
+                            onChange={(e) => {
+                              const val = parseFloat(e.target.value) || 5.00;
+                              setCronConfig(prev => ({ ...prev, acca_5x_target_odds: val }));
+                            }}
+                            className="w-16 px-1.5 py-0.5 text-xs font-black bg-white border border-slate-300 rounded-md text-slate-900 focus:outline-none focus:ring-1 focus:ring-teal-500"
+                          />
+                          <span className="text-xs font-black text-slate-700">x</span>
+                        </div>
+
+                        {/* Preset Pills */}
+                        <div className="flex items-center gap-1 mt-2 flex-wrap">
+                          {[3.0, 4.0, 5.0, 6.0].map(p => {
+                            const cur = parseFloat(cronConfig.acca_5x_target_odds || 5.00);
+                            const active = Math.abs(cur - p) < 0.05;
+                            return (
+                              <button
+                                key={p}
+                                type="button"
+                                onClick={() => setCronConfig(prev => ({ ...prev, acca_5x_target_odds: p }))}
+                                className={`px-1.5 py-0.5 rounded text-[10px] font-black transition-all cursor-pointer ${
+                                  active
+                                    ? "bg-teal-600 text-white shadow-xs"
+                                    : "bg-slate-100 text-slate-700 hover:bg-slate-200 border border-slate-200"
+                                }`}
+                              >
+                                {p.toFixed(1)}x
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Card 3: Mega Multiplier */}
+                    <div
+                      className={`p-3 rounded-xl border transition-all flex flex-col justify-between ${
                         cronConfig.enable_acca_10x
                           ? "bg-white border-indigo-500 ring-2 ring-indigo-500/20 shadow-xs"
                           : "bg-white/60 border-slate-200 opacity-60"
                       }`}
                     >
                       <div>
-                        <span className="text-xs font-black text-slate-900 block">🔥 10.0x Mega Accas (2 Slips)</span>
-                        <span className="text-[10px] text-slate-500 font-medium">2 Slips · 10–13 Legs Each (Zero-Overlap)</span>
+                        <div
+                          onClick={() => setCronConfig(prev => ({ ...prev, enable_acca_10x: !prev.enable_acca_10x }))}
+                          className="flex items-center justify-between cursor-pointer"
+                        >
+                          <span className="text-xs font-black text-slate-900 block">🚀 Mega Multiplier</span>
+                          <span className={`w-4 h-4 rounded-full border flex items-center justify-center ${
+                            cronConfig.enable_acca_10x ? "bg-indigo-600 border-indigo-700 text-white" : "border-slate-300 bg-white"
+                          }`}>
+                            {cronConfig.enable_acca_10x && <Check className="w-3 h-3 text-white" />}
+                          </span>
+                        </div>
+                        <span className="text-[10px] text-slate-500 font-medium block mt-0.5">8–13 Legs (Strict Zero-Overlap)</span>
+
+                        {/* Target Odds Input */}
+                        <div className="flex items-center gap-1.5 mt-2.5">
+                          <span className="text-[10px] font-bold text-slate-500 uppercase">Target:</span>
+                          <input
+                            type="number"
+                            step="0.5"
+                            min="5.00"
+                            max="15.00"
+                            value={cronConfig.acca_10x_target_odds || 10.00}
+                            onChange={(e) => {
+                              const val = parseFloat(e.target.value) || 10.00;
+                              setCronConfig(prev => ({ ...prev, acca_10x_target_odds: val }));
+                            }}
+                            className="w-16 px-1.5 py-0.5 text-xs font-black bg-white border border-slate-300 rounded-md text-slate-900 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                          />
+                          <span className="text-xs font-black text-slate-700">x</span>
+                        </div>
+
+                        {/* Preset Pills */}
+                        <div className="flex items-center gap-1 mt-2 flex-wrap">
+                          {[6.0, 8.0, 10.0, 12.0].map(p => {
+                            const cur = parseFloat(cronConfig.acca_10x_target_odds || 10.00);
+                            const active = Math.abs(cur - p) < 0.05;
+                            return (
+                              <button
+                                key={p}
+                                type="button"
+                                onClick={() => setCronConfig(prev => ({ ...prev, acca_10x_target_odds: p }))}
+                                className={`px-1.5 py-0.5 rounded text-[10px] font-black transition-all cursor-pointer ${
+                                  active
+                                    ? "bg-indigo-600 text-white shadow-xs"
+                                    : "bg-slate-100 text-slate-700 hover:bg-slate-200 border border-slate-200"
+                                }`}
+                              >
+                                {p.toFixed(1)}x
+                              </button>
+                            );
+                          })}
+                        </div>
                       </div>
-                      <span className={`w-4 h-4 rounded-full border flex items-center justify-center ${
-                        cronConfig.enable_acca_10x ? "bg-indigo-600 border-indigo-700 text-white" : "border-slate-300 bg-white"
-                      }`}>
-                        {cronConfig.enable_acca_10x && <Check className="w-3 h-3 text-white" />}
-                      </span>
                     </div>
 
-                    {/* 20.0x Monster Acca Card */}
+                    {/* Card 4: Monster Acca */}
                     <div
-                      onClick={() => setCronConfig(prev => ({ ...prev, enable_acca_20x: !prev.enable_acca_20x }))}
-                      className={`p-3 rounded-xl border transition-all cursor-pointer flex items-center justify-between ${
+                      className={`p-3 rounded-xl border transition-all flex flex-col justify-between ${
                         cronConfig.enable_acca_20x
                           ? "bg-white border-amber-500 ring-2 ring-amber-500/20 shadow-xs"
                           : "bg-white/60 border-slate-200 opacity-60"
                       }`}
                     >
                       <div>
-                        <span className="text-xs font-black text-slate-900 block">⚡ 20.0x Monster Acca</span>
-                        <span className="text-[10px] text-slate-500 font-medium">13–15 Dominance Legs (15 Max)</span>
+                        <div
+                          onClick={() => setCronConfig(prev => ({ ...prev, enable_acca_20x: !prev.enable_acca_20x }))}
+                          className="flex items-center justify-between cursor-pointer"
+                        >
+                          <span className="text-xs font-black text-slate-900 block">⚡ Monster Acca</span>
+                          <span className={`w-4 h-4 rounded-full border flex items-center justify-center ${
+                            cronConfig.enable_acca_20x ? "bg-amber-500 border-amber-600 text-white" : "border-slate-300 bg-white"
+                          }`}>
+                            {cronConfig.enable_acca_20x && <Check className="w-3 h-3 text-white" />}
+                          </span>
+                        </div>
+                        <span className="text-[10px] text-slate-500 font-medium block mt-0.5">13–16 Dominance Legs</span>
+
+                        {/* Target Odds Input */}
+                        <div className="flex items-center gap-1.5 mt-2.5">
+                          <span className="text-[10px] font-bold text-slate-500 uppercase">Target:</span>
+                          <input
+                            type="number"
+                            step="1.0"
+                            min="10.00"
+                            max="50.00"
+                            value={cronConfig.acca_20x_target_odds || 20.00}
+                            onChange={(e) => {
+                              const val = parseFloat(e.target.value) || 20.00;
+                              setCronConfig(prev => ({ ...prev, acca_20x_target_odds: val }));
+                            }}
+                            className="w-16 px-1.5 py-0.5 text-xs font-black bg-white border border-slate-300 rounded-md text-slate-900 focus:outline-none focus:ring-1 focus:ring-amber-500"
+                          />
+                          <span className="text-xs font-black text-slate-700">x</span>
+                        </div>
+
+                        {/* Preset Pills */}
+                        <div className="flex items-center gap-1 mt-2 flex-wrap">
+                          {[15.0, 20.0, 25.0].map(p => {
+                            const cur = parseFloat(cronConfig.acca_20x_target_odds || 20.00);
+                            const active = Math.abs(cur - p) < 0.05;
+                            return (
+                              <button
+                                key={p}
+                                type="button"
+                                onClick={() => setCronConfig(prev => ({ ...prev, acca_20x_target_odds: p }))}
+                                className={`px-1.5 py-0.5 rounded text-[10px] font-black transition-all cursor-pointer ${
+                                  active
+                                    ? "bg-amber-500 text-white shadow-xs"
+                                    : "bg-slate-100 text-slate-700 hover:bg-slate-200 border border-slate-200"
+                                }`}
+                              >
+                                {p.toFixed(0)}x
+                              </button>
+                            );
+                          })}
+                        </div>
                       </div>
-                      <span className={`w-4 h-4 rounded-full border flex items-center justify-center ${
-                        cronConfig.enable_acca_20x ? "bg-amber-500 border-amber-600 text-white" : "border-slate-300 bg-white"
-                      }`}>
-                        {cronConfig.enable_acca_20x && <Check className="w-3 h-3 text-white" />}
-                      </span>
                     </div>
                   </div>
                 </div>
