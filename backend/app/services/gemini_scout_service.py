@@ -132,11 +132,11 @@ class GeminiScoutService:
         t_lower = text.lower().strip()
         
         # Extract potential SportyBet booking code (4-9 alphanumeric characters)
-        blacklist = {"need", "sure", "tickets", "ticket", "each", "from", "today", "tomorrow", "odds", "games", "game", "make", "help", "with", "edit", "remove", "drop", "purge", "slip", "slips", "please", "into", "safe", "markets", "market"}
+        blacklist = {"code", "codes", "need", "sure", "tickets", "ticket", "each", "from", "today", "tomorrow", "odds", "games", "game", "make", "help", "with", "edit", "remove", "drop", "purge", "slip", "slips", "please", "into", "safe", "markets", "market"}
         found_code = None
 
-        # 1. High-confidence prefix match: "code UY65TY", "from UY65TY", "ticket UY65TY"
-        prefix_match = re.search(r"(?:code|from|ticket|slip)\s+([A-Za-z0-9]{4,10})\b", text, re.IGNORECASE)
+        # 1. High-confidence prefix match: "code UY65TY", "from UY65TY", "from code UY65TY", "ticket UY65TY"
+        prefix_match = re.search(r"(?:code|from|ticket|slip)\s+(?:code\s+|ticket\s+)?([A-Za-z0-9]{4,10})\b", text, re.IGNORECASE)
         if prefix_match:
             cand = prefix_match.group(1).upper()
             if cand.lower() not in blacklist:
