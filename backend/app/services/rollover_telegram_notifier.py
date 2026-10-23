@@ -283,7 +283,6 @@ class RolloverTelegramNotifier:
 
         disp_time = config.get("dispatch_time", "10:00")
         active_days = ", ".join(config.get("active_days", ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"]))
-        max_leg = float(config.get("max_leg_odds", 1.45))
         is_active = config.get("is_enabled", True)
 
         status_badge = "🟢 <b>ACTIVE</b>" if is_active else "🔴 <b>PAUSED</b>"
@@ -296,7 +295,6 @@ class RolloverTelegramNotifier:
             f"• ⚡ <b>Slip 2 (Precision):</b> {'✅ ON' if a5_on else '❌ OFF'} ➔ <b>{a5_odds:.2f}x Target</b> (Zero-Overlap Cushions)",
             f"• 🚀 <b>Slip 3 (Mega Multiplier):</b> {'✅ ON' if a10_on else '❌ OFF'} ➔ <b>{a10_odds:.2f}x Target</b> (High-Dominance Acca)",
             f"• ⚡ <b>Slip 4 (Monster Acca):</b> {'✅ ON' if a20_on else '❌ OFF'} ➔ <b>{a20_odds:.2f}x Target</b>\n",
-            f"🛡️ <i>Max Single-Leg Odds Ceiling: {max_leg:.2f}x (Golden Safety Corridor)</i>",
             f"✅ <i>Sync Complete: Next 10:00 AM dispatch will generate slips matching these exact multipliers!</i>"
         ]
 
