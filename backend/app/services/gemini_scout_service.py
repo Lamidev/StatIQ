@@ -92,16 +92,22 @@ class GeminiScoutService:
             "{\n"
             "  \"intent\": \"REMOVE_AND_SPLIT\" | \"EDIT_UPGRADE\" | \"BUILD_ODDS\" | \"BUILD_GOAL_KICKS\" | \"BUILD_GAMES\" | \"DISPATCH\" | \"EXPLAIN\" | \"UNKNOWN\",\n"
             "  \"booking_code\": string or null (e.g. 'uy65ty'),\n"
-            "  \"target_odds\": number or null (e.g. 10.0),\n"
+            "  \"target_odds\": number or null (e.g. 10.0, 50.0),\n"
+            "  \"target_games\": integer or null (e.g. 10, 12),\n"
             "  \"ticket_count\": integer (default 1),\n"
             "  \"mode\": \"REMOVE\" or \"EDIT\",\n"
             "  \"risk_style\": \"SURE\" or \"LONGSHOT\",\n"
             "  \"time_horizon\": \"TODAY\" or \"WEEKEND\" or \"MIDWEEK_UCL\"\n"
             "}\n"
             "RULES:\n"
+            "- 'longshot', 'bomb', 'fun slip', 'mega odds' -> intent='BUILD_ODDS', risk_style='LONGSHOT', target_odds=50.0 (or user-specified)\n"
+            "- 'random accumulator', 'acca', 'build ticket' -> intent='BUILD_ODDS', target_odds=10.0 (or user-specified)\n"
+            "- '10 games', '12 matches', '15 game accumulator' -> intent='BUILD_GAMES', target_games=10 (or user-specified)\n"
             "- 'goal kick', 'under 8.5', '1st half goal kick' -> intent='BUILD_GOAL_KICKS'\n"
             "- 'remove', 'drop', 'purge', 'sure tickets from code' -> mode='REMOVE', intent='REMOVE_AND_SPLIT'\n"
             "- 'edit', 'upgrade', 'safer markets' -> mode='EDIT', intent='EDIT_UPGRADE'\n"
+            "- 'weekend', 'saturday', 'sunday' -> time_horizon='WEEKEND'\n"
+            "- 'midweek', 'ucl', 'champions league' -> time_horizon='MIDWEEK_UCL'\n"
             "- '10 odds', '2 tickets of 10 odds' -> target_odds=10.0, ticket_count=2\n"
         )
 
@@ -146,9 +152,13 @@ class GeminiScoutService:
                     found_code = cand
                     break
 
-        # Extract target odds (e.g. "10 odds", "10.5x", "10 odds each")
+        # Extract target odds (e.g. "10 odds", "10.5x", "10 odds each", "50 odds")
         odds_match = re.search(r"(\d+(?:\.\d+)?)\s*(?:odd|odds|x|multiplier)", t_lower)
         target_odds = float(odds_match.group(1)) if odds_match else None
+
+        # Extract target games count (e.g. "10 games", "12 matches", "15 fixtures")
+        games_match = re.search(r"(\d+)\s*(?:game|games|match|matches|fixture|fixtures)\b", t_lower)
+        target_games = int(games_match.group(1)) if games_match else None
 
         # Extract ticket count (e.g. "2 sure tickets", "2 tickets", "two tickets")
         tickets_match = re.search(r"(\d+)\s*(?:sure\s*)?(?:ticket|tickets|slip|slips|variant|variants)", t_lower)
@@ -193,12 +203,14 @@ class GeminiScoutService:
                 "confidence": 0.95
             }
 
+        # External Ticket audit (code provided)
         if found_code:
             intent = "REMOVE_AND_SPLIT" if mode == "REMOVE" else "EDIT_UPGRADE"
             return {
                 "intent": intent,
                 "booking_code": found_code,
                 "target_odds": target_odds or 10.0,
+                "target_games": target_games,
                 "ticket_count": ticket_count,
                 "mode": mode,
                 "risk_style": risk_style,
@@ -206,6 +218,34 @@ class GeminiScoutService:
                 "confidence": 0.90
             }
 
+        # Game count accumulator (e.g. "give me 10 games accumulator", "12 match slip")
+        if target_games:
+            return {
+                "intent": "BUILD_GAMES",
+                "booking_code": None,
+                "target_games": target_games,
+                "target_odds": target_odds,
+                "ticket_count": ticket_count,
+                "mode": mode,
+                "risk_style": risk_style,
+                "time_horizon": time_horizon,
+                "confidence": 0.90
+            }
+
+        # Longshot requested without explicit odds number (e.g. "book a longshot", "give me a longshot")
+        if is_longshot:
+            return {
+                "intent": "BUILD_ODDS",
+                "booking_code": None,
+                "target_odds": target_odds or 50.0,
+                "ticket_count": ticket_count,
+                "mode": mode,
+                "risk_style": "LONGSHOT",
+                "time_horizon": time_horizon,
+                "confidence": 0.90
+            }
+
+        # Explicit target odds (e.g. "10 odds", "20 odds accumulator")
         if target_odds:
             return {
                 "intent": "BUILD_ODDS",
@@ -218,10 +258,25 @@ class GeminiScoutService:
                 "confidence": 0.85
             }
 
+        # Generic random accumulator (e.g. "random accumulator", "give me an accumulator for today")
+        is_acca = any(k in t_lower for k in ["accumulator", "acca", "combo", "parlay"])
+        if is_acca:
+            return {
+                "intent": "BUILD_ODDS",
+                "booking_code": None,
+                "target_odds": 10.0,
+                "ticket_count": ticket_count,
+                "mode": mode,
+                "risk_style": risk_style,
+                "time_horizon": time_horizon,
+                "confidence": 0.85
+            }
+
         return {
             "intent": "UNKNOWN",
             "booking_code": found_code,
             "target_odds": target_odds,
+            "target_games": target_games,
             "ticket_count": ticket_count,
             "mode": mode,
             "risk_style": risk_style,
@@ -319,15 +374,42 @@ class GeminiScoutService:
 
         # 3. ON-DEMAND ACCUMULATOR / LONGSHOT
         if intent == "BUILD_ODDS":
+            time_horizon = parsed.get("time_horizon", "TODAY")
+            risk_style = parsed.get("risk_style", "SURE")
+            allow_lower = (risk_style == "LONGSHOT") or (target_odds >= 30.0)
+            horizon_desc = " (Weekend Horizon)" if time_horizon == "WEEKEND" else (" (Midweek UCL/European Cups)" if time_horizon == "MIDWEEK_UCL" else "")
+            ticket_desc = f"<b>{ticket_count} Zero-Overlap Variant Slips</b>" if ticket_count > 1 else "1 core slip"
             bot_service.send_message(
                 chat_id,
                 f"⚡ <b>StatIQ AI Ticket Generator:</b>\n"
-                f"Scouting today's live SportyBet board for <b>{target_odds:.1f}x target multiplier</b> ({parsed.get('risk_style', 'SURE')} style)..."
+                f"Scouting SportyBet board for {ticket_desc} targeting <b>{target_odds:.1f}x multiplier</b> ({risk_style} style){horizon_desc}..."
             )
-            bot_service.handle_odds_command(chat_id, target_odds)
+            bot_service.handle_odds_command(
+                chat_id=chat_id,
+                target_odds=target_odds,
+                num_tickets=ticket_count,
+                time_horizon=time_horizon,
+                allow_lower_leagues=allow_lower
+            )
             return True
 
-        # 3a. DEDICATED GOAL KICKS SLIP
+        # 3a. ON-DEMAND ACCUMULATOR BY GAME COUNT
+        if intent == "BUILD_GAMES":
+            target_games = int(parsed.get("target_games") or 10)
+            ticket_desc = f"<b>{ticket_count} Zero-Overlap Slips</b> of {target_games} matches each" if ticket_count > 1 else f"top <b>{target_games}</b> matches"
+            bot_service.send_message(
+                chat_id,
+                f"⚡ <b>StatIQ AI Ticket Generator:</b>\n"
+                f"Scouting today's live SportyBet board for {ticket_desc} (Min Odds ≥ 1.15x)..."
+            )
+            bot_service.handle_games_command(
+                chat_id=chat_id,
+                target_games=target_games,
+                num_tickets=ticket_count
+            )
+            return True
+
+        # 3b. DEDICATED GOAL KICKS SLIP
         if intent == "BUILD_GOAL_KICKS":
             prefer_line = parsed.get("prefer_line", "1H")
             line_desc = "1st Half Under 8.5/7.5 Goal Kicks" if prefer_line == "1H" else ("Full Time Under Goal Kicks" if prefer_line == "FT" else "Goal Kicks Unders")
@@ -349,12 +431,15 @@ class GeminiScoutService:
             chat_id,
             "💡 <b>StatIQ AI Copilot Ready</b>\n\n"
             "You can speak to me naturally or paste any SportyBet code:\n"
-            "• <i>'Book me a 10 odds goal kick ticket with 1st half under 8.5'</i> (Mono-Market)\n"
+            "• <i>'Book me a 50 odds longshot for the weekend'</i> (Multi-league mega accumulator)\n"
+            "• <i>'Random accumulator of 15 odds for tonight'</i>\n"
+            "• <i>'Give me 2 tickets of 10 odds each'</i> (Zero-overlap portfolio)\n"
+            "• <i>'Build a 12 games accumulator'</i>\n"
+            "• <i>'Book a 10 odds goal kick ticket with 1st half under 8.5'</i>\n"
             "• <i>'I need 2 sure tickets of 10 odds each from uy65ty'</i> (Purges risky games as-is)\n"
             "• <i>'Upgrade code GH7AKP to safe markets'</i> (Double Chance & Goals)\n"
-            "• <i>'Build a 5 odds accumulator for tonight'</i>\n"
             "• <i>'Dispatch today's Daily VIP Slips'</i>\n\n"
-            "<i>(Slash commands like <code>/goalkicks 10</code>, <code>/odds 5</code>, <code>/duo</code> remain active!)</i>"
+            "<i>(Slash commands like <code>/longshot 50</code>, <code>/odds 10</code>, <code>/games 10</code> remain active!)</i>"
         )
         return False
 
