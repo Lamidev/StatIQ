@@ -30,6 +30,9 @@ class GoalKicksService:
         "Referer": "https://www.sportybet.com/ng/"
     }
 
+    MIN_SINGLE_ODDS: float = 1.30
+    MAX_SINGLE_ODDS: float = 1.55
+
     @classmethod
     async def fetch_goal_kicks_candidates(
         cls,
@@ -38,25 +41,26 @@ class GoalKicksService:
     ) -> List[Dict[str, Any]]:
         """
         Scans SportyBet's active tournaments and matches for Goal Kicks prop markets.
-        Extracts verified live lines with odds.
+        Extracts verified live lines with odds strictly between 1.30 and 1.55.
         """
         client = SportyBetIngestionService._get_client()
         url = f"{cls.BASE_URL}/ng/factsCenter/wapConfigurableEventsByOrder"
-        payload = {
-            "sportId": "sr:sport:1",
-            "pageNum": 1,
-            "pageSize": 40,
-            "todayGames": True
-        }
+        tournaments = []
+        for page in (1, 2):
+            payload = {
+                "sportId": "sr:sport:1",
+                "pageNum": page,
+                "pageSize": 50,
+                "todayGames": True
+            }
+            try:
+                r = client.post(url, json=payload, timeout=10.0)
+                if r.status_code == 200 and r.json().get("bizCode") == 10000:
+                    tournaments.extend(r.json().get("data", {}).get("tournaments", []))
+            except Exception as e:
+                logger.warning(f"[GoalKicks] Error fetching page {page}: {e}")
 
-        try:
-            r = client.post(url, json=payload, timeout=10.0)
-            if r.status_code != 200 or r.json().get("bizCode") != 10000:
-                logger.warning(f"[GoalKicks] Failed to fetch configurable events: {r.status_code}")
-                return []
-            tournaments = r.json().get("data", {}).get("tournaments", [])
-        except Exception as e:
-            logger.error(f"[GoalKicks] Error fetching events: {e}")
+        if not tournaments:
             return []
 
         # Target top flight matches where SportyBet posts stats props
@@ -78,7 +82,7 @@ class GoalKicksService:
                         "competition": f"{c_name} · {t_name}"
                     })
 
-        logger.info(f"[GoalKicks] Scanning {len(candidate_eids)} candidate fixtures for Goal Kicks markets...")
+        logger.info(f"[GoalKicks] Scanning {len(candidate_eids)} candidate fixtures for Goal Kicks markets (Corridor: {cls.MIN_SINGLE_ODDS} - {cls.MAX_SINGLE_ODDS})...")
 
         picks = []
         seen_matches = set()
@@ -87,7 +91,7 @@ class GoalKicksService:
             eid = item["event_id"]
             det_url = f"{cls.BASE_URL}/ng/factsCenter/event?eventId={eid}"
             try:
-                async with httpx.AsyncClient(timeout=4.0, headers=cls.HEADERS) as http_c:
+                async with httpx.AsyncClient(timeout=4.5, headers=cls.HEADERS) as http_c:
                     det_r = await http_c.get(det_url)
                     if det_r.status_code == 200:
                         det_data = det_r.json().get("data", {})
@@ -98,71 +102,65 @@ class GoalKicksService:
                         for m in markets:
                             mid = str(m.get("id"))
                             spec = str(m.get("specifier") or "")
-                            m_desc = m.get("desc") or ""
+                            m_tot = re.search(r"total=([\d\.]+)", spec)
+                            tot_val = float(m_tot.group(1)) if m_tot else 0.0
 
                             # 1. First Half Goal Kicks (Market 900661)
-                            if (prefer_line in ("1H", "MIXED")) and mid == "900661":
-                                # Prioritize Under 8.5, then Under 7.5, then Under 9.5
-                                is_85 = "total=8.5" in spec or "8.5" in spec
-                                is_75 = "total=7.5" in spec or "7.5" in spec
-                                is_95 = "total=9.5" in spec or "9.5" in spec
-
-                                if is_85 or is_75 or is_95:
-                                    for o in m.get("outcomes", []):
-                                        if str(o.get("id")) == "13" and str(o.get("isActive", "1")) in ("1", "True"):
-                                            odd = float(o.get("odds") or 0)
-                                            if 1.25 <= odd <= 1.85:
-                                                prob = round(min(0.92, (1.0 / odd) * 0.96), 3)
-                                                # Score quality: 8.5 line is standard sweet-spot
-                                                q_score = (prob * 60.0) + (10.0 if is_85 else (6.0 if is_75 else 8.0))
-                                                pick_cand = {
-                                                    "event_id": eid,
-                                                    "home_team": item["home_team"],
-                                                    "away_team": item["away_team"],
-                                                    "competition": item["competition"],
-                                                    "market_id": mid,
-                                                    "market_desc": "1st Half Goal Kicks Over/Under",
-                                                    "specifier": spec,
-                                                    "outcome_id": "13",
-                                                    "selection_desc": f"{o.get('desc') or 'Under'} Goal Kicks",
-                                                    "odds": odd,
-                                                    "model_probability": prob,
-                                                    "line_type": "1H",
-                                                    "quality_score": q_score
-                                                }
-                                                if not best_pick or pick_cand["quality_score"] > best_pick["quality_score"]:
-                                                    best_pick = pick_cand
+                            if (prefer_line in ("1H", "MIXED")) and mid == "900661" and tot_val >= 6.5:
+                                for o in m.get("outcomes", []):
+                                    if str(o.get("id")) == "13" and str(o.get("isActive", "1")) in ("1", "True"):
+                                        odd = float(o.get("odds") or 0)
+                                        # Strict User Rule: Odds must be strictly between 1.30 and 1.55
+                                        if cls.MIN_SINGLE_ODDS <= odd <= cls.MAX_SINGLE_ODDS:
+                                            prob = round(min(0.92, (1.0 / odd) * 0.96), 3)
+                                            # Prioritize 1H cushion over FT when available
+                                            q_score = (prob * 50.0) + (tot_val * 5.0) + 35.0
+                                            pick_cand = {
+                                                "event_id": eid,
+                                                "home_team": item["home_team"],
+                                                "away_team": item["away_team"],
+                                                "competition": item["competition"],
+                                                "market_id": mid,
+                                                "market_desc": "1st Half Goal Kicks Over/Under",
+                                                "specifier": spec,
+                                                "outcome_id": "13",
+                                                "selection_desc": f"{o.get('desc') or f'Under {tot_val}'} Goal Kicks",
+                                                "odds": odd,
+                                                "model_probability": prob,
+                                                "line_type": "1H",
+                                                "tot_val": tot_val,
+                                                "quality_score": q_score
+                                            }
+                                            if not best_pick or pick_cand["quality_score"] > best_pick["quality_score"]:
+                                                best_pick = pick_cand
 
                             # 2. Full Time Goal Kicks (Market 900622)
-                            elif (prefer_line in ("FT", "MIXED")) and mid == "900622":
-                                is_155 = "total=15.5" in spec or "15.5" in spec
-                                is_165 = "total=16.5" in spec or "16.5" in spec
-                                is_175 = "total=17.5" in spec or "17.5" in spec
-
-                                if is_155 or is_165 or is_175:
-                                    for o in m.get("outcomes", []):
-                                        if str(o.get("id")) == "13" and str(o.get("isActive", "1")) in ("1", "True"):
-                                            odd = float(o.get("odds") or 0)
-                                            if 1.30 <= odd <= 1.95:
-                                                prob = round(min(0.90, (1.0 / odd) * 0.95), 3)
-                                                q_score = (prob * 55.0) + (10.0 if is_155 else 8.0)
-                                                pick_cand = {
-                                                    "event_id": eid,
-                                                    "home_team": item["home_team"],
-                                                    "away_team": item["away_team"],
-                                                    "competition": item["competition"],
-                                                    "market_id": mid,
-                                                    "market_desc": "Goal Kicks Over/Under",
-                                                    "specifier": spec,
-                                                    "outcome_id": "13",
-                                                    "selection_desc": f"{o.get('desc') or 'Under'} Goal Kicks",
-                                                    "odds": odd,
-                                                    "model_probability": prob,
-                                                    "line_type": "FT",
-                                                    "quality_score": q_score
-                                                }
-                                                if not best_pick or pick_cand["quality_score"] > best_pick["quality_score"]:
-                                                    best_pick = pick_cand
+                            elif (prefer_line in ("FT", "MIXED")) and mid == "900622" and tot_val >= 14.5:
+                                for o in m.get("outcomes", []):
+                                    if str(o.get("id")) == "13" and str(o.get("isActive", "1")) in ("1", "True"):
+                                        odd = float(o.get("odds") or 0)
+                                        # Strict User Rule: Odds must be strictly between 1.30 and 1.55
+                                        if cls.MIN_SINGLE_ODDS <= odd <= cls.MAX_SINGLE_ODDS:
+                                            prob = round(min(0.90, (1.0 / odd) * 0.95), 3)
+                                            q_score = (prob * 40.0) + (tot_val * 2.0)
+                                            pick_cand = {
+                                                "event_id": eid,
+                                                "home_team": item["home_team"],
+                                                "away_team": item["away_team"],
+                                                "competition": item["competition"],
+                                                "market_id": mid,
+                                                "market_desc": "Goal Kicks Over/Under",
+                                                "specifier": spec,
+                                                "outcome_id": "13",
+                                                "selection_desc": f"{o.get('desc') or f'Under {tot_val}'} Goal Kicks",
+                                                "odds": odd,
+                                                "model_probability": prob,
+                                                "line_type": "FT",
+                                                "tot_val": tot_val,
+                                                "quality_score": q_score
+                                            }
+                                            if not best_pick or pick_cand["quality_score"] > best_pick["quality_score"]:
+                                                best_pick = pick_cand
 
                         return best_pick
             except Exception:
@@ -180,7 +178,7 @@ class GoalKicksService:
 
         # Sort by quality score
         picks.sort(key=lambda x: x.get("quality_score", 0), reverse=True)
-        logger.info(f"[GoalKicks] Found {len(picks)} high-conviction Goal Kicks Under selections.")
+        logger.info(f"[GoalKicks] Found {len(picks)} high-conviction Goal Kicks Under selections in corridor [{cls.MIN_SINGLE_ODDS}, {cls.MAX_SINGLE_ODDS}].")
         return picks
 
     @classmethod
@@ -191,20 +189,22 @@ class GoalKicksService:
     ) -> Dict[str, Any]:
         """
         Assembles and books a dedicated Goal Kicks ticket on SportyBet targeting target_odds.
+        Strictly enforces that every leg's odds fall between 1.30 and 1.55.
         """
         target = float(target_odds or 10.0)
         candidates = await cls.fetch_goal_kicks_candidates(prefer_line=prefer_line)
 
-        if not candidates:
-            # Fallback to MIXED (both 1H and FT) if 1H alone was lean
-            if prefer_line == "1H":
-                logger.info("[GoalKicks] 1H pool lean; broadening scan to MIXED Goal Kicks lines...")
+        # If 1H alone yields insufficient multiplier for the requested target, broaden to MIXED
+        if prefer_line == "1H":
+            prod_cands = math.prod(c["odds"] for c in candidates) if candidates else 1.0
+            if prod_cands < (target * 0.70):
+                logger.info(f"[GoalKicks] 1H candidate pool ({prod_cands:.2f}x) lean for target {target:.1f}x; broadening to MIXED Goal Kicks...")
                 candidates = await cls.fetch_goal_kicks_candidates(prefer_line="MIXED")
 
         if not candidates:
             return {
                 "status": "NO_FIXTURES",
-                "message": "No active matches on SportyBet currently offer Goal Kick prop markets today."
+                "message": "No active matches on SportyBet currently offer Goal Kick prop markets in the 1.30–1.55 corridor today."
             }
 
         selected_legs = []
@@ -230,7 +230,7 @@ class GoalKicksService:
         if not selected_legs:
             return {
                 "status": "FAILED_ASSEMBLY",
-                "message": f"Could not assemble Goal Kicks slip targeting {target:.1f}x odds."
+                "message": f"Could not assemble Goal Kicks slip targeting {target:.1f}x odds within 1.30–1.55 corridor."
             }
 
         # Request live SportyBet shareCode
@@ -268,8 +268,9 @@ class GoalKicksService:
 
         scout_analysis = (
             f"🧠 <b>StatIQ AI Scout Tactical Analysis:</b>\n"
+            f"• <b>Golden Odds Corridor:</b> Every single selection strictly locked between 1.30x – 1.55x for optimal balance of safety and compounding.\n"
             f"• <b>Controlled Tempo Screen:</b> Selected {leg_count} tactical fixtures screened for low off-target shot volume and patient build-up play.\n"
-            f"• <b>1st Half Ceiling Buffer:</b> Under 8.5 cushions require 9+ missed crosses/wild shots in 45 mins to fail, giving an elite mathematical floor."
+            f"• <b>Cushion Buffer:</b> 1H Under 8.5/7.5 and FT Under 17.5/18.5 require excessive missed crosses/wild shots to fail, establishing an elite mathematical floor."
         )
 
         return {
