@@ -2415,22 +2415,39 @@ class StatIQTelegramBot:
                 self.handle_portfolio_command(chat_id, code=code, target_portfolio="2_SLIPS", filter_risky="filtered")
                 return
 
-            target_mode = "GAMES"
-            is_two = any(k in rest for k in ["2 ticket", "2 variant", "2 slip", "two ticket", "two variant", "two slip", " 2 "]) or rest.strip().startswith("2")
-            num_tickets = 2 if is_two else 1
+            # Multi-ticket pattern with odds: e.g. "2x 10 odds", "2x10", "2 * 10 odds", "2 tickets of 10 odds"
+            multi_odds_m = re.search(r"(\d+)\s*(?:x|\*|tickets?|slips?|variants?)\s*(?:of\s*)?(\d+(?:\.\d+)?)\s*(?:odd|odds)?\b", rest)
+            multi_games_m = re.search(r"(\d+)\s*(?:x|\*|tickets?|slips?|variants?)\s*(?:of\s*)?(\d+)\s*(?:game|games|leg|legs|match|matches)\b", rest)
 
-            odds_m = re.search(r"(\d+\.?\d*)\s*(?:odd|odds|x)", rest)
-            games_m = re.search(r"(\d+)\s*(?:game|games|leg|legs|match|matches)", rest)
-
-            if odds_m:
+            if multi_odds_m:
+                num_tickets = max(1, min(4, int(multi_odds_m.group(1))))
                 target_mode = "ODDS"
-                target_val = float(odds_m.group(1))
-            elif games_m:
+                target_val = float(multi_odds_m.group(2))
+            elif multi_games_m:
+                num_tickets = max(1, min(4, int(multi_games_m.group(1))))
                 target_mode = "GAMES"
-                target_val = float(games_m.group(1))
+                target_val = float(multi_games_m.group(2))
             else:
-                target_mode = "GAMES"
-                target_val = 15.0
+                is_two = any(k in rest for k in ["2 ticket", "2 variant", "2 slip", "two ticket", "two variant", "two slip"]) or rest.strip().startswith("2x") or rest.strip().startswith("2 ")
+                num_tickets = 2 if is_two else 1
+
+                odds_m = re.search(r"(\d+(?:\.\d+)?)\s*(?:odd|odds)\b", rest)
+                if not odds_m:
+                    x_m = re.search(r"(?<!\d)(\d+(?:\.\d+)?)\s*x\b", rest)
+                    if x_m and float(x_m.group(1)) > 2.0:
+                        odds_m = x_m
+
+                games_m = re.search(r"(\d+)\s*(?:game|games|leg|legs|match|matches)\b", rest)
+
+                if odds_m:
+                    target_mode = "ODDS"
+                    target_val = float(odds_m.group(1))
+                elif games_m:
+                    target_mode = "GAMES"
+                    target_val = float(games_m.group(1))
+                else:
+                    target_mode = "GAMES"
+                    target_val = 15.0
 
             self.handle_remove_command(
                 chat_id=chat_id,
@@ -2454,22 +2471,38 @@ class StatIQTelegramBot:
                 self.handle_portfolio_command(chat_id, code=code, target_portfolio="2_SLIPS", filter_risky="filtered")
                 return
 
-            target_mode = "GAMES"
-            is_two = any(k in rest for k in ["2 ticket", "2 variant", "2 slip", "two ticket", "two variant", "two slip", " 2 "]) or rest.strip().startswith("2")
-            num_tickets = 2 if is_two else 1
+            multi_odds_m = re.search(r"(\d+)\s*(?:x|\*|tickets?|slips?|variants?)\s*(?:of\s*)?(\d+(?:\.\d+)?)\s*(?:odd|odds)?\b", rest)
+            multi_games_m = re.search(r"(\d+)\s*(?:x|\*|tickets?|slips?|variants?)\s*(?:of\s*)?(\d+)\s*(?:game|games|leg|legs|match|matches)\b", rest)
 
-            odds_m = re.search(r"(\d+\.?\d*)\s*(?:odd|odds|x)", rest)
-            games_m = re.search(r"(\d+)\s*(?:game|games|leg|legs|match|matches)", rest)
-
-            if odds_m:
+            if multi_odds_m:
+                num_tickets = max(1, min(4, int(multi_odds_m.group(1))))
                 target_mode = "ODDS"
-                target_val = float(odds_m.group(1))
-            elif games_m:
+                target_val = float(multi_odds_m.group(2))
+            elif multi_games_m:
+                num_tickets = max(1, min(4, int(multi_games_m.group(1))))
                 target_mode = "GAMES"
-                target_val = float(games_m.group(1))
+                target_val = float(multi_games_m.group(2))
             else:
-                target_mode = "GAMES"
-                target_val = 15.0
+                is_two = any(k in rest for k in ["2 ticket", "2 variant", "2 slip", "two ticket", "two variant", "two slip"]) or rest.strip().startswith("2x") or rest.strip().startswith("2 ")
+                num_tickets = 2 if is_two else 1
+
+                odds_m = re.search(r"(\d+(?:\.\d+)?)\s*(?:odd|odds)\b", rest)
+                if not odds_m:
+                    x_m = re.search(r"(?<!\d)(\d+(?:\.\d+)?)\s*x\b", rest)
+                    if x_m and float(x_m.group(1)) > 2.0:
+                        odds_m = x_m
+
+                games_m = re.search(r"(\d+)\s*(?:game|games|leg|legs|match|matches)\b", rest)
+
+                if odds_m:
+                    target_mode = "ODDS"
+                    target_val = float(odds_m.group(1))
+                elif games_m:
+                    target_mode = "GAMES"
+                    target_val = float(games_m.group(1))
+                else:
+                    target_mode = "GAMES"
+                    target_val = 15.0
 
             self.handle_edit_command(
                 chat_id=chat_id,

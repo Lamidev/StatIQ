@@ -73,6 +73,7 @@ async def _fetch_live_event_intelligence(
         clean_id = f"sr:match:{clean_id}"
 
     urls = [
+        f"https://www.sportybet.com/api/ng/factsCenter/event?eventId={clean_id}",
         f"https://www.sportybet.com/api/ng/factsCenter/pcEventDetails?eventId={clean_id}",
         f"https://www.sportybet.com/api/ng/factsCenter/eventDetail?eventId={clean_id}"
     ]

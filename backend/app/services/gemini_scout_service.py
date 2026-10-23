@@ -135,39 +135,57 @@ class GeminiScoutService:
         blacklist = {"code", "codes", "need", "sure", "tickets", "ticket", "each", "from", "today", "tomorrow", "odds", "games", "game", "make", "help", "with", "edit", "remove", "drop", "purge", "slip", "slips", "please", "into", "safe", "markets", "market"}
         found_code = None
 
-        # 1. High-confidence prefix match: "code UY65TY", "from UY65TY", "from code UY65TY", "ticket UY65TY"
-        prefix_match = re.search(r"(?:code|from|ticket|slip)\s+(?:code\s+|ticket\s+)?([A-Za-z0-9]{4,10})\b", text, re.IGNORECASE)
+        # 1. High-confidence prefix match: "code UY65TY", "from UY65TY", "from code UY65TY", "ticket UY65TY", "remove RQLHUP"
+        prefix_match = re.search(r"(?:code|from|ticket|slip|remove|edit|purge|audit|check|analyze)\s+(?:code\s+|ticket\s+)?([A-Za-z0-9]{4,10})\b", text, re.IGNORECASE)
         if prefix_match:
             cand = prefix_match.group(1).upper()
             if cand.lower() not in blacklist:
                 found_code = cand
 
-        # 2. Look for alphanumeric tokens with both letters and digits (e.g. UY65TY, GH7AKP, TLV0QK)
+        # 2. Look for SportyBet booking code tokens (usually 6 chars like RQLHUP or alphanumeric like VTQA7C)
         if not found_code:
-            for token in re.findall(r"\b([A-Za-z0-9]{4,10})\b", text):
+            for token in re.findall(r"\b([A-Za-z0-9]{5,8})\b", text):
                 cand = token.upper()
                 if cand.lower() in blacklist:
                     continue
-                if any(c.isdigit() for c in cand) and any(c.isalpha() for c in cand):
+                # Match if it has digits+letters, or is exactly a 6-character token (standard SportyBet code)
+                if (any(c.isdigit() for c in cand) and any(c.isalpha() for c in cand)) or (len(cand) == 6 and cand.isalpha()):
                     found_code = cand
                     break
 
-        # Extract target odds (e.g. "10 odds", "10.5x", "10 odds each", "50 odds")
-        odds_match = re.search(r"(\d+(?:\.\d+)?)\s*(?:odd|odds|x|multiplier)", t_lower)
-        target_odds = float(odds_match.group(1)) if odds_match else None
+        # Check multi-ticket with odds expressions first (e.g. "2x 10 odds", "2 of 10 odds", "2 tickets of 10 odds")
+        multi_odds_m = re.search(r"(\d+)\s*(?:x|\*|tickets?|slips?|variants?)\s*(?:of\s*)?(\d+(?:\.\d+)?)\s*(?:odd|odds)?\b", t_lower)
+        multi_games_m = re.search(r"(\d+)\s*(?:x|\*|tickets?|slips?|variants?)\s*(?:of\s*)?(\d+)\s*(?:game|games|leg|legs|match|matches)\b", t_lower)
 
-        # Extract target games count (e.g. "10 games", "12 matches", "15 fixtures")
-        games_match = re.search(r"(\d+)\s*(?:game|games|match|matches|fixture|fixtures)\b", t_lower)
-        target_games = int(games_match.group(1)) if games_match else None
-
-        # Extract ticket count (e.g. "2 sure tickets", "2 tickets", "two tickets")
-        tickets_match = re.search(r"(\d+)\s*(?:sure\s*)?(?:ticket|tickets|slip|slips|variant|variants)", t_lower)
-        if tickets_match:
-            ticket_count = int(tickets_match.group(1))
-        elif any(k in t_lower for k in ["two ticket", "2 ticket", "two slip", "2 slip", "duo", "twin"]):
-            ticket_count = 2
+        if multi_odds_m:
+            ticket_count = max(1, min(4, int(multi_odds_m.group(1))))
+            target_odds = float(multi_odds_m.group(2))
+            target_games = None
+        elif multi_games_m:
+            ticket_count = max(1, min(4, int(multi_games_m.group(1))))
+            target_games = int(multi_games_m.group(2))
+            target_odds = None
         else:
-            ticket_count = 1
+            # Extract target odds (e.g. "10 odds", "10.5x", "10 odds each", "50 odds")
+            odds_match = re.search(r"(\d+(?:\.\d+)?)\s*(?:odd|odds)\b", t_lower)
+            if not odds_match:
+                x_match = re.search(r"(?<!\d)(\d+(?:\.\d+)?)\s*x\b", t_lower)
+                if x_match and float(x_match.group(1)) > 2.0:
+                    odds_match = x_match
+            target_odds = float(odds_match.group(1)) if odds_match else None
+
+            # Extract target games count (e.g. "10 games", "12 matches", "15 fixtures")
+            games_match = re.search(r"(\d+)\s*(?:game|games|match|matches|fixture|fixtures)\b", t_lower)
+            target_games = int(games_match.group(1)) if games_match else None
+
+            # Extract ticket count (e.g. "2 sure tickets", "2 tickets", "two tickets")
+            tickets_match = re.search(r"(\d+)\s*(?:sure\s*)?(?:ticket|tickets|slip|slips|variant|variants)", t_lower)
+            if tickets_match:
+                ticket_count = int(tickets_match.group(1))
+            elif any(k in t_lower for k in ["two ticket", "2 ticket", "two slip", "2 slip", "duo", "twin"]):
+                ticket_count = 2
+            else:
+                ticket_count = 1
 
         # Check REMOVE vs EDIT
         is_remove = any(k in t_lower for k in ["remove", "drop", "purge", "cut", "sure ticket", "sure slip", "clean", "scrub"])
