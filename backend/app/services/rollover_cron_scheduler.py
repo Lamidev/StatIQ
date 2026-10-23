@@ -170,6 +170,10 @@ class RolloverCronScheduler:
                     # Check if today is an active day and current time matches or has passed dispatch_time
                     if (current_day_code in active_days) and (current_time_str >= dispatch_time) and (last_run != today_str) and (self._last_dispatched_date != today_str) and (now_wat.hour < 21):
                         self._last_dispatched_date = today_str
+                        # CRITICAL: Persist last_run_date IMMEDIATELY before launching async generation
+                        # This prevents concurrent worker processes or subsequent ticks from double-triggering
+                        cfg["last_run_date"] = today_str
+                        self.save_config(cfg)
                         logger.info(f"[RolloverScheduler] Triggering scheduled Daily VIP run for {current_day_code} ({today_str} @ {current_time_str})...")
                         target_odds = float(cfg.get("target_odds", 1.50))
 

@@ -1,6 +1,8 @@
 import os
 import json
 import logging
+import time
+import hashlib
 from typing import Dict, Any, List, Optional
 import httpx
 
@@ -10,7 +12,44 @@ class RolloverTelegramNotifier:
     """
     Dedicated Telegram Notification Dispatcher for StatIQ Automated Rollover Engine.
     Dispatches elite rollover slips with loadable SportyBet booking links and leg analysis.
+    Includes built-in de-duplication to prevent repeated message delivery across worker processes.
     """
+
+    _dispatched_booking_codes: Dict[str, float] = {}
+    _dispatched_message_hashes: Dict[str, float] = {}
+
+    @classmethod
+    def is_duplicate_dispatch(cls, code: Optional[str] = None, text: Optional[str] = None, code_window: float = 43200.0, text_window: float = 120.0) -> bool:
+        """
+        Prevents multiple deliveries of the exact same booking code (12-hour window)
+        or identical message text (2-minute window).
+        """
+        now = time.time()
+        # Clean stale memory entries
+        cls._dispatched_booking_codes = {k: v for k, v in cls._dispatched_booking_codes.items() if (now - v) < 86400}
+        cls._dispatched_message_hashes = {k: v for k, v in cls._dispatched_message_hashes.items() if (now - v) < 86400}
+
+        if code and code not in ("N/A", "RESTED", "", None):
+            last_code_ts = cls._dispatched_booking_codes.get(code)
+            if last_code_ts and (now - last_code_ts) < code_window:
+                return True
+
+        if text:
+            h = hashlib.sha256(text.strip().encode("utf-8")).hexdigest()
+            last_text_ts = cls._dispatched_message_hashes.get(h)
+            if last_text_ts and (now - last_text_ts) < text_window:
+                return True
+
+        return False
+
+    @classmethod
+    def record_dispatched(cls, code: Optional[str] = None, text: Optional[str] = None):
+        now = time.time()
+        if code and code not in ("N/A", "RESTED", "", None):
+            cls._dispatched_booking_codes[code] = now
+        if text:
+            h = hashlib.sha256(text.strip().encode("utf-8")).hexdigest()
+            cls._dispatched_message_hashes[h] = now
 
     @classmethod
     def get_credentials(cls) -> Dict[str, str]:
@@ -28,6 +67,11 @@ class RolloverTelegramNotifier:
             logger.warning("[RolloverTelegram] Bot token or chat ID missing.")
             return False
 
+        # Guard against identical message burst within 2 minutes
+        if cls.is_duplicate_dispatch(text=text, text_window=120.0):
+            logger.info("[RolloverTelegram] Duplicate message delivery suppressed (identical payload sent recently).")
+            return True
+
         url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
         payload = {
             "chat_id": chat_id,
@@ -40,6 +84,7 @@ class RolloverTelegramNotifier:
             with httpx.Client(timeout=10.0) as client:
                 r = client.post(url, json=payload)
                 if r.status_code == 200:
+                    cls.record_dispatched(text=text)
                     logger.info("[RolloverTelegram] Message delivered successfully.")
                     return True
                 logger.warning(f"[RolloverTelegram] Failed to send message: {r.status_code} - {r.text}")
@@ -53,6 +98,11 @@ class RolloverTelegramNotifier:
         Formats and sends a high-assurance Rollover ticket alert to Telegram.
         """
         code = ticket_data.get("booking_code") or "N/A"
+        if code and code not in ("N/A", "RESTED"):
+            if cls.is_duplicate_dispatch(code=code):
+                logger.info(f"[RolloverTelegram] Rollover slip {code} already dispatched today. Suppressing duplicate delivery.")
+                return True
+
         target_odds = ticket_data.get("target_odds", 1.50)
         actual_odds = ticket_data.get("actual_odds", target_odds)
         confidence = ticket_data.get("confidence_score", 90.0)
@@ -65,7 +115,7 @@ class RolloverTelegramNotifier:
             title_line,
             f"📅 <b>Date:</b> {date_str} (10:00 AM WAT Dispatch)",
             f"⚡ <b>Target Multiplier:</b> {actual_odds:.2f}x | <b>Combined Confidence:</b> {confidence:.1f}%",
-            f"📊 <b>Leg Count:</b> {len(picks)} Banker Matches (2–3 Low-Variance Cushions)\n"
+            f"📊 <b>Leg Count:</b> {len(picks)} Banker Matches ({len(picks)} Low-Variance Cushions)\n"
         ]
 
         for i, p in enumerate(picks, 1):
@@ -86,7 +136,10 @@ class RolloverTelegramNotifier:
         lines.append("🤖 <i>Automated via StatIQ Elite Rollover Scheduler · 1.50x Compounding Corridor</i>")
 
         msg = "\n".join(lines)
-        return cls.send_message(msg)
+        sent = cls.send_message(msg)
+        if sent and code and code not in ("N/A", "RESTED"):
+            cls.record_dispatched(code=code)
+        return sent
 
     @classmethod
     def dispatch_value_acca_slip(cls, ticket_data: Dict[str, Any]) -> bool:
@@ -94,6 +147,11 @@ class RolloverTelegramNotifier:
         Formats and sends the Precision Multiplier alert to Telegram with Zero-Overlap assurance.
         """
         code = ticket_data.get("booking_code") or "N/A"
+        if code and code not in ("N/A", "RESTED"):
+            if cls.is_duplicate_dispatch(code=code):
+                logger.info(f"[RolloverTelegram] Precision Acca slip {code} already dispatched today. Suppressing duplicate delivery.")
+                return True
+
         target_odds = float(ticket_data.get("target_odds", 5.0))
         actual_odds = float(ticket_data.get("actual_odds", target_odds))
         confidence = ticket_data.get("confidence_score", 65.0)
@@ -127,7 +185,10 @@ class RolloverTelegramNotifier:
         lines.append("🤖 <i>Automated via StatIQ Daily VIP Scheduler · Min Odds ≥ 1.15x</i>")
 
         msg = "\n".join(lines)
-        return cls.send_message(msg)
+        sent = cls.send_message(msg)
+        if sent and code and code not in ("N/A", "RESTED"):
+            cls.record_dispatched(code=code)
+        return sent
 
     @classmethod
     def dispatch_mega_multiplier_slip(cls, ticket_data: Dict[str, Any]) -> bool:
@@ -135,6 +196,11 @@ class RolloverTelegramNotifier:
         Formats and sends the Mega Multiplier alert to Telegram with Zero-Overlap assurance.
         """
         code = ticket_data.get("booking_code") or "N/A"
+        if code and code not in ("N/A", "RESTED"):
+            if cls.is_duplicate_dispatch(code=code):
+                logger.info(f"[RolloverTelegram] Mega Multiplier slip {code} already dispatched today. Suppressing duplicate delivery.")
+                return True
+
         target_odds = float(ticket_data.get("target_odds", 10.0))
         actual_odds = float(ticket_data.get("actual_odds", target_odds))
         confidence = ticket_data.get("confidence_score", 52.0)
@@ -171,7 +237,10 @@ class RolloverTelegramNotifier:
         lines.append("🤖 <i>Automated via StatIQ Daily VIP Scheduler · Min Odds ≥ 1.15x</i>")
 
         msg = "\n".join(lines)
-        return cls.send_message(msg)
+        sent = cls.send_message(msg)
+        if sent and code and code not in ("N/A", "RESTED"):
+            cls.record_dispatched(code=code)
+        return sent
 
     @classmethod
     def dispatch_midweek_15x_slip(cls, ticket_data: Dict[str, Any]) -> bool:
@@ -179,6 +248,11 @@ class RolloverTelegramNotifier:
         Formats and sends the 15.0x Mid-Week Multiplier alert to Telegram with Zero-Overlap assurance.
         """
         code = ticket_data.get("booking_code") or "N/A"
+        if code and code not in ("N/A", "RESTED"):
+            if cls.is_duplicate_dispatch(code=code):
+                logger.info(f"[RolloverTelegram] Midweek slip {code} already dispatched today. Suppressing duplicate delivery.")
+                return True
+
         target_odds = ticket_data.get("target_odds", 15.0)
         actual_odds = ticket_data.get("actual_odds", target_odds)
         confidence = ticket_data.get("confidence_score", 42.0)
@@ -212,7 +286,10 @@ class RolloverTelegramNotifier:
         lines.append("🤖 <i>Automated via StatIQ Daily VIP Scheduler · Min Odds ≥ 1.15x</i>")
 
         msg = "\n".join(lines)
-        return cls.send_message(msg)
+        sent = cls.send_message(msg)
+        if sent and code and code not in ("N/A", "RESTED"):
+            cls.record_dispatched(code=code)
+        return sent
 
     @classmethod
     def dispatch_mega_20x_slip(cls, ticket_data: Dict[str, Any]) -> bool:
@@ -220,6 +297,11 @@ class RolloverTelegramNotifier:
         Formats and sends the Monster Multiplier alert to Telegram with Calendar Adaptive Guarantee.
         """
         code = ticket_data.get("booking_code") or "N/A"
+        if code and code not in ("N/A", "RESTED"):
+            if cls.is_duplicate_dispatch(code=code):
+                logger.info(f"[RolloverTelegram] Monster Acca slip {code} already dispatched today. Suppressing duplicate delivery.")
+                return True
+
         target_odds = float(ticket_data.get("target_odds", 20.0))
         actual_odds = float(ticket_data.get("actual_odds", target_odds))
         confidence = ticket_data.get("confidence_score", 35.0)
@@ -253,7 +335,10 @@ class RolloverTelegramNotifier:
         lines.append("🤖 <i>Automated via StatIQ Daily VIP Scheduler · Min Odds ≥ 1.15x</i>")
 
         msg = "\n".join(lines)
-        return cls.send_message(msg)
+        sent = cls.send_message(msg)
+        if sent and code and code not in ("N/A", "RESTED"):
+            cls.record_dispatched(code=code)
+        return sent
 
     @classmethod
     def send_test_ping(cls) -> bool:
@@ -291,7 +376,7 @@ class RolloverTelegramNotifier:
             "⚙️ <b>StatIQ Daily VIP Automation Settings Updated</b>",
             f"Status: {status_badge} · Time: <b>{disp_time} AM WAT</b>",
             f"📅 Active Days: <b>{active_days}</b>\n",
-            f"• 🎯 <b>Slip 1 (Rollover):</b> {'✅ ON' if ro_on else '❌ OFF'} ➔ <b>{ro_odds:.2f}x Target</b> (2–3 Banker Legs)",
+            f"• 🎯 <b>Slip 1 (Rollover):</b> {'✅ ON' if ro_on else '❌ OFF'} ➔ <b>{ro_odds:.2f}x Target</b> (3 Banker Legs)",
             f"• ⚡ <b>Slip 2 (Precision):</b> {'✅ ON' if a5_on else '❌ OFF'} ➔ <b>{a5_odds:.2f}x Target</b> (Zero-Overlap Cushions)",
             f"• 🚀 <b>Slip 3 (Mega Multiplier):</b> {'✅ ON' if a10_on else '❌ OFF'} ➔ <b>{a10_odds:.2f}x Target</b> (High-Dominance Acca)",
             f"• ⚡ <b>Slip 4 (Monster Acca):</b> {'✅ ON' if a20_on else '❌ OFF'} ➔ <b>{a20_odds:.2f}x Target</b>\n",

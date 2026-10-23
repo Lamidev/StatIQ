@@ -1094,12 +1094,12 @@ class EliteRolloverEngine:
         import itertools
         top_slice = ranked_pool[:50]
 
-        # For 1.50x target: test 2-leg (~1.22 x 1.25) and 3-leg (~1.15 x 1.15 x 1.15)
-        # For 2.00x target: test 4-leg first, fallback to 3-leg
-        if target <= 1.45:
-            leg_options = (1, 2)
-        elif target <= 1.70:
-            leg_options = (2, 3)
+        # For 1.50x compounding corridor: strictly 3 banker games (USER DIRECTIVE: MUST be 3 games)
+        # For lower targets (< 1.35x): 2 games; for higher targets (> 1.75x): 4 or 3 games
+        if 1.35 <= target <= 1.75:
+            leg_options = (3,)
+        elif target < 1.35:
+            leg_options = (2,)
         else:
             leg_options = (4, 3)
 
@@ -1122,14 +1122,15 @@ class EliteRolloverEngine:
 
                 avg_quality = quality_sum / k
                 odds_diff = abs(tot_odds - target)
-                # Must be within reasonable bound of target odds (e.g. 1.45x - 1.70x for 1.50x target)
-                if tot_odds < (target * 0.95) or tot_odds > (target * 1.15):
+                # Must be within reasonable bound of target odds (e.g. 1.40x - 1.72x for 1.50x target)
+                if tot_odds < (target * 0.93) or tot_odds > (target * 1.15):
                     continue
 
                 # Objective: heavily weight joint probability and quality
-                if target <= 1.70:
-                    ideal_legs = 2 if target <= 1.55 else 3
-                    leg_penalty = 0.0 if k in (2, 3) else (abs(k - ideal_legs) * 5.0)
+                if 1.35 <= target <= 1.75:
+                    leg_penalty = 0.0 if k == 3 else 50.0
+                elif target < 1.35:
+                    leg_penalty = 0.0 if k == 2 else 50.0
                 else:
                     leg_penalty = 0.0 if k == 4 else (abs(k - 4) * 4.0)
 
@@ -1138,7 +1139,7 @@ class EliteRolloverEngine:
                 dc_count = sum(1 for leg in combo if leg.get("market_type") == "DOUBLE_CHANCE")
                 # Diversity incentive: penalize slips dominated purely by Double Chance
                 diversity_penalty = (dc_count - 1) * 10.0 if dc_count > 1 else 0.0
-                obj = (cum_prob * 60.0) + (avg_quality * 1.80) + (juggernaut_count * 30.0) + diversity_bonus - (odds_diff * 12.0) - leg_penalty - diversity_penalty
+                obj = (cum_prob * 60.0) + (avg_quality * 1.80) + (juggernaut_count * 30.0) + diversity_bonus - (odds_diff * 15.0) - leg_penalty - diversity_penalty
                 if obj > best_objective:
                     best_objective = obj
                     best_combo = list(combo)
@@ -1146,8 +1147,8 @@ class EliteRolloverEngine:
         # Fallback if no exact combination met strict window: pick top legs greedily up to target with diversity guard
         if not best_combo:
             curr_odds = 1.0
-            max_legs = 2 if target <= 1.55 else (3 if target <= 1.70 else 4)
-            max_per_market = 1 if max_legs <= 3 else 2
+            required_legs = 3 if (1.35 <= target <= 1.75) else (2 if target < 1.35 else 4)
+            max_per_market = 1 if required_legs <= 3 else 2
             market_counts = collections.defaultdict(int)
             used_fids = set()
             for leg in ranked_pool:
@@ -1161,7 +1162,7 @@ class EliteRolloverEngine:
                 used_fids.add(fid)
                 market_counts[m_type] += 1
                 curr_odds *= leg["odds"]
-                if curr_odds >= (target * 0.95) or len(best_combo) >= max_legs:
+                if len(best_combo) >= required_legs:
                     break
 
         return best_combo

@@ -305,7 +305,7 @@ class StatIQTelegramBot:
             f"📅 <b>Active Days:</b> <b>{days_label}</b>\n"
             "🔒 <b>Zero-Overlap Guarantee:</b> 100% Unique Fixtures Across All Daily Slips\n\n"
             "<b>📅 Daily VIP Slips (100% Zero-Overlap):</b>\n"
-            f"• 🎯 <b>{ro_odds:.2f}x Rollover:</b> {ro_icon} (2–4 Banker Legs, 100% Isolated)\n"
+            f"• 🎯 <b>{ro_odds:.2f}x Rollover:</b> {ro_icon} (3 Banker Legs, 100% Isolated)\n"
             f"• ⚡ <b>{a5_odds:.1f}x Precision:</b> {acca5_icon} (High-Assurance Cushions)\n"
             f"• 🚀 <b>{a10_odds:.1f}x Mega:</b> {acca10_icon} (Zero-Overlap Multiplier)\n"
             f"• ⚡ <b>{a20_odds:.1f}x Monster:</b> {acca20_icon} (Max Dominance Accumulator)\n\n"

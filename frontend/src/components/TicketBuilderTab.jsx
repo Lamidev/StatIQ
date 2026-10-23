@@ -3229,7 +3229,7 @@ Slovakia vs Moldova`;
                             {cronConfig.enable_rollover_2x && <Check className="w-3 h-3 text-white" />}
                           </span>
                         </div>
-                        <span className="text-[10px] text-slate-500 font-medium block mt-0.5">2–4 Banker Legs (100% Isolated)</span>
+                        <span className="text-[10px] text-slate-500 font-medium block mt-0.5">3 Banker Legs (100% Isolated)</span>
                         
                         {/* Target Odds Input */}
                         <div className="flex items-center gap-1.5 mt-2.5">
