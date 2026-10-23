@@ -3536,40 +3536,6 @@ Slovakia vs Moldova`;
                   </div>
                 </div>
 
-                {/* 3. Safety Odds Corridor Ceiling */}
-                <div className="space-y-2">
-                  <label className="text-xs font-black text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
-                    <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
-                    <span>3. Max Single-Leg Odds Ceiling</span>
-                  </label>
-                  <div className="grid grid-cols-3 gap-2">
-                    {[
-                      { val: 1.35, label: "1.35x Max", desc: "Ultra-Tight" },
-                      { val: 1.40, label: "1.40x Max", desc: "Balanced" },
-                      { val: 1.45, label: "1.45x Max", desc: "Standard Golden Corridor" },
-                    ].map(corridor => {
-                      const isSel = Math.abs((cronConfig.max_leg_odds || 1.45) - corridor.val) < 0.02;
-                      return (
-                        <button
-                          key={corridor.val}
-                          type="button"
-                          onClick={() => setCronConfig(prev => ({ ...prev, max_leg_odds: corridor.val }))}
-                          className={`p-2 rounded-xl border text-left transition-all cursor-pointer ${
-                            isSel
-                              ? "bg-emerald-50 border-emerald-500 ring-2 ring-emerald-500/20 text-emerald-950 font-black shadow-xs"
-                              : "bg-white border-slate-200 hover:border-slate-300 text-slate-700 font-bold"
-                          }`}
-                        >
-                          <div className="flex items-center justify-between">
-                            <span className="text-xs font-black">{corridor.label}</span>
-                            {isSel && <span className="w-2 h-2 rounded-full bg-emerald-600" />}
-                          </div>
-                          <span className="text-[10px] text-slate-500 block mt-0.5">{corridor.desc}</span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
 
                 {/* Footer Buttons: Save, Test Telegram Ping, Collapse */}
                 <div className="pt-2 border-t border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
