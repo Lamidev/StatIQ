@@ -90,7 +90,7 @@ class GeminiScoutService:
             f"Analyze this sports betting user message: '{clean_text}'\n\n"
             "Output a JSON object ONLY with the following schema:\n"
             "{\n"
-            "  \"intent\": \"REMOVE_AND_SPLIT\" | \"EDIT_UPGRADE\" | \"BUILD_ODDS\" | \"BUILD_GAMES\" | \"DISPATCH\" | \"EXPLAIN\" | \"UNKNOWN\",\n"
+            "  \"intent\": \"REMOVE_AND_SPLIT\" | \"EDIT_UPGRADE\" | \"BUILD_ODDS\" | \"BUILD_GOAL_KICKS\" | \"BUILD_GAMES\" | \"DISPATCH\" | \"EXPLAIN\" | \"UNKNOWN\",\n"
             "  \"booking_code\": string or null (e.g. 'uy65ty'),\n"
             "  \"target_odds\": number or null (e.g. 10.0),\n"
             "  \"ticket_count\": integer (default 1),\n"
@@ -99,6 +99,7 @@ class GeminiScoutService:
             "  \"time_horizon\": \"TODAY\" or \"WEEKEND\" or \"MIDWEEK_UCL\"\n"
             "}\n"
             "RULES:\n"
+            "- 'goal kick', 'under 8.5', '1st half goal kick' -> intent='BUILD_GOAL_KICKS'\n"
             "- 'remove', 'drop', 'purge', 'sure tickets from code' -> mode='REMOVE', intent='REMOVE_AND_SPLIT'\n"
             "- 'edit', 'upgrade', 'safer markets' -> mode='EDIT', intent='EDIT_UPGRADE'\n"
             "- '10 odds', '2 tickets of 10 odds' -> target_odds=10.0, ticket_count=2\n"
@@ -178,6 +179,19 @@ class GeminiScoutService:
             time_horizon = "WEEKEND"
         elif "ucl" in t_lower or "champions league" in t_lower or "midweek" in t_lower:
             time_horizon = "MIDWEEK_UCL"
+
+        # Check Goal Kicks
+        is_goalkicks = any(k in t_lower for k in ["goal kick", "goalkick", "goal kicks", "goalkicks", "gk "]) or ("kick" in t_lower and any(k in t_lower for k in ["8.5", "15.5", "7.5", "first half", "1st half"]))
+        if is_goalkicks:
+            prefer_line = "FT" if ("full time" in t_lower or "ft" in t_lower or "15.5" in t_lower) else ("MIXED" if "mixed" in t_lower else "1H")
+            return {
+                "intent": "BUILD_GOAL_KICKS",
+                "booking_code": None,
+                "target_odds": target_odds or 10.0,
+                "ticket_count": ticket_count,
+                "prefer_line": prefer_line,
+                "confidence": 0.95
+            }
 
         if found_code:
             intent = "REMOVE_AND_SPLIT" if mode == "REMOVE" else "EDIT_UPGRADE"
@@ -313,6 +327,18 @@ class GeminiScoutService:
             bot_service.handle_odds_command(chat_id, target_odds)
             return True
 
+        # 3a. DEDICATED GOAL KICKS SLIP
+        if intent == "BUILD_GOAL_KICKS":
+            prefer_line = parsed.get("prefer_line", "1H")
+            line_desc = "1st Half Under 8.5/7.5 Goal Kicks" if prefer_line == "1H" else ("Full Time Under Goal Kicks" if prefer_line == "FT" else "Goal Kicks Unders")
+            bot_service.send_message(
+                chat_id,
+                f"⚡ <b>StatIQ Goal Kicks Engine:</b>\n"
+                f"Scouting today's live SportyBet board for <b>{line_desc}</b> targeting <b>{target_odds:.1f}x multiplier</b>..."
+            )
+            bot_service.handle_goalkicks_command(chat_id, target_odds=target_odds, prefer_line=prefer_line)
+            return True
+
         # 4. DISPATCH DAILY AUTOMATION
         if intent == "DISPATCH":
             bot_service.handle_dispatch_command(chat_id)
@@ -323,11 +349,12 @@ class GeminiScoutService:
             chat_id,
             "💡 <b>StatIQ AI Copilot Ready</b>\n\n"
             "You can speak to me naturally or paste any SportyBet code:\n"
+            "• <i>'Book me a 10 odds goal kick ticket with 1st half under 8.5'</i> (Mono-Market)\n"
             "• <i>'I need 2 sure tickets of 10 odds each from uy65ty'</i> (Purges risky games as-is)\n"
             "• <i>'Upgrade code GH7AKP to safe markets'</i> (Double Chance & Goals)\n"
             "• <i>'Build a 5 odds accumulator for tonight'</i>\n"
             "• <i>'Dispatch today's Daily VIP Slips'</i>\n\n"
-            "<i>(Standard slash commands like <code>/odds 1.5</code>, <code>/duo</code>, <code>/auto</code> remain active!)</i>"
+            "<i>(Slash commands like <code>/goalkicks 10</code>, <code>/odds 5</code>, <code>/duo</code> remain active!)</i>"
         )
         return False
 

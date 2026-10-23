@@ -208,6 +208,10 @@ class StatIQTelegramBot:
             "• <code>/ucl 25</code> — Midweek Champions League / European Cups Slip\n\n"
             "🚀 <b>On-Demand Rollover:</b>\n"
             "• <code>/rollover</code> — Instant 1.50x Banker Rollover Slip (2–3 Legs, Zero 1-0 traps)\n\n"
+            "🥅 <b>Dedicated Goal Kicks Engine (Under Cushions):</b>\n"
+            "• <code>/goalkicks 10</code> or <code>/gk 10</code> — <b>10.0x Dedicated 1st Half Under 8.5/7.5 Goal Kicks Slip</b>\n"
+            "• <code>/goalkicks 5</code> — 5.0x Tactical Goal Kicks Slip\n"
+            "• <i>Natural Language:</i> Text <i>'Book me a 10 odds goal kick ticket with 1st half under 8.5'</i>\n\n"
             "⚽ <b>Generate by Match Count (1 or 2 Zero-Overlap Slips):</b>\n"
             "• <code>/games 10</code> — Top 10 High-Confidence Matches (1 Slip)\n"
             "• <code>/games 10 2 tickets</code> — <b>2 Variant Slips of 10 Matches Each</b>\n"
@@ -237,6 +241,10 @@ class StatIQTelegramBot:
                 [
                     {"text": "🔥 5.0x (1 Slip)", "callback_data": "gen:odds:5.0:1"},
                     {"text": "🚀 10.0x Mega (1 Slip)", "callback_data": "gen:odds:10.0:1"}
+                ],
+                [
+                    {"text": "🥅 10.0x Goal Kicks (Under 8.5)", "callback_data": "gen:goalkicks:10.0"},
+                    {"text": "🥅 5.0x Goal Kicks (Under 8.5)", "callback_data": "gen:goalkicks:5.0"}
                 ],
                 [
                     {"text": "⚽ 10 Games (1 Slip)", "callback_data": "gen:games:10:1"},
@@ -906,6 +914,65 @@ class StatIQTelegramBot:
         except Exception as e:
             logger.error(f"[TelegramBot] Games build error: {e}", exc_info=True)
             self.send_message(chat_id, f"❌ <b>Error:</b> Failed to generate ticket ({_esc(str(e))}).")
+
+    def handle_goalkicks_command(
+        self,
+        chat_id: int | str,
+        target_odds: float = 10.0,
+        prefer_line: str = "1H"
+    ):
+        """Generates a dedicated Goal Kicks ticket targeting specified odds."""
+        target_odds = max(2.0, min(100.0, float(target_odds or 10.0)))
+        line_desc = "1st Half Under 8.5/7.5 Goal Kicks" if prefer_line == "1H" else ("Full Time Under Goal Kicks" if prefer_line == "FT" else "Goal Kicks Unders")
+        self.send_chat_action(chat_id, "typing")
+        self.send_message(
+            chat_id,
+            f"⚡ <b>StatIQ Goal Kicks Engine:</b> Scouting today's live SportyBet board for <b>{line_desc}</b> targeting <b>{target_odds:.2f}x</b> multiplier..."
+        )
+
+        try:
+            from app.services.goal_kicks_service import goal_kicks_service
+
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                ticket_res = loop.run_until_complete(
+                    goal_kicks_service.build_goal_kicks_ticket(
+                        target_odds=target_odds,
+                        prefer_line=prefer_line
+                    )
+                )
+            finally:
+                loop.close()
+
+            if not ticket_res or ticket_res.get("status") != "SUCCESS":
+                msg = ticket_res.get("message") if ticket_res else "No active matches offering Goal Kick markets."
+                self.send_message(chat_id, f"⚠️ <b>Notice:</b> {msg}")
+                return
+
+            picks = ticket_res.get("picks", [])
+            code = ticket_res.get("booking_code")
+            share_url = ticket_res.get("share_url")
+            actual_odds = ticket_res.get("actual_odds", target_odds)
+            conf = ticket_res.get("confidence_score", 75.0)
+            scout_analysis = ticket_res.get("scout_analysis")
+
+            self._dispatch_ticket_message(
+                chat_id=chat_id,
+                title=f"🎯 StatIQ {actual_odds:.2f}x Goal Kicks Cushion Slip",
+                booking_code=code,
+                share_url=share_url,
+                total_odds=actual_odds,
+                confidence=conf,
+                picks=picks,
+                extra_note="Mono-Market Discipline: 100% Goal Kicks Under Cushions"
+            )
+
+            if scout_analysis:
+                self.send_message(chat_id, scout_analysis)
+        except Exception as e:
+            logger.error(f"[TelegramBot] Goal Kicks build error: {e}", exc_info=True)
+            self.send_message(chat_id, f"❌ <b>Error:</b> Failed to generate Goal Kicks slip ({_esc(str(e))}).")
 
     def handle_remove_command(
         self,
@@ -1985,6 +2052,9 @@ class StatIQTelegramBot:
                 self.handle_rollover_command(chat_id)
             elif action == "duo":
                 self.handle_duo_command(chat_id, targets=[5.0, 10.0])
+            elif action == "goalkicks":
+                val = float(parts[2]) if len(parts) > 2 else 10.0
+                self.handle_goalkicks_command(chat_id, target_odds=val, prefer_line="1H")
             elif action == "odds":
                 val = float(parts[2]) if len(parts) > 2 else 1.5
                 num_t = int(parts[3]) if len(parts) > 3 else 1
@@ -2236,6 +2306,16 @@ class StatIQTelegramBot:
             self.handle_odds_command(chat_id, target_odds=val, num_tickets=1, time_horizon="MIDWEEK_UCL")
             return
 
+        # Dedicated Goal Kicks Accumulator: /goalkicks [odds], /gk [odds], /goalkick [odds]
+        gk_match = re.match(r"^/(?:goalkicks|goalkick|gk|kicks)\s*(\d+\.?\d*)?(.*)", text, re.IGNORECASE)
+        if gk_match:
+            val_str = gk_match.group(1)
+            val = float(val_str) if val_str else 10.0
+            rest = (gk_match.group(2) or "").lower()
+            prefer = "FT" if ("ft" in rest or "full" in rest) else ("MIXED" if "mixed" in rest else "1H")
+            self.handle_goalkicks_command(chat_id, target_odds=val, prefer_line=prefer)
+            return
+
         # 3. /odds <target_odds> [num_tickets] OR multi-odds (e.g. /odds 5 10)
         odds_match = re.match(r"^/(?:odds|build|target)\s*(\d+\.?\d*)(.*)", text, re.IGNORECASE)
         if odds_match:
@@ -2443,6 +2523,7 @@ class StatIQTelegramBot:
         commands = [
             {"command": "start", "description": "Show main menu & quick action buttons"},
             {"command": "duo", "description": "1x 5.0x + 1x 10.0x simultaneous slips (Zero Overlap)"},
+            {"command": "goalkicks", "description": "Dedicated Under Goal Kicks slip (/goalkicks 10, /gk 5)"},
             {"command": "odds", "description": "Target odds (/odds 1.5, /odds 5, /odds 10)"},
             {"command": "portfolio", "description": "Split mega slip into 4 or 2 diversified tickets"},
             {"command": "rollover", "description": "Generate today's 1.50x Banker Rollover slip (2–3 legs)"},
