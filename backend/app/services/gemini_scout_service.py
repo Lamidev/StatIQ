@@ -3,6 +3,7 @@ import re
 import json
 import logging
 import time
+import asyncio
 from typing import Dict, Any, List, Optional
 import httpx
 
@@ -337,12 +338,24 @@ class GeminiScoutService:
             )
 
     @classmethod
-    async def route_conversational_message(cls, bot_service: Any, chat_id: int | str, text: str) -> bool:
+    def route_conversational_message(cls, bot_service: Any, chat_id: int | str, text: str) -> bool:
         """
         Main entry point for free-form Telegram messages.
-        Parses intent and delegates to StatIQ's deterministic execution handlers.
+        Parses intent in an isolated event loop and delegates to StatIQ's deterministic execution handlers.
         """
-        parsed = await cls.parse_user_intent(text)
+        # Parse intent in a short-lived isolated event loop that terminates cleanly before invoking bot handlers
+        try:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                parsed = loop.run_until_complete(cls.parse_user_intent(text))
+            finally:
+                loop.close()
+                asyncio.set_event_loop(None)
+        except Exception as pe:
+            logger.warning(f"[GeminiScout] Intent parsing error: {pe}, using local fallback")
+            parsed = cls._extract_intent_locally(text)
+
         intent = parsed.get("intent")
         code = parsed.get("booking_code")
         target_odds = parsed.get("target_odds") or 10.0

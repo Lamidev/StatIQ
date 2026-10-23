@@ -2530,11 +2530,10 @@ class StatIQTelegramBot:
 
         # 7. Conversational Natural Language Routing via Gemini Tactical Scout
         try:
-            import asyncio
             from app.services.gemini_scout_service import gemini_scout_service
 
             logger.info(f"[TelegramBot] Routing free-form message to Gemini Tactical Scout: '{text[:80]}'")
-            asyncio.run(gemini_scout_service.route_conversational_message(self, chat_id, text))
+            gemini_scout_service.route_conversational_message(self, chat_id, text)
             return
         except Exception as e:
             logger.warning(f"[TelegramBot] Error routing conversational message via GeminiScout: {e}")

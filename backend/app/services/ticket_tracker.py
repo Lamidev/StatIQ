@@ -1423,15 +1423,10 @@ def _heal_falsely_lost_tickets(tickets: list, now_ms: int) -> bool:
 
 def _dispatch_telegram_settlement_notification(t: Dict[str, Any]):
     """
-    Sends a clean settlement card to Telegram when a tracked ticket concludes (WON or LOST).
-    Includes individual match scorelines and leg outcomes (Won/Lost).
+    Disabled per user directive: Historical and delayed settlement alerts (especially LOST alerts)
+    flood the Telegram feed. Ticket settlements remain tracked cleanly inside the StatIQ dashboard.
     """
-    if t.get("telegram_settlement_dispatched"):
-        return
-
-    status = t.get("status")
-    if status not in ("WON", "LOST"):
-        return
+    return
 
     try:
         from app.services.rollover_telegram_notifier import RolloverTelegramNotifier
