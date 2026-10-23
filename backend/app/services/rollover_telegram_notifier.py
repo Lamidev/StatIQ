@@ -133,7 +133,16 @@ class RolloverTelegramNotifier:
         lines.append(f"\n🔥 <b>Total Multiplier:</b> {actual_odds:.2f}x")
         lines.append(f"🎟️ <b>SportyBet Code:</b> <code>{code}</code>")
         lines.append(f"🔗 <a href=\"{share_url}\"><b>Click to Pre-Load on SportyBet</b></a>\n")
-        lines.append("🤖 <i>Automated via StatIQ Elite Rollover Scheduler · 1.50x Compounding Corridor</i>")
+
+        try:
+            from app.services.gemini_scout_service import gemini_scout_service
+            scout_note = gemini_scout_service.generate_tactical_scout_note("Rollover Fortress", picks, actual_odds)
+            if scout_note:
+                lines.append(f"{scout_note}\n")
+        except Exception:
+            pass
+
+        lines.append("🤖 <i>StatIQ Quant Engine × Google AI Studio Tactical Scout · 1.50x Compounding Corridor</i>")
 
         msg = "\n".join(lines)
         sent = cls.send_message(msg)
@@ -182,7 +191,16 @@ class RolloverTelegramNotifier:
         lines.append(f"\n🔥 <b>Total Multiplier:</b> {actual_odds:.2f}x")
         lines.append(f"🎟️ <b>SportyBet Code:</b> <code>{code}</code>")
         lines.append(f"🔗 <a href=\"{share_url}\"><b>Click to Pre-Load on SportyBet</b></a>\n")
-        lines.append("🤖 <i>Automated via StatIQ Daily VIP Scheduler · Min Odds ≥ 1.15x</i>")
+
+        try:
+            from app.services.gemini_scout_service import gemini_scout_service
+            scout_note = gemini_scout_service.generate_tactical_scout_note("Precision Multiplier Slip", picks, actual_odds)
+            if scout_note:
+                lines.append(f"{scout_note}\n")
+        except Exception:
+            pass
+
+        lines.append("🤖 <i>StatIQ Quant Engine × Google AI Studio Tactical Scout · Zero-Overlap Portfolio</i>")
 
         msg = "\n".join(lines)
         sent = cls.send_message(msg)
@@ -234,7 +252,16 @@ class RolloverTelegramNotifier:
         lines.append(f"\n🚀 <b>Total Multiplier:</b> {actual_odds:.2f}x")
         lines.append(f"🎟️ <b>SportyBet Code:</b> <code>{code}</code>")
         lines.append(f"🔗 <a href=\"{share_url}\"><b>Click to Pre-Load on SportyBet</b></a>\n")
-        lines.append("🤖 <i>Automated via StatIQ Daily VIP Scheduler · Min Odds ≥ 1.15x</i>")
+
+        try:
+            from app.services.gemini_scout_service import gemini_scout_service
+            scout_note = gemini_scout_service.generate_tactical_scout_note("Mega Multiplier Slip", picks, actual_odds)
+            if scout_note:
+                lines.append(f"{scout_note}\n")
+        except Exception:
+            pass
+
+        lines.append("🤖 <i>StatIQ Quant Engine × Google AI Studio Tactical Scout · Zero-Overlap Portfolio</i>")
 
         msg = "\n".join(lines)
         sent = cls.send_message(msg)

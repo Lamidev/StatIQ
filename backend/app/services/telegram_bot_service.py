@@ -2415,12 +2415,21 @@ class StatIQTelegramBot:
             self.handle_raw_code_detected(chat_id, clean_text)
             return
 
-        # Default fallback: guide user
-        self.send_message(
-            chat_id,
-            "💡 <b>Command Not Recognized</b>\n\n"
-            "Use <code>/help</code> to view available commands, or paste any SportyBet booking code (e.g. <code>GH7AKP</code>) to trim it."
-        )
+        # 7. Conversational Natural Language Routing via Gemini Tactical Scout
+        try:
+            import asyncio
+            from app.services.gemini_scout_service import gemini_scout_service
+
+            logger.info(f"[TelegramBot] Routing free-form message to Gemini Tactical Scout: '{text[:80]}'")
+            asyncio.run(gemini_scout_service.route_conversational_message(self, chat_id, text))
+            return
+        except Exception as e:
+            logger.warning(f"[TelegramBot] Error routing conversational message via GeminiScout: {e}")
+            self.send_message(
+                chat_id,
+                "💡 <b>Command Not Recognized</b>\n\n"
+                "Use <code>/help</code> to view available commands, or paste any SportyBet booking code (e.g. <code>GH7AKP</code>) to trim it."
+            )
 
     # ─────────────────────────────────────────────────────────────────────────
     # Long-Polling Daemon Loop & Command Registration
