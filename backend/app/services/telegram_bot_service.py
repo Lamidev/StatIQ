@@ -89,21 +89,23 @@ class StatIQTelegramBot:
                             holding_pid = int(content)
                             if holding_pid == my_pid:
                                 return True
-                            # If holding_pid is dead, os.kill(holding_pid, 0) raises OSError
+                            # If holding_pid is alive, another worker really is running
                             os.kill(holding_pid, 0)
                             return False
                     except (OSError, ValueError):
-                        # The holding process is DEAD: break the stale lock
-                        try:
-                            if os.path.exists(lock_path):
-                                os.remove(lock_path)
-                            self._lock_file = open(lock_path, "a+")
-                            fcntl.flock(self._lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                            self._lock_file.write(str(my_pid))
-                            self._lock_file.flush()
-                            return True
-                        except Exception:
-                            pass
+                        pass
+
+                    # The holding process is dead, corrupt, or missing: break the stale lock
+                    try:
+                        if os.path.exists(lock_path):
+                            os.remove(lock_path)
+                        self._lock_file = open(lock_path, "a+")
+                        fcntl.flock(self._lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        self._lock_file.write(str(my_pid))
+                        self._lock_file.flush()
+                        return True
+                    except Exception:
+                        pass
                     return False
         except Exception as e:
             logger.warning(f"[TelegramBot] Process lock check note: {e}")

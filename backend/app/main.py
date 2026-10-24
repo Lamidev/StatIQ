@@ -111,7 +111,7 @@ def start_background_ticket_sync_worker():
     # Start StatIQ Autonomous Telegram Bot Remote Controller
     try:
         from app.services.telegram_bot_service import statiq_telegram_bot
-        statiq_telegram_bot.start()
+        statiq_telegram_bot.start(force=True)
     except Exception as e:
         print(f"[TelegramBot] Failed to start telegram daemon: {e}")
 
