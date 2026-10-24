@@ -1,6 +1,7 @@
 import os
 import json
 import re
+import time
 import logging
 from typing import Dict, Any, Optional, List
 import httpx
@@ -18,6 +19,8 @@ class GeminiAIService:
     """
     BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
 
+    _last_depleted_warn: float = 0.0
+
     def __init__(self, api_key: Optional[str] = None):
         if api_key:
             self.api_key = api_key
@@ -30,7 +33,12 @@ class GeminiAIService:
 
     def _call_gemini_api(self, prompt: str) -> str:
         if not self.api_key:
-            return "Gemini API key not configured. Please set GEMINI_API_KEY in environment."
+            return ""
+
+        now = time.time()
+        # If credits are depleted, skip outbound requests for 1 hour to prevent log spam and wasted connections
+        if GeminiAIService._last_depleted_warn > 0 and (now - GeminiAIService._last_depleted_warn < 3600):
+            return ""
 
         url = f"{self.BASE_URL}?key={self.api_key}"
         payload = {
@@ -40,7 +48,7 @@ class GeminiAIService:
         }
 
         try:
-            with httpx.Client(timeout=30.0) as client:
+            with httpx.Client(timeout=15.0) as client:
                 resp = client.post(url, json=payload)
                 if resp.status_code == 200:
                     data = resp.json()
@@ -48,10 +56,17 @@ class GeminiAIService:
                     if candidates:
                         parts = candidates[0].get("content", {}).get("parts", [])
                         if parts:
-                            return parts[0].get("text", "No response text generated.")
-                return f"Gemini API returned status {resp.status_code}: {resp.text}"
-        except Exception as e:
-            return f"Gemini API connection error: {str(e)}"
+                            return parts[0].get("text", "")
+                elif resp.status_code == 402:
+                    if GeminiAIService._last_depleted_warn == 0.0 or (now - GeminiAIService._last_depleted_warn > 3600):
+                        logger.warning("Google AI Studio (Gemini) API credits depleted (HTTP 402). Disabling AI score reconciliation fallback.")
+                        GeminiAIService._last_depleted_warn = now
+                    return ""
+                else:
+                    return ""
+        except Exception:
+            return ""
+        return ""
 
     def generate_match_explanation(self, match_data: Dict[str, Any]) -> str:
         """
@@ -116,14 +131,18 @@ Respond ONLY with a valid JSON array — no explanation text, no markdown fences
 ]
 """
         raw = self._call_gemini_api(prompt)
+        if not raw or not raw.strip():
+            return {"status": "PARTIAL", "raw_response": "", "analyses": [], "total": 0}
         # Parse the JSON from Gemini's response
         try:
             # Strip any markdown fences if present
             clean = re.sub(r"```(?:json)?", "", raw).strip().strip("`").strip()
-            parsed = json.loads(clean)
-            return {"status": "SUCCESS", "analyses": parsed, "total": len(parsed)}
+            if clean.startswith("[") or clean.startswith("{"):
+                parsed = json.loads(clean)
+                return {"status": "SUCCESS", "analyses": parsed if isinstance(parsed, list) else [parsed], "total": len(parsed) if isinstance(parsed, list) else 1}
         except Exception:
-            return {"status": "PARTIAL", "raw_response": raw, "analyses": [], "total": 0}
+            pass
+        return {"status": "PARTIAL", "raw_response": raw, "analyses": [], "total": 0}
 
     def generate_ticket_audit_explanation(self, ticket_data: Dict[str, Any]) -> str:
         """
@@ -193,12 +212,20 @@ Respond ONLY with a valid JSON array of objects with no markdown fences, no expl
 ]
 """
         raw = self._call_gemini_api(prompt)
+        if not raw or not raw.strip():
+            return []
+
+        clean = re.sub(r"```(?:json)?", "", raw).strip().strip("`").strip()
+        if not (clean.startswith("[") or clean.startswith("{")):
+            return []
+
         try:
-            clean = re.sub(r"```(?:json)?", "", raw).strip().strip("`").strip()
             parsed = json.loads(clean)
             if isinstance(parsed, list):
                 return parsed
-        except Exception as e:
-            logger.warning(f"Failed to parse Gemini match reconciliation response: {e}")
+            elif isinstance(parsed, dict) and "matches" in parsed:
+                return parsed["matches"]
+        except Exception:
+            return []
         return []
 
