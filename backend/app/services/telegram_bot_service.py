@@ -2672,28 +2672,31 @@ class StatIQTelegramBot:
         """Starts the bot in a background thread with cross-process lock protection."""
         from pathlib import Path
         from dotenv import load_dotenv
-        env_file = Path(__file__).resolve().parent.parent.parent / ".env"
-        if env_file.exists():
-            load_dotenv(env_file)
+
+        root_dir = Path(__file__).resolve().parent.parent.parent.parent
+        backend_dir = Path(__file__).resolve().parent.parent.parent
+        for p in [backend_dir / ".env", root_dir / ".env"]:
+            if p.exists():
+                load_dotenv(p, override=True)
 
         run_bot_env = os.getenv("RUN_TELEGRAM_BOT", "true").strip().lower()
         if run_bot_env in ("false", "0", "no", "disabled"):
-            logger.info("[TelegramBot] RUN_TELEGRAM_BOT is disabled in environment. Polling worker will not start.")
+            print(f"[TelegramBot] RUN_TELEGRAM_BOT is '{run_bot_env}' in environment. Polling worker disabled.")
             return
 
         if self._running:
-            logger.info("[TelegramBot] Bot is already running in this process.")
+            print("[TelegramBot] Bot is already running in this process.")
             return
 
         # Ensure only 1 worker process on the server runs the Telegram bot poller
         if not self._acquire_process_lock():
-            logger.warning("[TelegramBot] Another worker process holds the polling lock. Skipping duplicate poller instance.")
+            print("[TelegramBot] Another worker process holds the polling lock. Skipping duplicate poller instance.")
             return
 
         self._running = True
         self._thread = threading.Thread(target=self.poll_updates, name="StatIQTelegramBotWorker", daemon=True)
         self._thread.start()
-        logger.info("[TelegramBot] Background worker spawned.")
+        print(f"[TelegramBot] Background worker spawned and polling active for @StatIQbot.")
 
     def stop(self):
         """Stops the bot background worker and releases cross-process lock."""
