@@ -1016,6 +1016,60 @@ class StatIQTelegramBot:
             logger.error(f"[TelegramBot] Goal Kicks build error: {e}", exc_info=True)
             self.send_message(chat_id, f"❌ <b>Error:</b> Failed to generate Goal Kicks slip ({_esc(str(e))}).")
 
+    def handle_basketball_command(
+        self,
+        chat_id: int | str,
+        target_odds: float = 2.0,
+        session_slate: str = "ALL"
+    ):
+        """Generates dedicated basketball cushion slips or multi-odds accumulators."""
+        is_large = target_odds > 2.5
+        slate_desc = " (Midnight NBA/USA)" if session_slate == "MIDNIGHT" else (" (Daytime Euro/Asia)" if session_slate == "DAYTIME" else "")
+        self.send_chat_action(chat_id, "typing")
+        if is_large:
+            self.send_message(
+                chat_id,
+                f"🏀 <b>StatIQ Basketball Multiplier Engine:</b>\n"
+                f"Scouting live board for <b>{target_odds:.1f}x Multiplier Accumulator</b>{slate_desc} across diverse varieties (Cushion Overs, Team Totals, 1st Half/Quarter)..."
+            )
+        else:
+            self.send_message(
+                chat_id,
+                f"🏀 <b>StatIQ Basketball Quant Engine:</b>\n"
+                f"Scouting live board for <b>3 Banker Cushion Legs (1.23x – 1.28x)</b> targeting <b>2.00x multiplier</b>{slate_desc}..."
+            )
+
+        try:
+            from app.basketball.basketball_ticket_builder import BasketballTicketBuilder
+            from app.basketball.basketball_telegram_notifier import BasketballTelegramNotifier
+
+            if is_large:
+                slip = BasketballTicketBuilder.build_accumulator_slip(
+                    target_odds=target_odds,
+                    session_slate=session_slate,
+                    min_leg_odds=1.22,
+                    max_leg_odds=1.35
+                )
+            else:
+                slip = BasketballTicketBuilder.build_daily_2x_cushion_slip(
+                    session_slate=session_slate,
+                    min_leg_odds=1.23,
+                    max_leg_odds=1.28,
+                    target_legs=3
+                )
+
+            if slip.get("status") == "SUCCESS":
+                custom_title = f"🏀 <b>StatIQ {slip.get('actual_odds', target_odds):.1f}x Basketball Multiplier</b>" if is_large else "🎯 <b>StatIQ Daily 2.0x Basketball Cushion Slip</b>"
+                BasketballTelegramNotifier.dispatch_daily_2x_slip(slip, custom_title=custom_title)
+            else:
+                self.send_message(
+                    chat_id,
+                    f"⚠️ <b>Basketball Notice:</b> {slip.get('message', 'Unable to build basketball ticket at this moment.')}"
+                )
+        except Exception as e:
+            logger.error(f"[TelegramBot] Error generating basketball slip: {e}")
+            self.send_message(chat_id, f"⚠️ Error generating basketball ticket: {_esc(str(e))}")
+
     def handle_remove_command(
         self,
         chat_id: int | str,
@@ -2358,6 +2412,17 @@ class StatIQTelegramBot:
             self.handle_goalkicks_command(chat_id, target_odds=val, prefer_line=prefer)
             return
 
+        # Dedicated Basketball Multiplier / Cushion Accumulator: /bball, /nba, /basketball
+        # Examples: /bball 10 | /bball 10 midnight | /nba 10 | /nba | /bball 5 | /basketball 2
+        bball_match = re.match(r"^/(?:bball|nba|basketball|hoops)\s*(\d+\.?\d*)?(.*)", text, re.IGNORECASE)
+        if bball_match:
+            val_str = bball_match.group(1)
+            target_odds = float(val_str) if val_str else 2.0
+            rest = (bball_match.group(2) or "").lower()
+            slate = "MIDNIGHT" if ("nba" in text.lower() or any(k in rest for k in ["midnight", "night", "usa"])) else ("DAYTIME" if any(k in rest for k in ["day", "daytime", "euro"]) else "ALL")
+            self.handle_basketball_command(chat_id, target_odds=target_odds, session_slate=slate)
+            return
+
         # 3. /odds <target_odds> [num_tickets] OR multi-odds (e.g. /odds 5 10)
         odds_match = re.match(r"^/(?:odds|build|target)\s*(\d+\.?\d*)(.*)", text, re.IGNORECASE)
         if odds_match:
@@ -2597,6 +2662,8 @@ class StatIQTelegramBot:
         commands = [
             {"command": "start", "description": "Show main menu & quick action buttons"},
             {"command": "duo", "description": "1x 5.0x + 1x 10.0x simultaneous slips (Zero Overlap)"},
+            {"command": "bball", "description": "Basketball cushion slips (/bball 2, /bball 10 midnight)"},
+            {"command": "nba", "description": "Midnight NBA slips (/nba 2, /nba 10)"},
             {"command": "goalkicks", "description": "Dedicated Under Goal Kicks slip (/goalkicks 10, /gk 5)"},
             {"command": "odds", "description": "Target odds (/odds 1.5, /odds 5, /odds 10)"},
             {"command": "portfolio", "description": "Split mega slip into 4 or 2 diversified tickets"},

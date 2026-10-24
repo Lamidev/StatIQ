@@ -172,14 +172,6 @@ class BasketballTicketBuilder:
             max_odds=max_leg_odds
         )
 
-        if len(bankers) < 4:
-            bankers = BasketballQuantEngine.find_all_daily_bankers(
-                session_slate=session_slate,
-                limit_fixtures=60,
-                min_odds=1.18,
-                max_odds=1.45
-            )
-
         selected_picks: List[Dict[str, Any]] = []
         seen_events = set()
         running_odds = 1.0
@@ -205,6 +197,36 @@ class BasketballTicketBuilder:
 
             if running_odds >= target_odds or len(selected_picks) >= max_legs:
                 break
+
+        # Phase 2: If target odds not yet reached (e.g. only 5-6 midnight NBA games available),
+        # pull from next upcoming global basketball fixtures so the user gets their desired odds
+        # without violating the 1-pick-per-match and 1.25x safety floor rules
+        if running_odds < target_odds * 0.85 and session_slate != "ALL":
+            extra_bankers = BasketballQuantEngine.find_all_daily_bankers(
+                session_slate="ALL",
+                limit_fixtures=60,
+                min_odds=min_leg_odds,
+                max_odds=max_leg_odds
+            )
+            for b in extra_bankers:
+                eid = b.get("event_id")
+                if eid in seen_events:
+                    continue
+
+                odd = float(b.get("odds", 1.25))
+                if running_odds * odd > target_odds * 1.35 and len(selected_picks) >= 3:
+                    continue
+
+                seen_events.add(eid)
+                selected_picks.append(b)
+                running_odds *= odd
+                running_prob *= (b.get("confidence_score", 85.0) / 100.0)
+
+                m_type = b.get("market_type", "OTHER")
+                variety_tally[m_type] = variety_tally.get(m_type, 0) + 1
+
+                if running_odds >= target_odds or len(selected_picks) >= max_legs:
+                    break
 
         if not selected_picks:
             return {
