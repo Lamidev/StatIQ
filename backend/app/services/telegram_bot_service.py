@@ -57,11 +57,13 @@ class StatIQTelegramBot:
         """
         Cross-worker file lock: Ensures only 1 process/worker on the server
         runs the Telegram long-polling worker to prevent duplicate deliveries.
+        Includes automatic stale-PID recovery if previous process was killed.
         """
         lock_path = os.path.join(tempfile.gettempdir(), "statiq_telegram_bot.lock")
+        my_pid = os.getpid()
         try:
-            self._lock_file = open(lock_path, "a+")
             if os.name == "nt":
+                self._lock_file = open(lock_path, "a+")
                 import msvcrt
                 try:
                     msvcrt.locking(self._lock_file.fileno(), msvcrt.LK_NBLCK, 1)
@@ -70,10 +72,38 @@ class StatIQTelegramBot:
                     return False
             else:
                 import fcntl
+                self._lock_file = open(lock_path, "a+")
                 try:
                     fcntl.flock(self._lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    self._lock_file.seek(0)
+                    self._lock_file.truncate()
+                    self._lock_file.write(str(my_pid))
+                    self._lock_file.flush()
                     return True
                 except (IOError, OSError):
+                    # Check if the process holding the lock is actually alive
+                    try:
+                        with open(lock_path, "r") as rf:
+                            content = rf.read().strip()
+                        if content and content.isdigit():
+                            holding_pid = int(content)
+                            if holding_pid == my_pid:
+                                return True
+                            # If holding_pid is dead, os.kill(holding_pid, 0) raises OSError
+                            os.kill(holding_pid, 0)
+                            return False
+                    except (OSError, ValueError):
+                        # The holding process is DEAD: break the stale lock
+                        try:
+                            if os.path.exists(lock_path):
+                                os.remove(lock_path)
+                            self._lock_file = open(lock_path, "a+")
+                            fcntl.flock(self._lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                            self._lock_file.write(str(my_pid))
+                            self._lock_file.flush()
+                            return True
+                        except Exception:
+                            pass
                     return False
         except Exception as e:
             logger.warning(f"[TelegramBot] Process lock check note: {e}")

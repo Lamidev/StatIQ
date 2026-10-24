@@ -246,7 +246,7 @@ def get_telegram_bot_status():
     }
 
 @app.post("/api/v1/telegram-bot/restart")
-def restart_telegram_bot(force: bool = False):
+def restart_telegram_bot(force: bool = True):
     from app.services.telegram_bot_service import statiq_telegram_bot
     statiq_telegram_bot.stop()
     statiq_telegram_bot.start(force=force)
