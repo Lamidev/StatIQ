@@ -2668,7 +2668,7 @@ class StatIQTelegramBot:
 
         logger.info("[TelegramBot] Polling loop ended.")
 
-    def start(self):
+    def start(self, force: bool = False):
         """Starts the bot in a background thread with cross-process lock protection."""
         from pathlib import Path
         from dotenv import load_dotenv
@@ -2680,20 +2680,24 @@ class StatIQTelegramBot:
                 load_dotenv(p, override=True)
 
         run_bot_env = os.getenv("RUN_TELEGRAM_BOT", "true").strip().lower()
-        if run_bot_env in ("false", "0", "no", "disabled"):
+        if not force and run_bot_env in ("false", "0", "no", "disabled"):
+            self._status_reason = f"Disabled by RUN_TELEGRAM_BOT={run_bot_env}"
             print(f"[TelegramBot] RUN_TELEGRAM_BOT is '{run_bot_env}' in environment. Polling worker disabled.")
             return
 
         if self._running:
+            self._status_reason = "Already running"
             print("[TelegramBot] Bot is already running in this process.")
             return
 
         # Ensure only 1 worker process on the server runs the Telegram bot poller
-        if not self._acquire_process_lock():
+        if not force and not self._acquire_process_lock():
+            self._status_reason = "Lock held by another process or /tmp/statiq_telegram_bot.lock"
             print("[TelegramBot] Another worker process holds the polling lock. Skipping duplicate poller instance.")
             return
 
         self._running = True
+        self._status_reason = "Polling active"
         self._thread = threading.Thread(target=self.poll_updates, name="StatIQTelegramBotWorker", daemon=True)
         self._thread.start()
         print(f"[TelegramBot] Background worker spawned and polling active for @StatIQbot.")

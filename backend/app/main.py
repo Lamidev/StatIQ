@@ -241,18 +241,20 @@ def get_telegram_bot_status():
         "status": "active" if statiq_telegram_bot._running else "stopped",
         "bot_username": "@StatIQbot",
         "last_update_id": statiq_telegram_bot._last_update_id,
-        "token_configured": bool(statiq_telegram_bot.bot_token)
+        "token_configured": bool(statiq_telegram_bot.bot_token),
+        "reason": getattr(statiq_telegram_bot, "_status_reason", "Initialized")
     }
 
 @app.post("/api/v1/telegram-bot/restart")
-def restart_telegram_bot():
+def restart_telegram_bot(force: bool = False):
     from app.services.telegram_bot_service import statiq_telegram_bot
     statiq_telegram_bot.stop()
-    statiq_telegram_bot.start()
+    statiq_telegram_bot.start(force=force)
     return {
         "status": "active" if statiq_telegram_bot._running else "stopped",
         "bot_username": "@StatIQbot",
-        "token_configured": bool(statiq_telegram_bot.bot_token)
+        "token_configured": bool(statiq_telegram_bot.bot_token),
+        "reason": getattr(statiq_telegram_bot, "_status_reason", "Initialized")
     }
 
 @app.on_event("shutdown")
