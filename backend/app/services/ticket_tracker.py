@@ -1423,74 +1423,10 @@ def _heal_falsely_lost_tickets(tickets: list, now_ms: int) -> bool:
 
 def _dispatch_telegram_settlement_notification(t: Dict[str, Any]):
     """
-    Disabled per user directive: Historical and delayed settlement alerts (especially LOST alerts)
-    flood the Telegram feed. Ticket settlements remain tracked cleanly inside the StatIQ dashboard.
+    Permanently disabled per user directive: Settlement alerts have been completely removed
+    from Telegram. Ticket settlements remain tracked cleanly inside the StatIQ dashboard.
     """
     return
-
-    try:
-        from app.services.rollover_telegram_notifier import RolloverTelegramNotifier
-
-        code = t.get("code") or "N/A"
-        tot_odds = float(t.get("total_odds") or 0.0)
-        mode = t.get("mode") or "ACCUMULATOR"
-        selections = t.get("selections") or []
-
-        status_emoji = "🏆 WON" if status == "WON" else "❌ LOST"
-        flex_text = t.get("flex_status_text") or ""
-
-        lines = [
-            f"<b>📊 StatIQ Ticket Settlement Alert</b>",
-            f"🎟️ <b>SportyBet Code:</b> <code>{code}</code> | <b>Outcome:</b> <b>{status_emoji}</b>",
-            f"⚡ <b>Total Odds:</b> <b>{tot_odds:.2f}x</b> | <b>Mode:</b> {mode}",
-        ]
-        if flex_text:
-            lines.append(f"🛡️ <i>{flex_text}</i>")
-        lines.append("")
-        lines.append("<b>Leg Breakdown & Final Scores:</b>")
-
-        won_count = 0
-        lost_count = 0
-        for i, sel in enumerate(selections, 1):
-            h_team = sel.get("home_team") or "Home"
-            a_team = sel.get("away_team") or "Away"
-            sel_name = sel.get("selection_name") or sel.get("selection_desc") or "Pick"
-            mkt_name = sel.get("market_name") or sel.get("market_desc") or ""
-            odd = float(sel.get("odds") or 0.0)
-            l_status = (sel.get("leg_status") or "PENDING").upper()
-
-            score_str = sel.get("score") or ""
-            if not score_str and (sel.get("home_score") is not None and sel.get("away_score") is not None):
-                score_str = f"{sel.get('home_score')} - {sel.get('away_score')}"
-
-            if l_status == "WON":
-                st_icon = "✅ WON"
-                won_count += 1
-            elif l_status == "LOST":
-                st_icon = "❌ LOST"
-                lost_count += 1
-            elif l_status == "VOID":
-                st_icon = "⚪ VOID"
-            else:
-                st_icon = "⏳ PENDING"
-
-            score_display = f" (FT: {score_str})" if score_str else ""
-            mkt_display = f" [{mkt_name}]" if mkt_name else ""
-            lines.append(f"<b>{i}. {h_team} vs {a_team}</b>{score_display}")
-            lines.append(f"   ➔ {sel_name}{mkt_display} @ {odd:.2f} — <b>{st_icon}</b>")
-
-        lines.append("")
-        if status == "WON":
-            lines.append(f"🎉 <b>Ticket Fully Cleared!</b> ({won_count} of {len(selections)} legs won)")
-        else:
-            lines.append(f"💔 <b>Ticket Settled:</b> {won_count} Won, {lost_count} Lost")
-
-        text = "\n".join(lines)
-        dispatched = RolloverTelegramNotifier.send_message(text)
-        if dispatched:
-            t["telegram_settlement_dispatched"] = True
-    except Exception as e:
-        logger.warning(f"[TicketTracker] Could not dispatch telegram settlement alert for ticket {t.get('id')}: {e}")
 
 
 def evaluate_tracked_tickets(db: Optional[Session] = None) -> List[Dict[str, Any]]:
@@ -1683,7 +1619,7 @@ def evaluate_tracked_tickets(db: Optional[Session] = None) -> List[Dict[str, Any
             updated = True
 
             if prev_status == "RUNNING":
-                _dispatch_telegram_settlement_notification(t)
+                pass
 
         elif all_concluded and loss_count <= allowed_losses:
             # All matches concluded AND losses within flex cut -> Ticket WON!
@@ -1696,7 +1632,6 @@ def evaluate_tracked_tickets(db: Optional[Session] = None) -> List[Dict[str, Any
             updated = True
 
             if prev_status != "WON":
-                _dispatch_telegram_settlement_notification(t)
                 try:
                     from app.api.endpoints.notifications import push_win_notification
                     push_win_notification(t)

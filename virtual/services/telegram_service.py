@@ -1,7 +1,7 @@
 """
 VirtualTelegramService - Real-time Telegram alerts for vFootball automated front-testing.
 Dispatches pre-match tickets with SportyBet auto-load booking links, kickoff alerts,
-post-round win/loss settlement audits, and 12:00 AM daily summary reports.
+and 12:00 AM daily summary reports.
 """
 import os
 import logging
@@ -161,61 +161,10 @@ class VirtualTelegramService:
     @classmethod
     def send_settlement_alert(cls, slip: Dict[str, Any], is_won: bool, stats: Dict[str, Any]) -> bool:
         """
-        Dispatches a post-round settlement alert with match scores, leg results,
-        and cumulative front-testing performance stats. Strictly deduplicated.
+        Settlement alerts have been permanently disabled per user directive.
+        Post-round settlement cards are no longer dispatched to Telegram.
         """
-        code = slip.get("booking_code", "N/A")
-        alert_key = f"settle:{code}"
-        if code and code != "N/A" and alert_key in cls._dispatched_alert_keys:
-            return True
-
-        league = slip.get("league_name", "vFootball")
-
-        code = slip.get("booking_code", "N/A")
-        total_odds = slip.get("actual_odds", 2.0)
-        status_emoji = "✅ <b>[WON]</b>" if is_won else "❌ <b>[LOST]</b>"
-        pnl = f"+{round(total_odds - 1.0, 2)}u" if is_won else "-1.00u"
-
-        total_slips = stats.get("total_slips", 0)
-        won_count = stats.get("won_slips", 0)
-        lost_count = stats.get("lost_slips", 0)
-        win_rate = stats.get("win_rate_pct", 0.0)
-        net_profit = stats.get("net_profit_units", 0.0)
-        selections = slip.get("selections", [])
-
-        lines = [
-            f"{status_emoji} <b>vFootball Round Settled ({league})</b>",
-            f"🎫 <b>Ticket Code:</b> <code>{code}</code> | <b>Return:</b> <code>{pnl}</code>",
-            "",
-            "📋 <b>Match Results & Scores:</b>"
-        ]
-
-        for idx, s in enumerate(selections, 1):
-            match = s.get("match", "Match")
-            pick = s.get("pick", "Pick")
-            odds = s.get("odds", "1.00")
-            score = s.get("final_score")
-            score_str = f" [<b>{score}</b>]" if score else ""
-            leg_won = s.get("leg_won")
-            icon = "✅" if leg_won is True else ("❌" if leg_won is False else "•")
-            lines.append(f"  {idx}. <b>{match}</b>{score_str} → <i>{pick}</i> (@ {odds}x) {icon}")
-
-        lines.extend([
-            "",
-            "📈 <b>Live Front-Test Tracker:</b>",
-            f"• Total Dispatches: <b>{total_slips}</b>",
-            f"• Record: <b>{won_count}W - {lost_count}L</b>",
-            f"• Win Rate: <b>{win_rate}%</b>",
-            f"• Net Yield: <b>{net_profit:+.2f} Units</b>",
-            "",
-            "<i>StatIQ Autonomous Front-Testing Engine</i>"
-        ])
-
-        msg = "\n".join(lines)
-        sent = cls.send_message(msg)
-        if sent and code and code != "N/A":
-            cls._dispatched_alert_keys.add(alert_key)
-        return sent
+        return False
 
 
 

@@ -632,15 +632,8 @@ class VirtualFrontTestWorker:
                 slip.settled_at = now
                 db.commit()
 
-                # Get cumulative stats and send settlement alert
-                status_data = cls.get_status(db)
-                slip_payload = {
-                    "league_name": slip.league_name,
-                    "booking_code": slip.booking_code,
-                    "actual_odds": slip.actual_odds,
-                    "selections": selections
-                }
-                VirtualTelegramService.send_settlement_alert(slip_payload, all_won, status_data)
+                # Settle slip in database (settlement alerts to Telegram are completely disabled)
+                pass
 
 
     @classmethod

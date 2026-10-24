@@ -1,0 +1,22 @@
+{
+  "is_enabled": true,
+  "active_days": [
+    "MON",
+    "TUE",
+    "WED",
+    "THU",
+    "FRI",
+    "SAT",
+    "SUN"
+  ],
+  "dispatch_time": "09:00",
+  "target_odds": 2.0,
+  "min_leg_odds": 1.23,
+  "max_leg_odds": 1.28,
+  "leg_count": 3,
+  "preferred_market": "FULL_TIME_OVERS",
+  "send_telegram": true,
+  "last_run_date": null,
+  "last_ticket": null,
+  "run_history": []
+}

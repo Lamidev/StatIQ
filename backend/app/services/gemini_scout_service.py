@@ -209,6 +209,19 @@ class GeminiScoutService:
         elif "ucl" in t_lower or "champions league" in t_lower or "midweek" in t_lower:
             time_horizon = "MIDWEEK_UCL"
 
+        # Check Basketball
+        is_basketball = any(k in t_lower for k in ["basketball", "nba", "hoops", "euroleague", "bball", "cushion over", "cushion overs", "basket ball", "ncaa basketball"])
+        if is_basketball:
+            session_slate = "MIDNIGHT" if any(k in t_lower for k in ["nba", "ncaa", "midnight", "night"]) else ("DAYTIME" if any(k in t_lower for k in ["daytime", "day", "euro", "euroleague"]) else "ALL")
+            return {
+                "intent": "BUILD_BASKETBALL",
+                "booking_code": None,
+                "target_odds": target_odds or 2.0,
+                "ticket_count": ticket_count,
+                "session_slate": session_slate,
+                "confidence": 0.95
+            }
+
         # Check Goal Kicks
         is_goalkicks = any(k in t_lower for k in ["goal kick", "goalkick", "goal kicks", "goalkicks", "gk "]) or ("kick" in t_lower and any(k in t_lower for k in ["8.5", "15.5", "7.5", "first half", "1st half"]))
         if is_goalkicks:
@@ -450,6 +463,56 @@ class GeminiScoutService:
                 f"Scouting today's live SportyBet board for <b>{line_desc}</b> targeting <b>{target_odds:.1f}x multiplier</b>..."
             )
             bot_service.handle_goalkicks_command(chat_id, target_odds=target_odds, prefer_line=prefer_line)
+            return True
+
+        # 3c. DEDICATED BASKETBALL SLIP (2.0x CUSHION OR CUSTOM MULTIPLIER ACCUMULATOR)
+        if intent == "BUILD_BASKETBALL":
+            session_slate = parsed.get("session_slate", "ALL")
+            is_large_acca = target_odds and target_odds > 2.5
+            slate_desc = " (Daytime Euro/Asia)" if session_slate == "DAYTIME" else (" (Midnight USA NBA/NCAA)" if session_slate == "MIDNIGHT" else "")
+
+            if is_large_acca:
+                bot_service.send_message(
+                    chat_id,
+                    f"🏀 <b>StatIQ Basketball Multiplier Engine:</b>\n"
+                    f"Scouting live board for <b>{target_odds:.1f}x Multiplier Accumulator</b>{slate_desc} across diverse varieties (Cushion Overs, Team Totals, 1st Half/Quarter)..."
+                )
+            else:
+                bot_service.send_message(
+                    chat_id,
+                    f"🏀 <b>StatIQ Basketball Quant Engine:</b>\n"
+                    f"Scouting live board for <b>3 Banker Cushion Legs (1.23x – 1.28x)</b> targeting <b>2.00x multiplier</b>{slate_desc}..."
+                )
+
+            try:
+                from app.basketball.basketball_ticket_builder import BasketballTicketBuilder
+                from app.basketball.basketball_telegram_notifier import BasketballTelegramNotifier
+
+                if is_large_acca:
+                    slip = BasketballTicketBuilder.build_accumulator_slip(
+                        target_odds=target_odds,
+                        session_slate=session_slate,
+                        min_leg_odds=1.22,
+                        max_leg_odds=1.35
+                    )
+                else:
+                    slip = BasketballTicketBuilder.build_daily_2x_cushion_slip(
+                        session_slate=session_slate,
+                        min_leg_odds=1.23,
+                        max_leg_odds=1.28,
+                        target_legs=3
+                    )
+
+                if slip.get("status") == "SUCCESS":
+                    BasketballTelegramNotifier.dispatch_daily_2x_slip(slip)
+                else:
+                    bot_service.send_message(
+                        chat_id,
+                        f"⚠️ <b>Basketball Notice:</b> {slip.get('message', 'Unable to build basketball ticket at this moment.')}"
+                    )
+            except Exception as e:
+                logger.error(f"[GeminiScout] Error generating basketball slip: {e}")
+                bot_service.send_message(chat_id, f"⚠️ Error generating basketball ticket: {e}")
             return True
 
         # 4. DISPATCH DAILY AUTOMATION

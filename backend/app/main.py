@@ -63,6 +63,9 @@ app.include_router(sportybet_router, prefix="/api/v1/sportybet", tags=["SportyBe
 from app.api.endpoints.rollover_cron import router as rollover_cron_router
 from app.services.rollover_cron_scheduler import rollover_scheduler
 app.include_router(rollover_cron_router, prefix="/api/v1", tags=["StatIQ Automated Rollover Cron"])
+from app.api.endpoints.basketball_routes import router as basketball_router
+from app.basketball.basketball_cron_scheduler import basketball_scheduler
+app.include_router(basketball_router, prefix="/api/v1/basketball", tags=["StatIQ Basketball & 09:00 AM Automation"])
 
 # Mount Virtual Trader & 24/7 Front-Testing Engine
 try:
@@ -101,6 +104,9 @@ def start_background_ticket_sync_worker():
 
     # Start StatIQ 10:00 AM WAT Automated Rollover Cron Daemon
     rollover_scheduler.start()
+
+    # Start StatIQ 09:00 AM WAT Basketball 2.0x Automation Cron Daemon
+    basketball_scheduler.start()
 
     # Start StatIQ Autonomous Telegram Bot Remote Controller
     try:
