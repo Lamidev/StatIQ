@@ -81,8 +81,18 @@ class StatIQTelegramBot:
 
     @property
     def bot_token(self) -> str:
-        return (os.getenv("TELEGRAM_BOT_TOKEN", "").replace('"', '').strip()
-                or "8979207719:AAHmjFvyDDijF4xli6On0QyuGkX6IcCcuKI")
+        token = (os.getenv("TELEGRAM_BOT_TOKEN", "").replace('"', '').strip())
+        if not token:
+            try:
+                from pathlib import Path
+                from dotenv import load_dotenv
+                env_file = Path(__file__).resolve().parent.parent.parent / ".env"
+                if env_file.exists():
+                    load_dotenv(env_file)
+                token = os.getenv("TELEGRAM_BOT_TOKEN", "").replace('"', '').strip()
+            except Exception:
+                pass
+        return token
 
     @property
     def base_url(self) -> str:

@@ -26,7 +26,7 @@ class VirtualTelegramService:
         except Exception:
             pass
 
-        token = os.getenv("TELEGRAM_BOT_TOKEN", "").replace('"', '').strip() or "8979207719:AAHmjFvyDDijF4xli6On0QyuGkX6IcCcuKI"
+        token = os.getenv("TELEGRAM_BOT_TOKEN", "").replace('"', '').strip()
         chat_id = os.getenv("TELEGRAM_CHAT_ID", "").replace('"', '').strip() or "1034502587"
         return {"bot_token": token, "chat_id": chat_id}
 

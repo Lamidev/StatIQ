@@ -16,7 +16,17 @@ class BasketballTelegramNotifier:
 
     @classmethod
     def get_credentials(cls) -> Dict[str, str]:
-        token = os.getenv("TELEGRAM_BOT_TOKEN", "").replace('"', '').strip() or "8979207719:AAHmjFvyDDijF4xli6On0QyuGkX6IcCcuKI"
+        token = os.getenv("TELEGRAM_BOT_TOKEN", "").replace('"', '').strip()
+        if not token:
+            try:
+                from pathlib import Path
+                from dotenv import load_dotenv
+                env_file = Path(__file__).resolve().parent.parent.parent / ".env"
+                if env_file.exists():
+                    load_dotenv(env_file)
+                token = os.getenv("TELEGRAM_BOT_TOKEN", "").replace('"', '').strip()
+            except Exception:
+                pass
         chat_id = os.getenv("TELEGRAM_CHAT_ID", "").replace('"', '').strip() or "1034502587"
         return {"bot_token": token, "chat_id": chat_id}
 
