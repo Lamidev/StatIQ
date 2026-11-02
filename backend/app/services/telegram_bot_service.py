@@ -26,6 +26,8 @@ from typing import Dict, Any, List, Optional, Tuple
 
 import httpx
 
+from app.services.time_horizon_service import TimeHorizonService
+
 logger = logging.getLogger("statiq.telegram_bot")
 
 
@@ -222,6 +224,33 @@ class StatIQTelegramBot:
         except Exception:
             pass
 
+    def edit_message_text(
+        self,
+        chat_id: int | str,
+        message_id: int,
+        text: str,
+        reply_markup: Optional[Dict[str, Any]] = None,
+        parse_mode: str = "HTML"
+    ) -> Optional[Dict[str, Any]]:
+        """Edits an existing message text and inline keyboard in-place, falling back to send_message if needed."""
+        url = f"{self.base_url}/editMessageText"
+        payload = {
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "text": text,
+            "parse_mode": parse_mode
+        }
+        if reply_markup:
+            payload["reply_markup"] = reply_markup
+        try:
+            with httpx.Client(timeout=10.0) as client:
+                r = client.post(url, json=payload)
+                if r.status_code == 200:
+                    return r.json().get("result")
+        except Exception as e:
+            logger.debug(f"[TelegramBot] editMessageText fallback to send_message: {e}")
+        return self.send_message(chat_id, text, reply_markup=reply_markup, parse_mode=parse_mode)
+
     # ─────────────────────────────────────────────────────────────────────────
     # Command & Message Handlers
     # ─────────────────────────────────────────────────────────────────────────
@@ -294,6 +323,281 @@ class StatIQTelegramBot:
                 ]
             ]
         }
+        return self.send_message(chat_id, msg, reply_markup=keyboard)
+
+    def handle_wizard_menu(self, chat_id: int | str, message_id: Optional[int] = None):
+        """Step 1 of Tap-to-Build Wizard: Select Market Strategy."""
+        msg = (
+            "🎯 <b>StatIQ Interactive Ticket Wizard (Step 1/3)</b>\n\n"
+            "Select your market strategy below:\n\n"
+            "• <b>⚡ Hybrid Props:</b> Goal Kick Cushions + Over 1.5 Offsides (Smallest leg count)\n"
+            "• <b>🎯 Mono-Option:</b> 100% Single Market (0.5 1H, Over 1.5, BTTS, Clean Sheets, etc.)\n"
+            "• <b>🥅 Goal Kicks Only:</b> 1H Under 8.5/7.5 Cushions (High Odds: 1.40x–1.75x)\n"
+            "• <b>🚩 Offsides Only:</b> Over 1.5 Bankers (96% leg strike rate)\n"
+            "• <b>🎯 Pure Quant Odds:</b> Senior Top-Flight AI Accumulator\n"
+            "• <b>⚽ By Match Count:</b> Top 10 or 15 Games (Single or 2-Slip Zero Overlap)\n"
+            "• <b>🚀 1.50x VIP Rollover:</b> Daily Titanium Banker"
+        )
+        keyboard = {
+            "inline_keyboard": [
+                [
+                    {"text": "⚡ 1. Hybrid Props (Recommended)", "callback_data": "wiz:m:hybrid"}
+                ],
+                [
+                    {"text": "🎯 2. Mono-Option (Single Market)", "callback_data": "wiz:mono:pick"}
+                ],
+                [
+                    {"text": "🥅 3. Goal Kicks Only", "callback_data": "wiz:m:gk"},
+                    {"text": "🚩 4. Offsides Only", "callback_data": "wiz:m:offs"}
+                ],
+                [
+                    {"text": "🎯 5. Target Odds Acca", "callback_data": "wiz:m:odds"},
+                    {"text": "⚽ 6. By Match Count", "callback_data": "wiz:m:games"}
+                ],
+                [
+                    {"text": "🚀 7. 1.50x Daily Rollover", "callback_data": "gen:odds:1.5:1"},
+                    {"text": "« Back to Main Menu", "callback_data": "menu:main"}
+                ]
+            ]
+        }
+        if message_id:
+            return self.edit_message_text(chat_id, message_id, msg, reply_markup=keyboard)
+        return self.send_message(chat_id, msg, reply_markup=keyboard)
+
+    def handle_wizard_mono_picker(self, chat_id: int | str, message_id: Optional[int] = None):
+        """Interactive Picker for Mono-Option (Single Market) Strategy."""
+        msg = (
+            "🎯 <b>StatIQ Mono-Option Picker (Single Market Mode)</b>\n\n"
+            "Select an option below to build a dedicated slip with <b>100% matching market selections</b>:\n\n"
+            "• <b>⚽ 0.5 1st Half:</b> Quick early goals in high-tempo games\n"
+            "• <b>🎯 Over 1.5 Goals:</b> Highly consistent full-time goal lines\n"
+            "• <b>🥅 BTTS (GG):</b> Both teams to score in high-xG encounters\n"
+            "• <b>⚡ Under 3.5 Goals:</b> Defensive cushion / low scoring lines\n"
+            "• <b>🚩 Offsides Over 1.5:</b> Tactical offside line bankers\n"
+            "• <b>🧤 1H Goal Kicks:</b> Under 8.5/7.5 first half cushions\n"
+            "• <b>🏆 Double Chance:</b> High-floor 1X / X2 stability\n\n"
+            "<i>💡 You can also type any custom option directly in chat, e.g.:\n"
+            "<code>/mono 3 goals in a row 10 odds</code> or <code>/mono clean sheet 5 odds</code></i>"
+        )
+        keyboard = {
+            "inline_keyboard": [
+                [
+                    {"text": "⚽ 1. 0.5 1st Half Goals", "callback_data": "wiz:m:mono_0.5_1h"},
+                    {"text": "🎯 2. Over 1.5 Goals FT", "callback_data": "wiz:m:mono_over_1.5"}
+                ],
+                [
+                    {"text": "🥅 3. BTTS (Both Score)", "callback_data": "wiz:m:mono_btts_yes"},
+                    {"text": "⚡ 4. Under 3.5 Goals", "callback_data": "wiz:m:mono_under_3.5"}
+                ],
+                [
+                    {"text": "🚩 5. Offsides Over 1.5", "callback_data": "wiz:m:mono_offsides_1.5"},
+                    {"text": "🧤 6. 1H Goal Kicks Under", "callback_data": "wiz:m:mono_goalkicks_1h"}
+                ],
+                [
+                    {"text": "🏆 7. Double Chance (1X/X2)", "callback_data": "wiz:m:mono_double_chance"},
+                    {"text": "« Back to Strategy Menu", "callback_data": "wiz:menu"}
+                ]
+            ]
+        }
+        if message_id:
+            return self.edit_message_text(chat_id, message_id, msg, reply_markup=keyboard)
+        return self.send_message(chat_id, msg, reply_markup=keyboard)
+
+    def handle_wizard_step2(self, chat_id: int | str, market: str, message_id: Optional[int] = None):
+        """Step 2 of Tap-to-Build Wizard: Select Target Multiplier or Game Count."""
+        names = {
+            "hybrid": "⚡ Hybrid Props (Goal Kicks + Offsides)",
+            "gk": "🥅 Goal Kicks (Under Cushions)",
+            "offs": "🚩 Offsides (Over 1.5 Bankers)",
+            "odds": "🎯 Quant Odds Accumulator",
+            "games": "⚽ Match Count Accumulator"
+        }
+        if market.startswith("mono_"):
+            slug = market.replace("mono_", "")
+            from app.services.dynamic_market_engine import PRESET_MARKET_PROFILES, DynamicMarketEngine
+            profile = PRESET_MARKET_PROFILES.get(slug) or DynamicMarketEngine.resolve_market_intent(slug)
+            market_label = f"🎯 {profile.get('label', slug)}"
+        else:
+            market_label = names.get(market, "Selected Market")
+
+        if market == "games":
+            msg = (
+                f"⚽ <b>StatIQ Ticket Wizard (Step 2/3)</b>\n\n"
+                f"Market: <b>{market_label}</b>\n\n"
+                f"Select your match count and variant configuration:"
+            )
+            keyboard = {
+                "inline_keyboard": [
+                    [
+                        {"text": "⚽ 10 Games (1 Slip)", "callback_data": "wiz:run:games:10:1:TODAY"},
+                        {"text": "⚽ 10 Games (2 Slips · 0-Overlap)", "callback_data": "wiz:run:games:10:2:TODAY"}
+                    ],
+                    [
+                        {"text": "⚽ 12 Games (2 Slips · 0-Overlap)", "callback_data": "wiz:run:games:12:2:TODAY"},
+                        {"text": "⚽ 15 Games (1 Slip)", "callback_data": "wiz:run:games:15:1:TODAY"}
+                    ],
+                    [
+                        {"text": "« Back to Markets", "callback_data": "wiz:menu"}
+                    ]
+                ]
+            }
+        else:
+            msg = (
+                f"🎯 <b>StatIQ Ticket Wizard (Step 2/3)</b>\n\n"
+                f"Market: <b>{market_label}</b>\n\n"
+                f"Select your target multiplier below:"
+            )
+            keyboard = {
+                "inline_keyboard": [
+                    [
+                        {"text": "🔥 3.0x Multiplier", "callback_data": f"wiz:t:{market}:3.0"},
+                        {"text": "🔥 5.0x Multiplier", "callback_data": f"wiz:t:{market}:5.0"}
+                    ],
+                    [
+                        {"text": "🚀 8.0x Multiplier", "callback_data": f"wiz:t:{market}:8.0"},
+                        {"text": "🚀 10.0x Multiplier", "callback_data": f"wiz:t:{market}:10.0"}
+                    ],
+                    [
+                        {"text": "💎 15.0x Multiplier", "callback_data": f"wiz:t:{market}:15.0"},
+                        {"text": "💣 25.0x Mega Slip", "callback_data": f"wiz:t:{market}:25.0"}
+                    ],
+                    [
+                        {"text": "« Back to Markets", "callback_data": "wiz:menu"}
+                    ]
+                ]
+            }
+        if message_id:
+            return self.edit_message_text(chat_id, message_id, msg, reply_markup=keyboard)
+        return self.send_message(chat_id, msg, reply_markup=keyboard)
+
+    def handle_wizard_step3(self, chat_id: int | str, market: str, odds: str, message_id: Optional[int] = None):
+        """Step 3 of Tap-to-Build Wizard: Select Fixture Time Horizon."""
+        names = {
+            "hybrid": "⚡ Hybrid Props",
+            "gk": "🥅 Goal Kicks",
+            "offs": "🚩 Offsides",
+            "odds": "🎯 Quant Odds"
+        }
+        if market.startswith("mono_"):
+            slug = market.replace("mono_", "")
+            from app.services.dynamic_market_engine import PRESET_MARKET_PROFILES, DynamicMarketEngine
+            profile = PRESET_MARKET_PROFILES.get(slug) or DynamicMarketEngine.resolve_market_intent(slug)
+            market_label = f"🎯 {profile.get('label', slug)}"
+        else:
+            market_label = names.get(market, "Props")
+        msg = (
+            f"📅 <b>StatIQ Ticket Wizard (Step 3/3)</b>\n\n"
+            f"Market: <b>{market_label}</b> | Target: <b>{odds}x</b>\n\n"
+            f"Select your fixture schedule horizon:\n"
+            f"<i>(Multi-day slates let the bot cherry-pick the highest-tier fixtures)</i>"
+        )
+        keyboard = {
+            "inline_keyboard": [
+                [
+                    {"text": "📅 1. Today Only", "callback_data": f"wiz:run:{market}:{odds}:TODAY"},
+                    {"text": "⚡ 2. Today & Tomorrow (2-Day)", "callback_data": f"wiz:run:{market}:{odds}:TODAY_AND_TOMORROW"}
+                ],
+                [
+                    {"text": "🔮 3. Tomorrow Only", "callback_data": f"wiz:run:{market}:{odds}:TOMORROW"},
+                    {"text": "🔮 4. Tomorrow + Next Day", "callback_data": f"wiz:run:{market}:{odds}:TOMORROW_AND_NEXT"}
+                ],
+                [
+                    {"text": "🌍 5. Weekend Block (Fri–Sun)", "callback_data": f"wiz:run:{market}:{odds}:WEEKEND"},
+                    {"text": "🏆 6. Midweek UCL / European", "callback_data": f"wiz:run:{market}:{odds}:MIDWEEK_UCL"}
+                ],
+                [
+                    {"text": f"« Back to Multiplier", "callback_data": f"wiz:m:{market}"}
+                ]
+            ]
+        }
+        if message_id:
+            return self.edit_message_text(chat_id, message_id, msg, reply_markup=keyboard)
+        return self.send_message(chat_id, msg, reply_markup=keyboard)
+
+    def render_under_capacity_decision_card(
+        self,
+        chat_id: int | str,
+        data: Dict[str, Any],
+        message_id: Optional[int] = None
+    ):
+        """
+        Universal Interactive Decision Gate:
+        When available matches cannot reach the requested target odds or match count,
+        reverts back to the user to choose:
+        1. ✅ Book what's available for that day
+        2. ⚡ Add tomorrow (expand horizon to reach full target)
+        3. ❌ Cancel / Discard
+        """
+        market = data.get("market_type", "odds")
+        target_odds = float(data.get("target_odds") or 10.0)
+        avail_odds = float(data.get("available_odds") or 1.0)
+        avail_count = int(data.get("available_count") or 0)
+        horizon = data.get("time_horizon", "TODAY")
+        prefer = data.get("prefer_line", "AUTO")
+        target_games = data.get("target_games")
+
+        market_names = {
+            "gk": "🥅 Goal Kicks (Under Cushions)",
+            "offs": "🚩 Offsides (Over 1.5 Bankers)",
+            "hybrid": "⚡ Hybrid Props (Goal Kicks + Offsides)",
+            "odds": "🎯 Quant Target Odds",
+            "games": "⚽ Match Count Accumulator",
+            "mono": f"🎯 {data.get('market_label', 'Single Market (Mono-Option)')}"
+        }
+        market_label = market_names.get(market, "Ticket Multiplier")
+        _, _, _, horizon_desc = TimeHorizonService.get_horizon_bounds(horizon)
+
+        if market == "games" and target_games:
+            shortfall_text = (
+                f"• <b>Requested Target:</b> {target_games} matches\n"
+                f"• <b>Matches Available Today:</b> {avail_count} fixtures\n"
+                f"• <b>Combined Odds:</b> {avail_odds:.2f}x\n\n"
+                f"The board for <b>{horizon_desc}</b> only has <b>{avail_count}</b> matches meeting strict safety criteria, falling short of your <b>{target_games}</b> matches request."
+            )
+            book_btn_text = f"✅ Book What's Available ({avail_count} Games · {avail_odds:.2f}x)"
+            expand_btn_text = f"⚡ Add Tomorrow (Expand to Reach {target_games} Games)"
+        else:
+            shortfall_text = (
+                f"• <b>Requested Target:</b> {target_odds:.2f}x\n"
+                f"• <b>Matches Available Today:</b> {avail_count} fixtures\n"
+                f"• <b>Max Combined Multiplier:</b> {avail_odds:.2f}x\n\n"
+                f"The board for <b>{horizon_desc}</b> only has <b>{avail_count}</b> matches meeting statistical cushions, giving <b>{avail_odds:.2f}x</b> (short of your <b>{target_odds:.2f}x</b> target)."
+            )
+            book_btn_text = f"✅ Book What's Available ({avail_odds:.2f}x)"
+            expand_btn_text = f"⚡ Add Tomorrow (Expand to Reach {target_odds:.1f}x)"
+
+        msg = (
+            f"⚠️ <b>Board Capacity Shortfall</b>\n"
+            f"Strategy: <b>{market_label}</b>\n\n"
+            f"{shortfall_text}\n\n"
+            f"👉 <b>How would you like to proceed?</b>"
+        )
+
+        keyboard = {
+            "inline_keyboard": [
+                [
+                    {
+                        "text": book_btn_text,
+                        "callback_data": f"dec:book:{market}:{target_odds}:{avail_odds}:{horizon}:{prefer}"
+                    }
+                ],
+                [
+                    {
+                        "text": expand_btn_text,
+                        "callback_data": f"dec:expand:{market}:{target_odds}:{horizon}:{prefer}"
+                    }
+                ],
+                [
+                    {
+                        "text": "❌ Cancel / Discard",
+                        "callback_data": "dec:cancel"
+                    }
+                ]
+            ]
+        }
+
+        if message_id:
+            return self.edit_message_text(chat_id, message_id, msg, reply_markup=keyboard)
         return self.send_message(chat_id, msg, reply_markup=keyboard)
 
     def handle_auto_command(self, chat_id: int | str, text: str = ""):
@@ -665,7 +969,8 @@ class StatIQTelegramBot:
         target_odds: float,
         num_tickets: int = 1,
         time_horizon: str = "TODAY",
-        allow_lower_leagues: bool = False
+        allow_lower_leagues: bool = False,
+        allow_partial: bool = False
     ):
         """Generates an AI accumulator targeting a specific odds multiplier (1 or more slips)."""
         num_tickets = max(1, min(4, int(num_tickets or 1)))
@@ -713,6 +1018,21 @@ class StatIQTelegramBot:
                     portfolio = res.get("portfolio_tickets") or ([res.get("ticket")] if res.get("ticket") else [])
                 finally:
                     loop.close()
+
+            # Decision Gate: If available senior top-flight matches fall short of target and allow_partial is False
+            if not allow_partial and portfolio and not allow_lower_leagues:
+                first_slip = portfolio[0]
+                acc_odds = float(first_slip.get("accumulated_odds") or 1.0)
+                approved_legs = first_slip.get("approved_legs") or []
+                if acc_odds < (target_odds * 0.85):
+                    self.render_under_capacity_decision_card(chat_id, {
+                        "market_type": "odds",
+                        "target_odds": target_odds,
+                        "available_odds": acc_odds,
+                        "available_count": len(approved_legs),
+                        "time_horizon": time_horizon
+                    })
+                    return
 
             dispatched = 0
             best_odds = 0.0
@@ -870,7 +1190,14 @@ class StatIQTelegramBot:
             logger.error(f"[TelegramBot] Dual odds build error: {e}", exc_info=True)
             self.send_message(chat_id, f"❌ <b>Error:</b> Failed to generate dual tickets ({_esc(str(e))}).")
 
-    def handle_games_command(self, chat_id: int | str, target_games: int, num_tickets: int = 1):
+    def handle_games_command(
+        self,
+        chat_id: int | str,
+        target_games: int,
+        num_tickets: int = 1,
+        time_horizon: str = "TODAY",
+        allow_partial: bool = False
+    ):
         """Generates an AI accumulator with an exact game count (1 or more slips)."""
         target_games = max(3, min(35, target_games))
         num_tickets = max(1, min(4, int(num_tickets or 1)))
@@ -915,6 +1242,21 @@ class StatIQTelegramBot:
                     portfolio = res.get("portfolio_tickets") or ([res.get("ticket")] if res.get("ticket") else [])
                 finally:
                     loop.close()
+
+            # Decision Gate: If available matches fall short of target count and allow_partial is False
+            if not allow_partial and portfolio:
+                first_slip = portfolio[0]
+                approved_legs = first_slip.get("approved_legs") or []
+                acc_odds = float(first_slip.get("accumulated_odds") or 1.0)
+                if len(approved_legs) < (target_games * 0.85):
+                    self.render_under_capacity_decision_card(chat_id, {
+                        "market_type": "games",
+                        "target_games": target_games,
+                        "available_count": len(approved_legs),
+                        "available_odds": acc_odds,
+                        "time_horizon": time_horizon
+                    })
+                    return
 
             dispatched = 0
             for slip in portfolio:
@@ -961,15 +1303,18 @@ class StatIQTelegramBot:
         self,
         chat_id: int | str,
         target_odds: float = 10.0,
-        prefer_line: str = "1H"
+        prefer_line: str = "1H",
+        time_horizon: str = "TODAY",
+        allow_partial: bool = False
     ):
-        """Generates a dedicated Goal Kicks ticket targeting specified odds."""
+        """Generates a dedicated Goal Kicks ticket targeting specified odds and directed time horizon."""
         target_odds = max(2.0, min(100.0, float(target_odds or 10.0)))
+        _, _, _, horizon_desc = TimeHorizonService.get_horizon_bounds(time_horizon)
         line_desc = "1st Half Under 8.5/7.5 Goal Kicks" if prefer_line == "1H" else ("Full Time Under Goal Kicks" if prefer_line == "FT" else "Goal Kicks Unders")
         self.send_chat_action(chat_id, "typing")
         self.send_message(
             chat_id,
-            f"⚡ <b>StatIQ Goal Kicks Engine:</b> Scouting today's live SportyBet board for <b>{line_desc}</b> targeting <b>{target_odds:.2f}x</b> multiplier..."
+            f"⚡ <b>StatIQ Goal Kicks Engine:</b> Scouting SportyBet board for <b>{line_desc}</b> targeting <b>{target_odds:.2f}x</b> multiplier ({horizon_desc})..."
         )
 
         try:
@@ -981,15 +1326,36 @@ class StatIQTelegramBot:
                 ticket_res = loop.run_until_complete(
                     goal_kicks_service.build_goal_kicks_ticket(
                         target_odds=target_odds,
-                        prefer_line=prefer_line
+                        prefer_line=prefer_line,
+                        time_horizon=time_horizon,
+                        allow_partial=allow_partial
                     )
                 )
             finally:
                 loop.close()
 
-            if not ticket_res or ticket_res.get("status") != "SUCCESS":
-                msg = ticket_res.get("message") if ticket_res else "No active matches offering Goal Kick markets."
-                self.send_message(chat_id, f"⚠️ <b>Notice:</b> {msg}")
+            if not ticket_res:
+                self.send_message(chat_id, "⚠️ <b>Notice:</b> No active matches offering Goal Kick markets.")
+                return
+
+            # User Decision Gate: Under-Capacity Confirmation Card
+            if ticket_res.get("status") == "INSUFFICIENT_MULTIPLIER":
+                self.render_under_capacity_decision_card(chat_id, ticket_res)
+                return
+
+            if ticket_res.get("status") != "SUCCESS":
+                msg = ticket_res.get("message") or "No active matches offering Goal Kick markets."
+                kb = None
+                if time_horizon == "TODAY":
+                    kb = {
+                        "inline_keyboard": [
+                            [
+                                {"text": "⚡ Check Today + Tomorrow", "callback_data": f"wiz:run:gk:{target_odds}:TODAY_AND_TOMORROW"},
+                                {"text": "🔮 Check Tomorrow Only", "callback_data": f"wiz:run:gk:{target_odds}:TOMORROW"}
+                            ]
+                        ]
+                    }
+                self.send_message(chat_id, f"⚠️ <b>Notice:</b> {msg}", reply_markup=kb)
                 return
 
             picks = ticket_res.get("picks", [])
@@ -1001,7 +1367,7 @@ class StatIQTelegramBot:
 
             self._dispatch_ticket_message(
                 chat_id=chat_id,
-                title=f"🎯 StatIQ {actual_odds:.2f}x Goal Kicks Cushion Slip",
+                title=f"🎯 StatIQ {actual_odds:.2f}x Goal Kicks Slip ({horizon_desc})",
                 booking_code=code,
                 share_url=share_url,
                 total_odds=actual_odds,
@@ -1015,6 +1381,256 @@ class StatIQTelegramBot:
         except Exception as e:
             logger.error(f"[TelegramBot] Goal Kicks build error: {e}", exc_info=True)
             self.send_message(chat_id, f"❌ <b>Error:</b> Failed to generate Goal Kicks slip ({_esc(str(e))}).")
+
+    def handle_offsides_command(
+        self,
+        chat_id: int | str,
+        target_odds: float = 8.0,
+        prefer_line: str = "AUTO",
+        time_horizon: str = "TODAY",
+        allow_partial: bool = False
+    ):
+        """Generates a dedicated Offsides ticket targeting specified odds and directed time horizon."""
+        target_odds = max(2.0, min(100.0, float(target_odds or 8.0)))
+        _, _, _, horizon_desc = TimeHorizonService.get_horizon_bounds(time_horizon)
+        line_desc = "Over 1.5 Offsides" if prefer_line == "OVER_1_5" else ("Over 2.5 Offsides" if prefer_line == "OVER_2_5" else "Offsides Over/Under")
+        self.send_chat_action(chat_id, "typing")
+        self.send_message(
+            chat_id,
+            f"🚩 <b>StatIQ Offsides Engine:</b> Scouting SportyBet board for <b>{line_desc}</b> targeting <b>{target_odds:.2f}x</b> multiplier ({horizon_desc})..."
+        )
+
+        try:
+            from app.services.offsides_service import offsides_service
+
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                ticket_res = loop.run_until_complete(
+                    offsides_service.build_offsides_ticket(
+                        target_odds=target_odds,
+                        prefer_line=prefer_line,
+                        time_horizon=time_horizon,
+                        allow_partial=allow_partial
+                    )
+                )
+            finally:
+                loop.close()
+
+            if not ticket_res:
+                self.send_message(chat_id, "⚠️ <b>Notice:</b> No active matches offering Offsides markets.")
+                return
+
+            # User Decision Gate: Under-Capacity Confirmation Card
+            if ticket_res.get("status") == "INSUFFICIENT_MULTIPLIER":
+                self.render_under_capacity_decision_card(chat_id, ticket_res)
+                return
+
+            if ticket_res.get("status") != "SUCCESS":
+                msg = ticket_res.get("message") or "No active matches offering Offsides markets."
+                kb = None
+                if time_horizon == "TODAY":
+                    kb = {
+                        "inline_keyboard": [
+                            [
+                                {"text": "⚡ Check Today + Tomorrow", "callback_data": f"wiz:run:offs:{target_odds}:TODAY_AND_TOMORROW"},
+                                {"text": "🔮 Check Tomorrow Only", "callback_data": f"wiz:run:offs:{target_odds}:TOMORROW"}
+                            ]
+                        ]
+                    }
+                self.send_message(chat_id, f"⚠️ <b>Notice:</b> {msg}", reply_markup=kb)
+                return
+
+            picks = ticket_res.get("picks", [])
+            code = ticket_res.get("booking_code")
+            share_url = ticket_res.get("share_url")
+            actual_odds = ticket_res.get("actual_odds", target_odds)
+            conf = ticket_res.get("confidence_score", 85.0)
+            scout_analysis = ticket_res.get("scout_analysis")
+
+            self._dispatch_ticket_message(
+                chat_id=chat_id,
+                title=f"🚩 StatIQ {actual_odds:.2f}x Offsides Slip ({horizon_desc})",
+                booking_code=code,
+                share_url=share_url,
+                total_odds=actual_odds,
+                confidence=conf,
+                picks=picks,
+                extra_note="Mono-Market Discipline: 100% Offsides Over/Under (Odds: 1.12–1.35)"
+            )
+
+            if scout_analysis:
+                self.send_message(chat_id, scout_analysis)
+        except Exception as e:
+            logger.error(f"[TelegramBot] Offsides build error: {e}", exc_info=True)
+            self.send_message(chat_id, f"❌ <b>Error:</b> Failed to generate Offsides slip ({_esc(str(e))}).")
+
+    def handle_hybrid_command(
+        self,
+        chat_id: int | str,
+        target_odds: float = 10.0,
+        time_horizon: str = "TODAY",
+        allow_partial: bool = False
+    ):
+        """Generates a synergy Hybrid Props slip combining Goal Kicks Unders and Offsides Over 1.5."""
+        target_odds = max(2.0, min(100.0, float(target_odds or 10.0)))
+        _, _, _, horizon_desc = TimeHorizonService.get_horizon_bounds(time_horizon)
+        self.send_chat_action(chat_id, "typing")
+        self.send_message(
+            chat_id,
+            f"⚡ <b>StatIQ Hybrid Props Engine:</b> Scouting SportyBet board for <b>Goal Kicks + Offsides Synergy</b> targeting <b>{target_odds:.2f}x</b> multiplier ({horizon_desc})..."
+        )
+
+        try:
+            from app.services.hybrid_props_service import hybrid_props_service
+
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                ticket_res = loop.run_until_complete(
+                    hybrid_props_service.build_hybrid_ticket(
+                        target_odds=target_odds,
+                        time_horizon=time_horizon,
+                        allow_partial=allow_partial
+                    )
+                )
+            finally:
+                loop.close()
+
+            if not ticket_res:
+                self.send_message(chat_id, "⚠️ <b>Notice:</b> No active matches offering Prop markets.")
+                return
+
+            # User Decision Gate: Under-Capacity Confirmation Card
+            if ticket_res.get("status") == "INSUFFICIENT_MULTIPLIER":
+                self.render_under_capacity_decision_card(chat_id, ticket_res)
+                return
+
+            if ticket_res.get("status") != "SUCCESS":
+                msg = ticket_res.get("message") or "No active matches offering Prop markets."
+                kb = None
+                if time_horizon == "TODAY":
+                    kb = {
+                        "inline_keyboard": [
+                            [
+                                {"text": "⚡ Check Today + Tomorrow", "callback_data": f"wiz:run:hybrid:{target_odds}:TODAY_AND_TOMORROW"},
+                                {"text": "🔮 Check Tomorrow Only", "callback_data": f"wiz:run:hybrid:{target_odds}:TOMORROW"}
+                            ]
+                        ]
+                    }
+                self.send_message(chat_id, f"⚠️ <b>Notice:</b> {msg}", reply_markup=kb)
+                return
+
+            picks = ticket_res.get("picks", [])
+            code = ticket_res.get("booking_code")
+            share_url = ticket_res.get("share_url")
+            actual_odds = ticket_res.get("actual_odds", target_odds)
+            conf = ticket_res.get("confidence_score", 80.0)
+            scout_analysis = ticket_res.get("scout_analysis")
+            gk_cnt = ticket_res.get("gk_count", 0)
+            offs_cnt = ticket_res.get("offs_count", 0)
+
+            self._dispatch_ticket_message(
+                chat_id=chat_id,
+                title=f"⚡ StatIQ {actual_odds:.2f}x Hybrid Props Slip ({horizon_desc})",
+                booking_code=code,
+                share_url=share_url,
+                total_odds=actual_odds,
+                confidence=conf,
+                picks=picks,
+                extra_note=f"Tactical Synergy: {gk_cnt} Goal Kick Cushions + {offs_cnt} Offside Bankers ({len(picks)} Legs)"
+            )
+
+            if scout_analysis:
+                self.send_message(chat_id, scout_analysis)
+        except Exception as e:
+            logger.error(f"[TelegramBot] Hybrid build error: {e}", exc_info=True)
+            self.send_message(chat_id, f"❌ <b>Error:</b> Failed to generate Hybrid Props slip ({_esc(str(e))}).")
+
+    def handle_mono_command(
+        self,
+        chat_id: int | str,
+        market_query: str = "0.5_1h",
+        target_odds: float = 10.0,
+        time_horizon: str = "TODAY",
+        allow_partial: bool = False
+    ):
+        """Generates a dedicated single-market (mono) ticket targeting specified odds and directed time horizon."""
+        target_odds = max(2.0, min(100.0, float(target_odds or 10.0)))
+        _, _, _, horizon_desc = TimeHorizonService.get_horizon_bounds(time_horizon)
+
+        from app.services.dynamic_market_engine import DynamicMarketEngine, PRESET_MARKET_PROFILES
+        profile = PRESET_MARKET_PROFILES.get(market_query) or DynamicMarketEngine.resolve_market_intent(market_query)
+        label = profile.get("label", market_query)
+
+        self.send_chat_action(chat_id, "typing")
+        self.send_message(
+            chat_id,
+            f"🎯 <b>StatIQ Dynamic Market Engine:</b> Scouting SportyBet board for <b>{label}</b> targeting <b>{target_odds:.2f}x</b> multiplier ({horizon_desc})..."
+        )
+
+        try:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                ticket_res = loop.run_until_complete(
+                    DynamicMarketEngine.build_mono_market_ticket(
+                        market_query=market_query,
+                        target_odds=target_odds,
+                        time_horizon=time_horizon,
+                        allow_partial=allow_partial
+                    )
+                )
+            finally:
+                loop.close()
+
+            if not ticket_res:
+                self.send_message(chat_id, f"⚠️ <b>Notice:</b> No active matches offering '{label}'.")
+                return
+
+            # User Decision Gate: Under-Capacity Confirmation Card
+            if ticket_res.get("status") == "INSUFFICIENT_MULTIPLIER":
+                self.render_under_capacity_decision_card(chat_id, ticket_res)
+                return
+
+            if ticket_res.get("status") != "SUCCESS":
+                msg = ticket_res.get("message") or f"No active matches offering '{label}' right now."
+                kb = None
+                if time_horizon == "TODAY":
+                    kb = {
+                        "inline_keyboard": [
+                            [
+                                {"text": "⚡ Check Today + Tomorrow", "callback_data": f"wiz:run:mono_{profile.get('slug', market_query)}:{target_odds}:TODAY_AND_TOMORROW"},
+                                {"text": "🔮 Check Tomorrow Only", "callback_data": f"wiz:run:mono_{profile.get('slug', market_query)}:{target_odds}:TOMORROW"}
+                            ]
+                        ]
+                    }
+                self.send_message(chat_id, f"⚠️ <b>Notice:</b> {msg}", reply_markup=kb)
+                return
+
+            picks = ticket_res.get("picks", [])
+            code = ticket_res.get("booking_code")
+            share_url = ticket_res.get("share_url")
+            actual_odds = ticket_res.get("actual_odds", target_odds)
+            conf = ticket_res.get("confidence_score", 75.0)
+            scout_analysis = ticket_res.get("scout_analysis")
+
+            self._dispatch_ticket_message(
+                chat_id=chat_id,
+                title=f"🎯 StatIQ {actual_odds:.2f}x {label} Slip ({horizon_desc})",
+                booking_code=code,
+                share_url=share_url,
+                total_odds=actual_odds,
+                confidence=conf,
+                picks=picks,
+                extra_note=f"Mono-Market Discipline: 100% {label} (Target: {target_odds:.1f}x)"
+            )
+
+            if scout_analysis:
+                self.send_message(chat_id, scout_analysis)
+        except Exception as e:
+            logger.error(f"[TelegramBot] Mono build error: {e}", exc_info=True)
+            self.send_message(chat_id, f"❌ <b>Error:</b> Failed to generate {label} slip ({_esc(str(e))}).")
 
     def handle_basketball_command(
         self,
@@ -1912,19 +2528,23 @@ class StatIQTelegramBot:
                 ],
                 [
                     {"text": "🎯 Duo (1x 5.0x + 1x 10.0x · Safe 🛡️)", "callback_data": f"port:{code}:2:filtered"},
-                    {"text": "🎯 Trio (2x 5x + 1x 10x)", "callback_data": f"port:{code}:trio:filtered"}
-                ],
-                [
-                    {"text": "🎲 Trio (Smart Blended Risk)", "callback_data": f"port:{code}:trio:blended"},
                     {"text": "🛡️ Single Core (1x 5.0x)", "callback_data": f"port:{code}:single5:filtered"}
                 ],
                 [
-                    {"text": "🚀 4 Slips (Safe Only)", "callback_data": f"port:{code}:4:filtered"},
-                    {"text": "⚡ 4 Slips (Raw All)", "callback_data": f"port:{code}:4:unfiltered"}
+                    {"text": "✂️ /remove 10 Odds", "callback_data": f"rem:{code}:10:ODDS:1"},
+                    {"text": "⚡ /edit 10 Odds (Upgraded)", "callback_data": f"edt:{code}:10:ODDS:1"}
                 ],
                 [
-                    {"text": "✂️ /remove Safe Core", "callback_data": f"rem:{code}:15:games:1"},
-                    {"text": "⚡ /edit Upgraded", "callback_data": f"edt:{code}:15:games:1"}
+                    {"text": "✂️ /remove 10 Games (1 Slip)", "callback_data": f"rem:{code}:10:GAMES:1"},
+                    {"text": "✂️ /remove 2x 10 Games (0-Overlap)", "callback_data": f"rem:{code}:10:GAMES:2"}
+                ],
+                [
+                    {"text": "⚡ /edit 10 Games (Upgraded)", "callback_data": f"edt:{code}:10:GAMES:1"},
+                    {"text": "⚡ /edit 2x 10 Games (0-Overlap)", "callback_data": f"edt:{code}:10:GAMES:2"}
+                ],
+                [
+                    {"text": "🎲 Smart Blended Trio", "callback_data": f"port:{code}:trio:blended"},
+                    {"text": "🚀 4 Slips (Safe Only)", "callback_data": f"port:{code}:4:filtered"}
                 ]
             ]
             keyboard = {"inline_keyboard": keyboard_rows}
@@ -2040,6 +2660,7 @@ class StatIQTelegramBot:
         data = query.get("data", "")
         message = query.get("message", {})
         chat_id = message.get("chat", {}).get("id") or query.get("from", {}).get("id")
+        msg_id = message.get("message_id")
 
         if not chat_id:
             return
@@ -2055,6 +2676,115 @@ class StatIQTelegramBot:
                 self._processed_cq_ids_set = set(self._processed_cq_ids)
 
         self.answer_callback_query(cq_id, "Processing your request...")
+
+        # Case Wizard: Interactive Tap-to-Build Ticket Wizard
+        if data == "wiz:menu":
+            self.handle_wizard_menu(chat_id, message_id=msg_id)
+            return
+
+        if data == "wiz:mono:pick":
+            self.handle_wizard_mono_picker(chat_id, message_id=msg_id)
+            return
+
+        if data == "menu:main":
+            self.handle_wizard_menu(chat_id, message_id=msg_id)
+            return
+
+        if data.startswith("wiz:m:"):
+            parts = data.split(":")
+            market = parts[2]
+            self.handle_wizard_step2(chat_id, market=market, message_id=msg_id)
+            return
+
+        if data.startswith("wiz:t:"):
+            parts = data.split(":")
+            market = parts[2]
+            odds = parts[3]
+            self.handle_wizard_step3(chat_id, market=market, odds=odds, message_id=msg_id)
+            return
+
+        if data.startswith("wiz:run:"):
+            parts = data.split(":")
+            market = parts[2]
+            if market == "games":
+                cnt = int(parts[3])
+                num_t = int(parts[4]) if len(parts) > 4 else 1
+                self.handle_games_command(chat_id, count=cnt, num_tickets=num_t)
+            elif market == "hybrid":
+                t_odds = float(parts[3])
+                t_horiz = parts[4] if len(parts) > 4 else "TODAY"
+                self.handle_hybrid_command(chat_id, target_odds=t_odds, time_horizon=t_horiz)
+            elif market == "gk":
+                t_odds = float(parts[3])
+                t_horiz = parts[4] if len(parts) > 4 else "TODAY"
+                self.handle_goalkicks_command(chat_id, target_odds=t_odds, prefer_line="1H", time_horizon=t_horiz)
+            elif market == "offs":
+                t_odds = float(parts[3])
+                t_horiz = parts[4] if len(parts) > 4 else "TODAY"
+                self.handle_offsides_command(chat_id, target_odds=t_odds, prefer_line="AUTO", time_horizon=t_horiz)
+            elif market == "odds":
+                t_odds = float(parts[3])
+                t_horiz = parts[4] if len(parts) > 4 else "TODAY"
+                self.handle_odds_command(chat_id, target_odds=t_odds, num_tickets=1, time_horizon=t_horiz)
+            elif market.startswith("mono_"):
+                slug = market.replace("mono_", "")
+                t_odds = float(parts[3])
+                t_horiz = parts[4] if len(parts) > 4 else "TODAY"
+                self.handle_mono_command(chat_id, market_query=slug, target_odds=t_odds, time_horizon=t_horiz)
+            return
+
+        # Case Decision Gate: Under-Capacity Confirmation Gate
+        if data.startswith("dec:"):
+            parts = data.split(":")
+            subaction = parts[1]
+
+            if subaction == "cancel":
+                if msg_id:
+                    self.edit_message_text(chat_id, msg_id, "🗑️ <b>Request Cancelled.</b> No ticket was booked.")
+                else:
+                    self.send_message(chat_id, "🗑️ <b>Request Cancelled.</b> No ticket was booked.")
+                return
+
+            market = parts[2]
+            target_val = float(parts[3])
+
+            if subaction == "book":
+                # dec:book:<market>:<target_val>:<avail_odds>:<horizon>:<prefer>
+                horizon = parts[5] if len(parts) > 5 else "TODAY"
+                prefer = parts[6] if len(parts) > 6 else "AUTO"
+                if market == "gk":
+                    self.handle_goalkicks_command(chat_id, target_odds=target_val, prefer_line=prefer, time_horizon=horizon, allow_partial=True)
+                elif market == "offs":
+                    self.handle_offsides_command(chat_id, target_odds=target_val, prefer_line=prefer, time_horizon=horizon, allow_partial=True)
+                elif market == "hybrid":
+                    self.handle_hybrid_command(chat_id, target_odds=target_val, time_horizon=horizon, allow_partial=True)
+                elif market == "odds":
+                    self.handle_odds_command(chat_id, target_odds=target_val, num_tickets=1, time_horizon=horizon, allow_partial=True)
+                elif market == "games":
+                    self.handle_games_command(chat_id, target_games=int(target_val), num_tickets=1, allow_partial=True)
+                elif market == "mono":
+                    self.handle_mono_command(chat_id, market_query=prefer, target_odds=target_val, time_horizon=horizon, allow_partial=True)
+                return
+
+            elif subaction == "expand":
+                # dec:expand:<market>:<target_val>:<horizon>:<prefer>
+                horizon = parts[4] if len(parts) > 4 else "TODAY"
+                prefer = parts[5] if len(parts) > 5 else "AUTO"
+                next_horizon = "TODAY_AND_TOMORROW" if horizon == "TODAY" else ("WEEKEND" if horizon == "TOMORROW" else "WEEKEND")
+                if market == "gk":
+                    self.handle_goalkicks_command(chat_id, target_odds=target_val, prefer_line=prefer, time_horizon=next_horizon, allow_partial=False)
+                elif market == "offs":
+                    self.handle_offsides_command(chat_id, target_odds=target_val, prefer_line=prefer, time_horizon=next_horizon, allow_partial=False)
+                elif market == "hybrid":
+                    self.handle_hybrid_command(chat_id, target_odds=target_val, time_horizon=next_horizon, allow_partial=False)
+                elif market == "odds":
+                    self.handle_odds_command(chat_id, target_odds=target_val, num_tickets=1, time_horizon=next_horizon, allow_partial=False)
+                elif market == "games":
+                    self.handle_games_command(chat_id, target_games=int(target_val), num_tickets=1, allow_partial=False)
+                elif market == "mono":
+                    self.handle_mono_command(chat_id, market_query=prefer, target_odds=target_val, time_horizon=next_horizon, allow_partial=False)
+                return
+
 
         # Case 0: Automation button (auto:menu, auto:toggle:ro, auto:toggle:5x, auto:toggle:10x, auto:toggle:master, auto:dispatch)
         if data.startswith("auto:"):
@@ -2150,7 +2880,13 @@ class StatIQTelegramBot:
                 self.handle_duo_command(chat_id, targets=[5.0, 10.0])
             elif action == "goalkicks":
                 val = float(parts[2]) if len(parts) > 2 else 10.0
-                self.handle_goalkicks_command(chat_id, target_odds=val, prefer_line="1H")
+                self.handle_goalkicks_command(chat_id, target_odds=val, prefer_line="1H", time_horizon="TODAY")
+            elif action == "offsides":
+                val = float(parts[2]) if len(parts) > 2 else 8.0
+                self.handle_offsides_command(chat_id, target_odds=val, prefer_line="AUTO", time_horizon="TODAY")
+            elif action == "hybrid":
+                val = float(parts[2]) if len(parts) > 2 else 10.0
+                self.handle_hybrid_command(chat_id, target_odds=val, time_horizon="TODAY")
             elif action == "odds":
                 val = float(parts[2]) if len(parts) > 2 else 1.5
                 num_t = int(parts[3]) if len(parts) > 3 else 1
@@ -2332,6 +3068,56 @@ class StatIQTelegramBot:
             self.handle_start_or_help(chat_id)
             return
 
+        # 1a. Tap-to-Build Wizard: /build, /wizard, /tap, /builder
+        low_text = text.lower().strip()
+        if low_text in ["/build", "/wizard", "/tap", "/builder", "build", "wizard", "tap to build", "builder"]:
+            self.handle_wizard_menu(chat_id)
+            return
+
+        # 1b. Lazy Shorthand Shortcuts: h10, gk10, off8, o10, g10 (with optional timeframe: gk10, gk 10 today, off8 that day)
+        m_h = re.match(r"^(?:/)?(?:h|hybrid|props)\s*(\d+(?:\.\d+)?)(.*)$", low_text)
+        if m_h:
+            val = float(m_h.group(1))
+            rest = m_h.group(2).strip()
+            horizon = TimeHorizonService.normalize_horizon(rest)
+            self.handle_hybrid_command(chat_id, target_odds=val, time_horizon=horizon)
+            return
+
+        m_gk = re.match(r"^(?:/)?(?:gk|goalkick|goalkicks)\s*(\d+(?:\.\d+)?)(.*)$", low_text)
+        if m_gk:
+            val = float(m_gk.group(1))
+            rest = m_gk.group(2).strip()
+            prefer = "FT" if ("ft" in rest or "full" in rest) else ("MIXED" if "mixed" in rest else "1H")
+            horizon = TimeHorizonService.normalize_horizon(rest)
+            self.handle_goalkicks_command(chat_id, target_odds=val, prefer_line=prefer, time_horizon=horizon)
+            return
+
+        m_off = re.match(r"^(?:/)?(?:off|offs|offside|offsides)\s*(\d+(?:\.\d+)?)(.*)$", low_text)
+        if m_off:
+            val = float(m_off.group(1))
+            rest = m_off.group(2).strip()
+            prefer = "OVER_1_5" if ("1.5" in rest or "over 1.5" in rest) else ("OVER_2_5" if ("2.5" in rest or "over 2.5" in rest) else ("UNDER_5_5" if ("5.5" in rest or "under 5.5" in rest) else "AUTO"))
+            horizon = TimeHorizonService.normalize_horizon(rest)
+            self.handle_offsides_command(chat_id, target_odds=val, prefer_line=prefer, time_horizon=horizon)
+            return
+
+        m_o = re.match(r"^(?:/)?o\s*(\d+(?:\.\d+)?)(.*)$", low_text)
+        if m_o:
+            val = float(m_o.group(1))
+            rest = m_o.group(2).strip()
+            horizon = TimeHorizonService.normalize_horizon(rest)
+            self.handle_odds_command(chat_id, target_odds=val, num_tickets=1, time_horizon=horizon)
+            return
+
+        m_g = re.match(r"^(?:/)?g\s*(\d+)(.*)$", low_text)
+        if m_g:
+            cnt = int(m_g.group(1))
+            rest = m_g.group(2).strip()
+            is_two = any(k in rest for k in ["2 ticket", "2 variant", "2 slip", "two ticket", "two variant", "two slip", " 2 "]) or rest.startswith("2")
+            num_tickets = 2 if is_two else 1
+            self.handle_games_command(chat_id, count=cnt, num_tickets=num_tickets)
+            return
+
         # 2. Compounding Challenge: /challenge, /ladder, /campaign
         if any(text.startswith(cmd) for cmd in ["/challenge", "/ladder", "/campaign"]):
             self.handle_challenge_command(chat_id)
@@ -2402,14 +3188,67 @@ class StatIQTelegramBot:
             self.handle_odds_command(chat_id, target_odds=val, num_tickets=1, time_horizon="MIDWEEK_UCL")
             return
 
-        # Dedicated Goal Kicks Accumulator: /goalkicks [odds], /gk [odds], /goalkick [odds]
+        # Dedicated Goal Kicks Accumulator: /goalkicks [odds] [horizon], /gk [odds] [horizon]
         gk_match = re.match(r"^/(?:goalkicks|goalkick|gk|kicks)\s*(\d+\.?\d*)?(.*)", text, re.IGNORECASE)
         if gk_match:
             val_str = gk_match.group(1)
             val = float(val_str) if val_str else 10.0
             rest = (gk_match.group(2) or "").lower()
             prefer = "FT" if ("ft" in rest or "full" in rest) else ("MIXED" if "mixed" in rest else "1H")
-            self.handle_goalkicks_command(chat_id, target_odds=val, prefer_line=prefer)
+            horizon = TimeHorizonService.normalize_horizon(rest)
+            self.handle_goalkicks_command(chat_id, target_odds=val, prefer_line=prefer, time_horizon=horizon)
+            return
+
+        # Dedicated Offsides Accumulator: /offsides [odds] [horizon], /offside [odds] [horizon], /offs [odds] [horizon]
+        offs_match = re.match(r"^/(?:offsides|offside|offs)\s*(\d+\.?\d*)?(.*)", text, re.IGNORECASE)
+        if offs_match:
+            val_str = offs_match.group(1)
+            val = float(val_str) if val_str else 8.0
+            rest = (offs_match.group(2) or "").lower()
+            prefer = "OVER_1_5" if ("1.5" in rest or "over 1.5" in rest) else ("OVER_2_5" if ("2.5" in rest or "over 2.5" in rest) else ("UNDER_5_5" if ("5.5" in rest or "under 5.5" in rest) else "AUTO"))
+            horizon = TimeHorizonService.normalize_horizon(rest)
+            self.handle_offsides_command(chat_id, target_odds=val, prefer_line=prefer, time_horizon=horizon)
+            return
+
+        # Dedicated Hybrid Props Accumulator: /hybrid [odds] [horizon], /props [odds] [horizon], /propmix [odds] [horizon]
+        hybrid_match = re.match(r"^/(?:hybrid|props|propmix|synergy)\s*(\d+\.?\d*)?(.*)", text, re.IGNORECASE)
+        if hybrid_match:
+            val_str = hybrid_match.group(1)
+            val = float(val_str) if val_str else 10.0
+            rest = (hybrid_match.group(2) or "").lower()
+            horizon = TimeHorizonService.normalize_horizon(rest)
+            self.handle_hybrid_command(chat_id, target_odds=val, time_horizon=horizon)
+            return
+
+        # Dedicated Mono-Market Dynamic Accumulator: /mono [query] [odds] [horizon], /singlemarket, /only
+        # Examples: /mono 0.5 1h 10 | /mono over 1.5 10 today | /mono btts 5 | /mono (opens picker)
+        mono_match = re.match(r"^/(?:mono|singlemarket|only|market)\b(.*)", text, re.IGNORECASE)
+        if mono_match:
+            rest = (mono_match.group(1) or "").strip()
+            if not rest:
+                self.handle_wizard_mono_picker(chat_id)
+                return
+
+            horizon = TimeHorizonService.normalize_horizon(rest)
+            odds_m = re.search(r"(\d+(?:\.\d+)?)\s*(?:odd|odds|x)\b", rest, re.IGNORECASE)
+            clean_q = rest
+            if odds_m:
+                val = float(odds_m.group(1))
+                clean_q = clean_q[:odds_m.start()] + " " + clean_q[odds_m.end():]
+            else:
+                num_m = list(re.finditer(r"\b(\d+(?:\.\d+)?)\b", rest))
+                if num_m:
+                    last_num = num_m[-1]
+                    val = float(last_num.group(1))
+                    clean_q = clean_q[:last_num.start()] + " " + clean_q[last_num.end():]
+                else:
+                    val = 10.0
+
+            clean_q = re.sub(r"\b(?:today|tomorrow|weekend|ucl|midweek|for\s*that\s*day|just\s*for\s*today)\b", "", clean_q, flags=re.IGNORECASE).strip()
+            if not clean_q:
+                clean_q = "0.5_1h"
+
+            self.handle_mono_command(chat_id, market_query=clean_q, target_odds=val, time_horizon=horizon)
             return
 
         # Dedicated Basketball Multiplier / Cushion Accumulator: /bball, /nba, /basketball
@@ -2661,10 +3500,14 @@ class StatIQTelegramBot:
         """
         commands = [
             {"command": "start", "description": "Show main menu & quick action buttons"},
+            {"command": "build", "description": "Interactive 3-Step Tap-to-Build Wizard"},
             {"command": "duo", "description": "1x 5.0x + 1x 10.0x simultaneous slips (Zero Overlap)"},
+            {"command": "hybrid", "description": "Goal Kicks + Offsides synergy slip (/hybrid 10, /props 10)"},
+            {"command": "goalkicks", "description": "Dedicated Under Goal Kicks slip (/goalkicks 10, /gk 5)"},
+            {"command": "offsides", "description": "Dedicated Over/Under Offsides slip (/offsides 8, /offs 10)"},
+            {"command": "mono", "description": "Single-market dynamic slips (/mono 0.5 1h 10, /mono btts 5)"},
             {"command": "bball", "description": "Basketball cushion slips (/bball 2, /bball 10 midnight)"},
             {"command": "nba", "description": "Midnight NBA slips (/nba 2, /nba 10)"},
-            {"command": "goalkicks", "description": "Dedicated Under Goal Kicks slip (/goalkicks 10, /gk 5)"},
             {"command": "odds", "description": "Target odds (/odds 1.5, /odds 5, /odds 10)"},
             {"command": "portfolio", "description": "Split mega slip into 4 or 2 diversified tickets"},
             {"command": "rollover", "description": "Generate today's 1.50x Banker Rollover slip (2–3 legs)"},
@@ -2829,3 +3672,4 @@ class StatIQTelegramBot:
 
 # Global Singleton Instance
 statiq_telegram_bot = StatIQTelegramBot()
+telegram_bot = statiq_telegram_bot

@@ -7,6 +7,8 @@ import asyncio
 from typing import Dict, Any, List, Optional
 import httpx
 
+from app.services.time_horizon_service import TimeHorizonService
+
 logger = logging.getLogger("statiq.gemini.scout")
 
 class GeminiScoutService:
@@ -91,22 +93,27 @@ class GeminiScoutService:
             f"Analyze this sports betting user message: '{clean_text}'\n\n"
             "Output a JSON object ONLY with the following schema:\n"
             "{\n"
-            "  \"intent\": \"REMOVE_AND_SPLIT\" | \"EDIT_UPGRADE\" | \"BUILD_ODDS\" | \"BUILD_GOAL_KICKS\" | \"BUILD_GAMES\" | \"DISPATCH\" | \"EXPLAIN\" | \"UNKNOWN\",\n"
+            "  \"intent\": \"REMOVE_AND_SPLIT\" | \"EDIT_UPGRADE\" | \"BUILD_ODDS\" | \"BUILD_GOAL_KICKS\" | \"BUILD_OFFSIDES\" | \"BUILD_GAMES\" | \"DISPATCH\" | \"EXPLAIN\" | \"UNKNOWN\",\n"
             "  \"booking_code\": string or null (e.g. 'uy65ty'),\n"
             "  \"target_odds\": number or null (e.g. 10.0, 50.0),\n"
             "  \"target_games\": integer or null (e.g. 10, 12),\n"
             "  \"ticket_count\": integer (default 1),\n"
             "  \"mode\": \"REMOVE\" or \"EDIT\",\n"
             "  \"risk_style\": \"SURE\" or \"LONGSHOT\",\n"
-            "  \"time_horizon\": \"TODAY\" or \"WEEKEND\" or \"MIDWEEK_UCL\"\n"
+            "  \"prefer_line\": \"1H\" | \"FT\" | \"MIXED\" | \"OVER_1_5\" | \"OVER_2_5\" | \"UNDER_5_5\" | \"AUTO\",\n"
+            "  \"time_horizon\": \"TODAY\" | \"TOMORROW\" | \"TODAY_AND_TOMORROW\" | \"TOMORROW_AND_NEXT\" | \"WEEKEND\" | \"MIDWEEK_UCL\"\n"
             "}\n"
             "RULES:\n"
             "- 'longshot', 'bomb', 'fun slip', 'mega odds' -> intent='BUILD_ODDS', risk_style='LONGSHOT', target_odds=50.0 (or user-specified)\n"
             "- 'random accumulator', 'acca', 'build ticket' -> intent='BUILD_ODDS', target_odds=10.0 (or user-specified)\n"
             "- '10 games', '12 matches', '15 game accumulator' -> intent='BUILD_GAMES', target_games=10 (or user-specified)\n"
             "- 'goal kick', 'under 8.5', '1st half goal kick' -> intent='BUILD_GOAL_KICKS'\n"
+            "- 'offside', 'offsides', 'over 1.5 offside' -> intent='BUILD_OFFSIDES'\n"
             "- 'remove', 'drop', 'purge', 'sure tickets from code' -> mode='REMOVE', intent='REMOVE_AND_SPLIT'\n"
             "- 'edit', 'upgrade', 'safer markets' -> mode='EDIT', intent='EDIT_UPGRADE'\n"
+            "- 'tomorrow' -> time_horizon='TOMORROW'\n"
+            "- 'today and tomorrow', '2 days', '48h' -> time_horizon='TODAY_AND_TOMORROW'\n"
+            "- 'tomorrow and next', 'tomorrow and the next', 'next 2 days' -> time_horizon='TOMORROW_AND_NEXT'\n"
             "- 'weekend', 'saturday', 'sunday' -> time_horizon='WEEKEND'\n"
             "- 'midweek', 'ucl', 'champions league' -> time_horizon='MIDWEEK_UCL'\n"
             "- '10 odds', '2 tickets of 10 odds' -> target_odds=10.0, ticket_count=2\n"
@@ -203,11 +210,7 @@ class GeminiScoutService:
         risk_style = "LONGSHOT" if is_longshot else "SURE"
 
         # Check Time Horizon
-        time_horizon = "TODAY"
-        if "weekend" in t_lower or "saturday" in t_lower or "sunday" in t_lower:
-            time_horizon = "WEEKEND"
-        elif "ucl" in t_lower or "champions league" in t_lower or "midweek" in t_lower:
-            time_horizon = "MIDWEEK_UCL"
+        time_horizon = TimeHorizonService.normalize_horizon(t_lower)
 
         # Check Basketball
         is_basketball = any(k in t_lower for k in ["basketball", "nba", "hoops", "euroleague", "bball", "cushion over", "cushion overs", "basket ball", "ncaa basketball"])
@@ -222,6 +225,20 @@ class GeminiScoutService:
                 "confidence": 0.95
             }
 
+        # Check Hybrid Props (Goal Kicks + Offsides blended)
+        is_hybrid = ("hybrid" in t_lower or "props" in t_lower or "propmix" in t_lower or "synergy" in t_lower) or (
+            any(k in t_lower for k in ["goal kick", "goalkick", "gk "]) and any(k in t_lower for k in ["offside", "offsides"])
+        )
+        if is_hybrid:
+            return {
+                "intent": "BUILD_HYBRID_PROPS",
+                "booking_code": None,
+                "target_odds": target_odds or 10.0,
+                "ticket_count": ticket_count,
+                "time_horizon": time_horizon,
+                "confidence": 0.95
+            }
+
         # Check Goal Kicks
         is_goalkicks = any(k in t_lower for k in ["goal kick", "goalkick", "goal kicks", "goalkicks", "gk "]) or ("kick" in t_lower and any(k in t_lower for k in ["8.5", "15.5", "7.5", "first half", "1st half"]))
         if is_goalkicks:
@@ -232,6 +249,54 @@ class GeminiScoutService:
                 "target_odds": target_odds or 10.0,
                 "ticket_count": ticket_count,
                 "prefer_line": prefer_line,
+                "time_horizon": time_horizon,
+                "confidence": 0.95
+            }
+
+        # Check Offsides
+        is_offsides = any(k in t_lower for k in ["offside", "offsides", "off side", "off sides", "over 1.5 offside", "over 2.5 offside"])
+        if is_offsides:
+            prefer_line = "OVER_1_5" if ("1.5" in t_lower or "over 1.5" in t_lower) else ("OVER_2_5" if ("2.5" in t_lower or "over 2.5" in t_lower) else ("UNDER_5_5" if ("5.5" in t_lower or "under 5.5" in t_lower) else "AUTO"))
+            return {
+                "intent": "BUILD_OFFSIDES",
+                "booking_code": None,
+                "target_odds": target_odds or 8.0,
+                "ticket_count": ticket_count,
+                "prefer_line": prefer_line,
+                "time_horizon": time_horizon,
+                "confidence": 0.95
+            }
+
+        # Check Mono-Market / Dynamic Single Option
+        # e.g., "0.5 first half", "0.5 1h", "over 1.5", "1.5 goals", "over 2.5", "btts", "both teams to score", "under 3.5", "clean sheet", "only book X"
+        mono_patterns = [
+            ("0.5_1h", ["0.5 first half", "0.5 1h", "1h 0.5", "first half 0.5", "fh 0.5", "first half goal"]),
+            ("over_1.5", ["over 1.5", "1.5 goal", "1.5 goals", "o1.5", "1.5 over"]),
+            ("over_2.5", ["over 2.5", "2.5 goal", "2.5 goals", "o2.5", "2.5 over"]),
+            ("under_3.5", ["under 3.5", "3.5 under", "u3.5"]),
+            ("under_4.5", ["under 4.5", "4.5 under", "u4.5"]),
+            ("btts_yes", ["btts", "gg", "both teams to score", "goal goal"]),
+            ("btts_no", ["btts no", "ng", "no goal"]),
+            ("double_chance", ["double chance", "dc"]),
+            ("clean_sheet", ["clean sheet", "clean sheets"])
+        ]
+        matched_slug = None
+        for slug, kws in mono_patterns:
+            if any(kw in t_lower for kw in kws):
+                matched_slug = slug
+                break
+
+        if not matched_slug and ("only" in t_lower or "mono" in t_lower or "single option" in t_lower or "option all through" in t_lower):
+            matched_slug = "0.5_1h"
+
+        if matched_slug and not found_code:
+            return {
+                "intent": "BUILD_MONO",
+                "market_query": matched_slug,
+                "booking_code": None,
+                "target_odds": target_odds or 10.0,
+                "ticket_count": ticket_count,
+                "time_horizon": time_horizon,
                 "confidence": 0.95
             }
 
@@ -456,13 +521,24 @@ class GeminiScoutService:
         # 3b. DEDICATED GOAL KICKS SLIP
         if intent == "BUILD_GOAL_KICKS":
             prefer_line = parsed.get("prefer_line", "1H")
-            line_desc = "1st Half Under 8.5/7.5 Goal Kicks" if prefer_line == "1H" else ("Full Time Under Goal Kicks" if prefer_line == "FT" else "Goal Kicks Unders")
-            bot_service.send_message(
-                chat_id,
-                f"⚡ <b>StatIQ Goal Kicks Engine:</b>\n"
-                f"Scouting today's live SportyBet board for <b>{line_desc}</b> targeting <b>{target_odds:.1f}x multiplier</b>..."
-            )
-            bot_service.handle_goalkicks_command(chat_id, target_odds=target_odds, prefer_line=prefer_line)
+            bot_service.handle_goalkicks_command(chat_id, target_odds=target_odds, prefer_line=prefer_line, time_horizon=time_horizon)
+            return True
+
+        # 3c. DEDICATED OFFSIDES SLIP
+        if intent == "BUILD_OFFSIDES":
+            prefer_line = parsed.get("prefer_line", "AUTO")
+            bot_service.handle_offsides_command(chat_id, target_odds=target_odds or 8.0, prefer_line=prefer_line, time_horizon=time_horizon)
+            return True
+
+        # 3d. DEDICATED HYBRID PROPS SLIP (GOAL KICKS + OFFSIDES)
+        if intent == "BUILD_HYBRID_PROPS":
+            bot_service.handle_hybrid_command(chat_id, target_odds=target_odds or 10.0, time_horizon=time_horizon)
+            return True
+
+        # 3e. DEDICATED MONO-MARKET SLIP (0.5 1H, Over 1.5, BTTS, Clean Sheets, etc.)
+        if intent == "BUILD_MONO":
+            market_query = parsed.get("market_query") or "0.5_1h"
+            bot_service.handle_mono_command(chat_id, market_query=market_query, target_odds=target_odds or 10.0, time_horizon=time_horizon)
             return True
 
         # 3c. DEDICATED BASKETBALL SLIP (2.0x CUSHION OR CUSTOM MULTIPLIER ACCUMULATOR)

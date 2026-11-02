@@ -13,6 +13,7 @@ from app.db.models import TrackedTicket, BookingAuditRecord
 from app.services.rollover_telegram_notifier import RolloverTelegramNotifier
 from app.services.form_h2h_service import evaluate_fixture_3pillar_metrics
 from app.services.pick_engine import HIGH_TEMPO_CLUBS
+from app.services.time_horizon_service import TimeHorizonService
 
 logger = logging.getLogger("statiq.elite_rollover_engine")
 
@@ -209,29 +210,12 @@ class EliteRolloverEngine:
                 start_ms = start_ms * 1000.0
 
             # Adaptive Kickoff Timing Gates (WAT Timezone):
-            wat_tz = datetime.timezone(datetime.timedelta(hours=1))
-            now_wat = datetime.datetime.now(wat_tz)
-            if time_horizon == "WEEKEND":
-                # Friday through Sunday 23:59:59 WAT (or Monday 05:00 WAT)
-                days_to_sun = (6 - now_wat.weekday()) % 7
-                if days_to_sun == 0 and now_wat.weekday() == 6:
-                    days_to_sun = 0  # Sunday itself
-                end_of_day_ms = (now_wat + datetime.timedelta(days=max(2, days_to_sun))).replace(hour=23, minute=59, second=59).timestamp() * 1000.0
-                min_kickoff_ms = now_ms + (10 * 60 * 1000.0)
-            elif time_horizon == "MIDWEEK_UCL":
-                # Tuesday through Wednesday 23:59:59 WAT (or Thursday 05:00 WAT)
-                days_ahead = 2 if now_wat.weekday() in (1, 2) else 3
-                end_of_day_ms = (now_wat + datetime.timedelta(days=days_ahead)).replace(hour=23, minute=59, second=59).timestamp() * 1000.0
-                min_kickoff_ms = now_ms + (10 * 60 * 1000.0)
-            elif time_horizon in ("MULTI_DAY", "3DAYS"):
-                end_of_day_ms = (now_wat + datetime.timedelta(days=3)).replace(hour=23, minute=59, second=59).timestamp() * 1000.0
-                min_kickoff_ms = now_ms + (10 * 60 * 1000.0)
-            elif is_on_demand:
+            min_kickoff_ms, end_of_day_ms, _, _ = TimeHorizonService.get_horizon_bounds(time_horizon)
+            if is_on_demand and time_horizon == "TODAY":
+                wat_tz = datetime.timezone(datetime.timedelta(hours=1))
+                now_wat = datetime.datetime.now(wat_tz)
                 min_kickoff_ms = now_ms + (15 * 60 * 1000.0)
                 end_of_day_ms = (now_wat + datetime.timedelta(days=1)).replace(hour=23, minute=59, second=0).timestamp() * 1000.0 if now_wat.hour >= 18 else now_wat.replace(hour=23, minute=59, second=0).timestamp() * 1000.0
-            else:
-                min_kickoff_ms = now_ms + (30 * 60 * 1000.0)
-                end_of_day_ms = (now_wat + datetime.timedelta(days=1)).replace(hour=5, minute=0, second=0, microsecond=0).timestamp() * 1000.0
 
             if start_ms > 0:
                 if start_ms < min_kickoff_ms:

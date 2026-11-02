@@ -8,6 +8,7 @@ from typing import Dict, Any, List, Optional, Tuple
 import httpx
 
 from app.services.sportybet_ingestion import SportyBetIngestionService
+from app.services.time_horizon_service import TimeHorizonService
 
 logger = logging.getLogger("statiq.goalkicks")
 
@@ -37,21 +38,26 @@ class GoalKicksService:
     async def fetch_goal_kicks_candidates(
         cls,
         prefer_line: str = "1H",  # "1H" for 1st Half Under 8.5/7.5, "FT" for Full Time Under 15.5, "MIXED" for both
-        max_pages: int = 15
+        max_pages: int = 15,
+        time_horizon: str = "TODAY"
     ) -> List[Dict[str, Any]]:
         """
         Scans SportyBet's active tournaments and matches for Goal Kicks prop markets.
         Extracts verified live lines with odds strictly between 1.30 and 1.55.
+        Supports time horizons: TODAY, TOMORROW, TODAY_AND_TOMORROW, TOMORROW_AND_NEXT, WEEKEND, MIDWEEK_UCL.
         """
+        min_kickoff_ms, end_of_day_ms, today_only, horizon_desc = TimeHorizonService.get_horizon_bounds(time_horizon)
+        pages_to_fetch = (1, 2) if today_only else (1, 2, 3, 4)
+
         client = SportyBetIngestionService._get_client()
         url = f"{cls.BASE_URL}/ng/factsCenter/wapConfigurableEventsByOrder"
         tournaments = []
-        for page in (1, 2):
+        for page in pages_to_fetch:
             payload = {
                 "sportId": "sr:sport:1",
                 "pageNum": page,
                 "pageSize": 50,
-                "todayGames": True
+                "todayGames": today_only
             }
             try:
                 r = client.post(url, json=payload, timeout=10.0)
@@ -65,21 +71,35 @@ class GoalKicksService:
 
         # Target top flight matches where SportyBet posts stats props
         candidate_eids = []
+        seen_eids = set()
         for t in tournaments:
             c_name = t.get("categoryName") or ""
             t_name = t.get("name") or ""
             for ev in t.get("events", []):
                 eid = ev.get("eventId")
+                if not eid or eid in seen_eids:
+                    continue
                 h = ev.get("homeTeamName")
                 a = ev.get("awayTeamName")
                 st = ev.get("status")
+
+                start_ms = ev.get("estimateStartTime") or ev.get("startTime") or 0
+                if isinstance(start_ms, (int, float)) and 0 < start_ms < 100000000000:
+                    start_ms = start_ms * 1000.0
+
+                if start_ms > 0:
+                    if start_ms < min_kickoff_ms or start_ms > end_of_day_ms:
+                        continue
+
                 # Unstarted pre-match games only
-                if eid and (st is None or str(st) == "0"):
+                if st is None or str(st) == "0":
+                    seen_eids.add(eid)
                     candidate_eids.append({
                         "event_id": eid,
                         "home_team": h,
                         "away_team": a,
-                        "competition": f"{c_name} · {t_name}"
+                        "competition": f"{c_name} · {t_name}",
+                        "start_time": start_ms
                     })
 
         logger.info(f"[GoalKicks] Scanning {len(candidate_eids)} candidate fixtures for Goal Kicks markets (Corridor: {cls.MIN_SINGLE_ODDS} - {cls.MAX_SINGLE_ODDS})...")
@@ -87,11 +107,11 @@ class GoalKicksService:
         picks = []
         seen_matches = set()
 
-        async def _check_event_props(item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-            eid = item["event_id"]
-            det_url = f"{cls.BASE_URL}/ng/factsCenter/event?eventId={eid}"
-            try:
-                async with httpx.AsyncClient(timeout=4.5, headers=cls.HEADERS) as http_c:
+        async def _check_event_props(item: Dict[str, Any], http_c: httpx.AsyncClient, sem: asyncio.Semaphore) -> Optional[Dict[str, Any]]:
+            async with sem:
+                eid = item["event_id"]
+                det_url = f"{cls.BASE_URL}/ng/factsCenter/event?eventId={eid}"
+                try:
                     det_r = await http_c.get(det_url)
                     if det_r.status_code == 200:
                         det_data = det_r.json().get("data", {})
@@ -163,13 +183,15 @@ class GoalKicksService:
                                                 best_pick = pick_cand
 
                         return best_pick
-            except Exception:
-                pass
-            return None
+                except Exception:
+                    pass
+                return None
 
         # Execute concurrent inspection with limit
-        tasks = [_check_event_props(item) for item in candidate_eids]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        sem = asyncio.Semaphore(20)
+        async with httpx.AsyncClient(timeout=4.0, headers=cls.HEADERS, limits=httpx.Limits(max_keepalive_connections=25, max_connections=35), verify=False) as http_c:
+            tasks = [_check_event_props(item, http_c, sem) for item in candidate_eids]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
 
         for res in results:
             if isinstance(res, dict) and res.get("event_id") not in seen_matches:
@@ -185,26 +207,30 @@ class GoalKicksService:
     async def build_goal_kicks_ticket(
         cls,
         target_odds: float = 10.0,
-        prefer_line: str = "1H"
+        prefer_line: str = "1H",
+        time_horizon: str = "TODAY",
+        allow_partial: bool = False
     ) -> Dict[str, Any]:
         """
         Assembles and books a dedicated Goal Kicks ticket on SportyBet targeting target_odds.
         Strictly enforces that every leg's odds fall between 1.30 and 1.55.
+        Respects directed time_horizon (TODAY, TOMORROW, TODAY_AND_TOMORROW, TOMORROW_AND_NEXT, WEEKEND, MIDWEEK_UCL).
         """
         target = float(target_odds or 10.0)
-        candidates = await cls.fetch_goal_kicks_candidates(prefer_line=prefer_line)
+        _, _, _, horizon_desc = TimeHorizonService.get_horizon_bounds(time_horizon)
+        candidates = await cls.fetch_goal_kicks_candidates(prefer_line=prefer_line, time_horizon=time_horizon)
 
         # If 1H alone yields insufficient multiplier for the requested target, broaden to MIXED
         if prefer_line == "1H":
             prod_cands = math.prod(c["odds"] for c in candidates) if candidates else 1.0
             if prod_cands < (target * 0.70):
                 logger.info(f"[GoalKicks] 1H candidate pool ({prod_cands:.2f}x) lean for target {target:.1f}x; broadening to MIXED Goal Kicks...")
-                candidates = await cls.fetch_goal_kicks_candidates(prefer_line="MIXED")
+                candidates = await cls.fetch_goal_kicks_candidates(prefer_line="MIXED", time_horizon=time_horizon)
 
         if not candidates:
             return {
                 "status": "NO_FIXTURES",
-                "message": "No active matches on SportyBet currently offer Goal Kick prop markets in the 1.30–1.55 corridor today."
+                "message": f"No active matches on SportyBet currently offer Goal Kick prop markets in the 1.30–1.55 corridor for {horizon_desc}."
             }
 
         selected_legs = []
@@ -231,6 +257,19 @@ class GoalKicksService:
             return {
                 "status": "FAILED_ASSEMBLY",
                 "message": f"Could not assemble Goal Kicks slip targeting {target:.1f}x odds within 1.30–1.55 corridor."
+            }
+
+        # User Decision Gate: If available odds fall short of requested target and user hasn't explicitly confirmed partial
+        if not allow_partial and curr_odds < (target * 0.85):
+            return {
+                "status": "INSUFFICIENT_MULTIPLIER",
+                "available_odds": curr_odds,
+                "target_odds": target,
+                "available_count": len(selected_legs),
+                "time_horizon": time_horizon,
+                "market_type": "gk",
+                "prefer_line": prefer_line,
+                "message": f"Only {len(selected_legs)} matches available on SportyBet ({curr_odds:.2f}x odds), falling short of your {target:.1f}x target."
             }
 
         # Request live SportyBet shareCode
@@ -275,7 +314,7 @@ class GoalKicksService:
 
         return {
             "status": "SUCCESS",
-            "title": f"🎯 StatIQ {target:.1f}x Dedicated Goal Kicks Slip",
+            "title": f"🎯 StatIQ {target:.1f}x Dedicated Goal Kicks Slip ({horizon_desc})",
             "booking_code": share_code or "N/A",
             "share_url": share_url or f"https://www.sportybet.com/ng/?shareCode={share_code}",
             "target_odds": target,
