@@ -172,63 +172,92 @@ class SportyBetAdapter(BookmakerAdapter):
         return self.generate_booking_code(selections=selections, country_code=country_code)
 
     def fetch_booking_code_details(self, code: str, country_code: str = "ng") -> Dict[str, Any]:
-
         """
         Fetches and decodes SportyBet share code via public endpoint.
-        Uses multi-region fallback (ng, gh, ke, ug, tz, zm) for 100% universal decoding.
+        Uses resilient HTTP client with keep-alive, 12s timeout, and multi-region fallback (ng, gh, ke, ug, tz, zm).
         """
         code_clean = code.strip().upper()
         
-        # Try requested country first, then fallback across all SportyBet country domains
-        regions_to_try = [country_code.lower()] + [c for c in ["ng", "gh", "ke", "ug", "tz", "zm"] if c != country_code.lower()]
+        # Try requested country first, then fallback across other SportyBet country domains
+        primary_reg = country_code.lower()
+        other_regions = [c for c in ["ng", "gh", "ke", "ug", "tz", "zm"] if c != primary_reg]
 
         data = None
-        matched_region = country_code.lower()
+        matched_region = primary_reg
+        last_error = None
 
-        import urllib.request
-        import ssl
-        import json
+        req_headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+            'Accept': 'application/json, text/plain, */*',
+            'Referer': f'https://www.sportybet.com/{primary_reg}/',
+            'Origin': 'https://www.sportybet.com'
+        }
 
-        for reg in regions_to_try:
-            url = f"{self.BASE_URL}/{reg}/orders/share/{code_clean}"
-            req_headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-                'Accept': 'application/json, text/plain, */*',
-                'Referer': f'https://www.sportybet.com/{reg}/',
-                'Origin': 'https://www.sportybet.com'
-            }
-
+        # Step 1: Query Primary Region with resilient httpx client (Up to 2 attempts with 12.0s timeout)
+        primary_url = f"{self.BASE_URL}/{primary_reg}/orders/share/{code_clean}"
+        for attempt in range(1, 3):
             try:
-                req = urllib.request.Request(url, headers=req_headers)
-                ctx = ssl.create_default_context()
-                ctx.check_hostname = False
-                ctx.verify_mode = ssl.CERT_NONE
-                with urllib.request.urlopen(req, context=ctx, timeout=4.0) as resp:
-                    if resp.status == 200:
-                        res_json = json.loads(resp.read().decode('utf-8'))
+                with httpx.Client(timeout=12.0, headers=req_headers, follow_redirects=True, verify=False) as client:
+                    resp = client.get(primary_url)
+                    if resp.status_code == 200:
+                        res_json = resp.json()
                         if res_json and res_json.get("bizCode") == 10000:
                             data = res_json
-                            matched_region = reg
+                            matched_region = primary_reg
+                            logger.info(f"[SportyBetAdapter] Successfully fetched shareCode {code_clean} from {primary_reg} (attempt {attempt}).")
                             break
-            except Exception:
-                pass
+                        else:
+                            last_error = f"SportyBet {primary_reg} returned bizCode {res_json.get('bizCode')}: {res_json.get('message')}"
+                    else:
+                        last_error = f"SportyBet {primary_reg} returned HTTP {resp.status_code}"
+            except Exception as e:
+                last_error = f"HTTP error querying {primary_reg}: {str(e)}"
+                logger.warning(f"[SportyBetAdapter] ShareCode {code_clean} attempt {attempt} failed on {primary_reg}: {e}")
 
-            if not data:
+            if data:
+                break
+
+        # Step 2: Fallback across other regions if primary region returned nothing
+        if not data:
+            for reg in other_regions:
+                fallback_url = f"{self.BASE_URL}/{reg}/orders/share/{code_clean}"
+                fallback_headers = dict(req_headers)
+                fallback_headers['Referer'] = f'https://www.sportybet.com/{reg}/'
                 try:
-                    with httpx.Client(timeout=4.0, headers=req_headers, follow_redirects=True, verify=False) as client:
-                        resp = client.get(url)
+                    with httpx.Client(timeout=8.0, headers=fallback_headers, follow_redirects=True, verify=False) as client:
+                        resp = client.get(fallback_url)
                         if resp.status_code == 200:
                             res_json = resp.json()
                             if res_json and res_json.get("bizCode") == 10000:
                                 data = res_json
                                 matched_region = reg
+                                logger.info(f"[SportyBetAdapter] Successfully fetched shareCode {code_clean} from fallback region {reg}.")
                                 break
-                except Exception:
-                    pass
+                except Exception as fe:
+                    logger.debug(f"[SportyBetAdapter] Fallback check for {reg} failed: {fe}")
+
+        # Step 3: Emergency urllib fallback if httpx encountered environmental TLS blocks
+        if not data:
+            import urllib.request
+            import ssl
+            import json
+            try:
+                req = urllib.request.Request(primary_url, headers=req_headers)
+                ctx = ssl.create_default_context()
+                ctx.check_hostname = False
+                ctx.verify_mode = ssl.CERT_NONE
+                with urllib.request.urlopen(req, context=ctx, timeout=10.0) as resp:
+                    if resp.status == 200:
+                        res_json = json.loads(resp.read().decode('utf-8'))
+                        if res_json and res_json.get("bizCode") == 10000:
+                            data = res_json
+                            matched_region = primary_reg
+            except Exception as ue:
+                logger.warning(f"[SportyBetAdapter] Emergency urllib fallback error: {ue}")
 
         if data and data.get("bizCode") == 10000:
             order_data = data.get("data", {})
-            outcomes = order_data.get("outcomes", [])
+            outcomes = (order_data.get("outcomes") or []) + (order_data.get("unavailableOutcomes") or [])
             
             selections = []
             import time
@@ -413,6 +442,7 @@ class SportyBetAdapter(BookmakerAdapter):
         return {
             "status": "NOT_FOUND",
             "code": code_clean,
+            "error": last_error or f"Booking code {code_clean} not found or expired on SportyBet.",
             "total_selections": 0,
             "selections": []
         }

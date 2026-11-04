@@ -1716,10 +1716,12 @@ class StatIQTelegramBot:
             selections = decoded.get("selections") or []
 
             if not selections:
+                err_msg = decoded.get("error") or "Please confirm that the code is active on SportyBet Nigeria."
+                logger.warning(f"[TelegramBot] Failed to decode code {code}: {decoded}")
                 self.send_message(
                     chat_id,
                     f"⚠️ <b>Could not load SportyBet code <code>{code}</code>.</b>\n"
-                    f"Please confirm that the code is active on SportyBet Nigeria."
+                    f"{err_msg}"
                 )
                 return
 
@@ -1987,10 +1989,12 @@ class StatIQTelegramBot:
             selections = decoded.get("selections") or []
 
             if not selections:
+                err_msg = decoded.get("error") or "Please confirm that the code is active on SportyBet Nigeria."
+                logger.warning(f"[TelegramBot] Failed to decode code {code}: {decoded}")
                 self.send_message(
                     chat_id,
                     f"⚠️ <b>Could not load SportyBet code <code>{code}</code>.</b>\n"
-                    f"Please confirm that the code is active on SportyBet Nigeria."
+                    f"{err_msg}"
                 )
                 return
 
@@ -2221,10 +2225,12 @@ class StatIQTelegramBot:
             selections = decoded.get("selections") or []
 
             if not selections:
+                err_msg = decoded.get("error") or "Please confirm that the code is active on SportyBet Nigeria."
+                logger.warning(f"[TelegramBot] Failed to decode code {code}: {decoded}")
                 self.send_message(
                     chat_id,
                     f"⚠️ <b>Could not load SportyBet code <code>{code}</code>.</b>\n"
-                    f"Please confirm that the code is active on SportyBet Nigeria."
+                    f"{err_msg}"
                 )
                 return
 
@@ -2370,9 +2376,11 @@ class StatIQTelegramBot:
             selections = decoded.get("selections") or []
 
             if not selections:
+                err_msg = decoded.get("error") or "Please verify that the code is active on SportyBet Nigeria."
+                logger.warning(f"[TelegramBot] Failed to decode portfolio code {code}: {decoded}")
                 self.send_message(
                     chat_id,
-                    f"⚠️ <b>Could not load SportyBet code <code>{code}</code>.</b> Please verify that the code is active on SportyBet Nigeria."
+                    f"⚠️ <b>Could not load SportyBet code <code>{code}</code>.</b>\n{err_msg}"
                 )
                 return
 
@@ -2446,10 +2454,12 @@ class StatIQTelegramBot:
             selections = decoded.get("selections") or []
 
             if not selections:
+                err_msg = decoded.get("error") or "Please verify that the code is valid."
+                logger.warning(f"[TelegramBot] Failed to decode raw code {code}: {decoded}")
                 self.send_message(
                     chat_id,
-                    f"🎟️ Found code <code>{code}</code>, but could not load it from SportyBet Nigeria. "
-                    f"Please verify the code is valid."
+                    f"🎟️ Found code <code>{code}</code>, but could not load it from SportyBet Nigeria.\n"
+                    f"{err_msg}"
                 )
                 return
 
