@@ -1351,7 +1351,7 @@ def _heal_falsely_lost_tickets(tickets: list, now_ms: int) -> bool:
         # Fetch authoritative kickoffs from SportyBet
         sb_kickoffs: dict = {}
         for reg in ["ng", "gh", "ke", "ug"]:
-            url = f"https://www.sportybet.com/api/{reg}/orders/share/{code.upper()}"
+            url = f"https://mobile.sportybet.com/api/{reg}/orders/share/{code.upper()}"
             try:
                 req = urllib.request.Request(url, headers=headers)
                 with urllib.request.urlopen(req, context=ctx, timeout=5) as resp:
@@ -1958,12 +1958,15 @@ def sync_tracked_tickets_with_live_apis(db: Optional[Session] = None) -> List[Di
         try:
             import httpx
             live_headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+                'User-Agent': 'Mozilla/5.0 (Linux; Android 13; SM-S908B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36',
                 'Accept': 'application/json, text/plain, */*',
-                'Referer': 'https://www.sportybet.com/ng/',
-                'Origin': 'https://www.sportybet.com'
+                'Accept-Language': 'en-US,en;q=0.9',
+                'platform': 'wap',
+                'client-country': 'ng',
+                'X-Forwarded-For': '102.89.34.18',
+                'Referer': 'https://mobile.sportybet.com/ng/'
             }
-            live_url = "https://www.sportybet.com/api/ng/factsCenter/wapUpcomingEvents?sportId=sr:sport:1&pageSize=100"
+            live_url = "https://mobile.sportybet.com/api/ng/factsCenter/wapUpcomingEvents?sportId=sr:sport:1&pageSize=100"
             with httpx.Client(timeout=6.0, headers=live_headers, verify=False) as client:
                 resp = client.get(live_url)
                 if resp.status_code == 200:

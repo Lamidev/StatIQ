@@ -13,12 +13,15 @@ from app.basketball.basketball_quant_engine import BasketballQuantEngine
 logger = logging.getLogger("statiq.basketball.builder")
 
 class BasketballTicketBuilder:
-    SHARE_URL = "https://www.sportybet.com/api/ng/orders/share"
+    SHARE_URL = "https://mobile.sportybet.com/api/ng/orders/share"
     HEADERS = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "User-Agent": "Mozilla/5.0 (Linux; Android 13; SM-S908B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
         "Accept": "application/json, text/plain, */*",
-        "Referer": "https://www.sportybet.com/ng/",
-        "Origin": "https://www.sportybet.com"
+        "Accept-Language": "en-US,en;q=0.9",
+        "platform": "wap",
+        "client-country": "ng",
+        "X-Forwarded-For": "102.89.34.18",
+        "Referer": "https://mobile.sportybet.com/ng/"
     }
 
     @classmethod

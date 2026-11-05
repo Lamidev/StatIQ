@@ -11,12 +11,15 @@ class SportyBetIngestionService:
     StatIQ V2.0 Native SportyBet Fixture & Odds Ingestion Service.
     Pulls live upcoming matches, tournament metadata, and decimal odds directly from SportyBet API.
     """
-    BASE_URL = "https://www.sportybet.com/api/ng/factsCenter"
+    BASE_URL = "https://mobile.sportybet.com/api/ng/factsCenter"
     HEADERS = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "User-Agent": "Mozilla/5.0 (Linux; Android 13; SM-S908B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
         "Accept": "application/json, text/plain, */*",
-        "Referer": "https://www.sportybet.com/ng/",
-        "Origin": "https://www.sportybet.com"
+        "Accept-Language": "en-US,en;q=0.9",
+        "platform": "wap",
+        "client-country": "ng",
+        "X-Forwarded-For": "102.89.34.18",
+        "Referer": "https://mobile.sportybet.com/ng/"
     }
 
     _cache: Dict[str, Any] = {}
@@ -536,7 +539,7 @@ class SportyBetIngestionService:
             if (now - entry.get("timestamp", 0)) < 3600:  # 1 hour H2H cache
                 return entry.get("data", {})
 
-        url = f"https://www.sportybet.com/api/ng/factsCenter/h2h/{event_id}"
+        url = f"https://mobile.sportybet.com/api/ng/factsCenter/h2h/{event_id}"
         client = cls._get_client()
         try:
             resp = client.get(url, timeout=0.7)

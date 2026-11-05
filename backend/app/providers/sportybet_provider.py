@@ -6,10 +6,13 @@ from app.providers.base import BaseProvider, NormalizedFixtureState
 class SportyBetProvider(BaseProvider):
     def __init__(self):
         self.headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+            'User-Agent': 'Mozilla/5.0 (Linux; Android 13; SM-S908B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36',
             'Accept': 'application/json, text/plain, */*',
-            'Referer': 'https://www.sportybet.com/ng/',
-            'Origin': 'https://www.sportybet.com'
+            'Accept-Language': 'en-US,en;q=0.9',
+            'platform': 'wap',
+            'client-country': 'ng',
+            'X-Forwarded-For': '102.89.34.18',
+            'Referer': 'https://mobile.sportybet.com/ng/'
         }
 
     def get_provider_name(self) -> str:
@@ -21,7 +24,7 @@ class SportyBetProvider(BaseProvider):
         if not target_id:
             return None
 
-        live_url = "https://www.sportybet.com/api/ng/factsCenter/wapUpcomingEvents?sportId=sr:sport:1&pageSize=150"
+        live_url = "https://mobile.sportybet.com/api/ng/factsCenter/wapUpcomingEvents?sportId=sr:sport:1&pageSize=150"
         try:
             with httpx.Client(timeout=6.0, headers=self.headers, verify=False) as client:
                 resp = client.get(live_url)
@@ -38,7 +41,7 @@ class SportyBetProvider(BaseProvider):
         return None
 
     def search_fixtures(self, date_str: str, competition: Optional[str] = None) -> List[Dict[str, Any]]:
-        live_url = "https://www.sportybet.com/api/ng/factsCenter/wapUpcomingEvents?sportId=sr:sport:1&pageSize=150"
+        live_url = "https://mobile.sportybet.com/api/ng/factsCenter/wapUpcomingEvents?sportId=sr:sport:1&pageSize=150"
         try:
             with httpx.Client(timeout=6.0, headers=self.headers, verify=False) as client:
                 resp = client.get(live_url)
