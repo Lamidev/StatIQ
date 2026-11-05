@@ -1,3 +1,4 @@
+import os
 import random
 import re
 import string
@@ -143,11 +144,16 @@ class SportyBetAdapter(BookmakerAdapter):
     - Code Reader: GET https://www.sportybet.com/api/{country}/orders/share/{code}
     - Code Generator: POST https://www.sportybet.com/api/{country}/orders/share
     """
-    BASE_URL = "https://www.sportybet.com/api"
+    BASE_URL = "https://mobile.sportybet.com/api"
+    DOMAINS = ["mobile.sportybet.com", "sports.sportybet.com", "www.sportybet.com"]
     HEADERS = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "User-Agent": "Mozilla/5.0 (Linux; Android 13; SM-S908B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
         "Accept": "application/json, text/plain, */*",
-        "Referer": "https://www.sportybet.com/"
+        "Accept-Language": "en-US,en;q=0.9",
+        "platform": "wap",
+        "client-country": "ng",
+        "X-Forwarded-For": "102.89.34.18",
+        "Referer": "https://mobile.sportybet.com/ng/"
     }
 
     def get_provider_name(self) -> str:
@@ -186,74 +192,136 @@ class SportyBetAdapter(BookmakerAdapter):
         matched_region = primary_reg
         last_error = None
 
-        req_headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-            'Accept': 'application/json, text/plain, */*',
-            'Referer': f'https://www.sportybet.com/{primary_reg}/',
-            'Origin': 'https://www.sportybet.com'
-        }
+        # Build resilient request client with proxy support if configured
+        proxy_url = os.getenv("SPORTYBET_PROXY") or os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY")
 
-        # Step 1: Query Primary Region with resilient httpx client (Up to 2 attempts with 12.0s timeout)
-        primary_url = f"{self.BASE_URL}/{primary_reg}/orders/share/{code_clean}"
-        for attempt in range(1, 3):
-            try:
-                with httpx.Client(timeout=12.0, headers=req_headers, follow_redirects=True, verify=False) as client:
-                    resp = client.get(primary_url)
-                    if resp.status_code == 200:
-                        res_json = resp.json()
-                        if res_json and res_json.get("bizCode") == 10000:
-                            data = res_json
-                            matched_region = primary_reg
-                            logger.info(f"[SportyBetAdapter] Successfully fetched shareCode {code_clean} from {primary_reg} (attempt {attempt}).")
-                            break
+        # Multi-profile definitions to bypass CloudFront AWS WAF bot detection
+        def _get_profiles(reg: str, dom: str):
+            return [
+                # Profile 1: Realistic Android Mobile WAP with Nigerian GeoIP hint
+                {
+                    'User-Agent': 'Mozilla/5.0 (Linux; Android 13; SM-S908B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36',
+                    'Accept': 'application/json, text/plain, */*',
+                    'Accept-Language': 'en-US,en;q=0.9',
+                    'platform': 'wap',
+                    'client-country': reg,
+                    'X-Forwarded-For': '102.89.34.18',
+                    'sec-ch-ua': '"Not-A.Brand";v="99", "Chromium";v="124"',
+                    'sec-ch-ua-mobile': '?1',
+                    'sec-ch-ua-platform': '"Android"',
+                    'sec-fetch-dest': 'empty',
+                    'sec-fetch-mode': 'cors',
+                    'sec-fetch-site': 'same-origin',
+                    'Referer': f'https://{dom}/{reg}/'
+                },
+                # Profile 2: SportyBet Official App Native headers (bypasses web browser WAF restrictions)
+                {
+                    'User-Agent': 'SportyBet/4.25.0 (Android; 13; Scale/2.75)',
+                    'Accept': 'application/json, text/plain, */*',
+                    'Accept-Language': 'en-US,en;q=0.9',
+                    'platform': 'app',
+                    'client-country': reg,
+                    'X-Forwarded-For': '102.89.34.18',
+                    'app-version': '4.25.0',
+                    'os': 'Android'
+                },
+                # Profile 3: Clean Desktop Chrome (Strictly NO synthetic Origin header on GET)
+                {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+                    'Accept': 'application/json, text/plain, */*',
+                    'Accept-Language': 'en-US,en;q=0.9',
+                    'sec-ch-ua': '"Not-A.Brand";v="99", "Chromium";v="124", "Google Chrome";v="124"',
+                    'sec-ch-ua-mobile': '?0',
+                    'sec-ch-ua-platform': '"Windows"',
+                    'sec-fetch-dest': 'empty',
+                    'sec-fetch-mode': 'cors',
+                    'sec-fetch-site': 'same-origin',
+                    'Referer': f'https://{dom}/{reg}/'
+                }
+            ]
+
+        domains = getattr(self, "DOMAINS", ["mobile.sportybet.com", "sports.sportybet.com", "www.sportybet.com"])
+
+        # Step 1: Query Primary Region across resilient mobile & desktop domains
+        for dom in domains:
+            profiles = _get_profiles(primary_reg, dom)
+            for prof in profiles:
+                url = f"https://{dom}/api/{primary_reg}/orders/share/{code_clean}"
+                try:
+                    client_kwargs = {"timeout": 8.0, "headers": prof, "follow_redirects": True, "verify": False}
+                    if proxy_url:
+                        client_kwargs["proxy"] = proxy_url
+                    with httpx.Client(**client_kwargs) as client:
+                        resp = client.get(url)
+                        if resp.status_code == 200:
+                            res_json = resp.json()
+                            if res_json and res_json.get("bizCode") == 10000:
+                                data = res_json
+                                matched_region = primary_reg
+                                logger.info(f"[SportyBetAdapter] Successfully fetched shareCode {code_clean} from {primary_reg} via {dom}.")
+                                break
+                            else:
+                                last_error = f"SportyBet {primary_reg} returned bizCode {res_json.get('bizCode')}: {res_json.get('message')}"
                         else:
-                            last_error = f"SportyBet {primary_reg} returned bizCode {res_json.get('bizCode')}: {res_json.get('message')}"
-                    else:
-                        last_error = f"SportyBet {primary_reg} returned HTTP {resp.status_code}"
-            except Exception as e:
-                last_error = f"HTTP error querying {primary_reg}: {str(e)}"
-                logger.warning(f"[SportyBetAdapter] ShareCode {code_clean} attempt {attempt} failed on {primary_reg}: {e}")
+                            last_error = f"SportyBet {primary_reg} returned HTTP {resp.status_code} on {dom}"
+                except Exception as e:
+                    last_error = f"HTTP error querying {dom} ({primary_reg}): {str(e)}"
+                    logger.debug(f"[SportyBetAdapter] ShareCode {code_clean} on {dom} failed: {e}")
 
+                if data:
+                    break
             if data:
                 break
 
         # Step 2: Fallback across other regions if primary region returned nothing
         if not data:
             for reg in other_regions:
-                fallback_url = f"{self.BASE_URL}/{reg}/orders/share/{code_clean}"
-                fallback_headers = dict(req_headers)
-                fallback_headers['Referer'] = f'https://www.sportybet.com/{reg}/'
-                try:
-                    with httpx.Client(timeout=8.0, headers=fallback_headers, follow_redirects=True, verify=False) as client:
-                        resp = client.get(fallback_url)
-                        if resp.status_code == 200:
-                            res_json = resp.json()
-                            if res_json and res_json.get("bizCode") == 10000:
-                                data = res_json
-                                matched_region = reg
-                                logger.info(f"[SportyBetAdapter] Successfully fetched shareCode {code_clean} from fallback region {reg}.")
-                                break
-                except Exception as fe:
-                    logger.debug(f"[SportyBetAdapter] Fallback check for {reg} failed: {fe}")
+                for dom in ["mobile.sportybet.com", "sports.sportybet.com"]:
+                    prof = _get_profiles(reg, dom)[0]
+                    fallback_url = f"https://{dom}/api/{reg}/orders/share/{code_clean}"
+                    try:
+                        client_kwargs = {"timeout": 6.0, "headers": prof, "follow_redirects": True, "verify": False}
+                        if proxy_url:
+                            client_kwargs["proxy"] = proxy_url
+                        with httpx.Client(**client_kwargs) as client:
+                            resp = client.get(fallback_url)
+                            if resp.status_code == 200:
+                                res_json = resp.json()
+                                if res_json and res_json.get("bizCode") == 10000:
+                                    data = res_json
+                                    matched_region = reg
+                                    logger.info(f"[SportyBetAdapter] Successfully fetched shareCode {code_clean} from fallback region {reg} via {dom}.")
+                                    break
+                    except Exception as fe:
+                        logger.debug(f"[SportyBetAdapter] Fallback check for {reg} on {dom} failed: {fe}")
+                if data:
+                    break
 
         # Step 3: Emergency urllib fallback if httpx encountered environmental TLS blocks
         if not data:
             import urllib.request
             import ssl
             import json
-            try:
-                req = urllib.request.Request(primary_url, headers=req_headers)
-                ctx = ssl.create_default_context()
-                ctx.check_hostname = False
-                ctx.verify_mode = ssl.CERT_NONE
-                with urllib.request.urlopen(req, context=ctx, timeout=10.0) as resp:
-                    if resp.status == 200:
-                        res_json = json.loads(resp.read().decode('utf-8'))
-                        if res_json and res_json.get("bizCode") == 10000:
-                            data = res_json
-                            matched_region = primary_reg
-            except Exception as ue:
-                logger.warning(f"[SportyBetAdapter] Emergency urllib fallback error: {ue}")
+            for dom in ["mobile.sportybet.com", "sports.sportybet.com", "www.sportybet.com"]:
+                em_headers = _get_profiles(primary_reg, dom)[0]
+                em_url = f"https://{dom}/api/{primary_reg}/orders/share/{code_clean}"
+                try:
+                    req = urllib.request.Request(em_url, headers=em_headers)
+                    ctx = ssl.create_default_context()
+                    ctx.check_hostname = False
+                    ctx.verify_mode = ssl.CERT_NONE
+                    with urllib.request.urlopen(req, context=ctx, timeout=8.0) as resp:
+                        if resp.status == 200:
+                            res_json = json.loads(resp.read().decode('utf-8'))
+                            if res_json and res_json.get("bizCode") == 10000:
+                                data = res_json
+                                matched_region = primary_reg
+                                logger.info(f"[SportyBetAdapter] Emergency urllib retrieved {code_clean} via {dom}.")
+                                break
+                except Exception as ue:
+                    logger.debug(f"[SportyBetAdapter] Emergency urllib fallback on {dom} error: {ue}")
+                if data:
+                    break
 
         if data and data.get("bizCode") == 10000:
             order_data = data.get("data", {})
@@ -275,6 +343,7 @@ class SportyBetAdapter(BookmakerAdapter):
                 provider_mkt_id = None
                 provider_oc_id = None
                 provider_spec = None
+                mkt_outcomes = []
 
                 if markets and len(markets) > 0:
                     mkt = markets[0]
