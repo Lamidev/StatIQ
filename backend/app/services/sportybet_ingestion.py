@@ -61,7 +61,7 @@ class SportyBetIngestionService:
         "sr:tournament:49",    # Int. Friendly Games
     ]
 
-    _cache_ttl: int = 300  # 5 minutes cache
+    _cache_ttl: int = 45  # 45 seconds cache for real-time live match board freshness
     _is_refreshing: bool = False
     _shared_client: Optional[httpx.Client] = None
 

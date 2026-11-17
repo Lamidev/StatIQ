@@ -1846,7 +1846,7 @@ class StatIQTelegramBot:
                 # ── STEP 4: TOP-UP IMPLEMENTATION IF USER SELECTED TOPUP ──
                 if confirmed_action == "TOPUP":
                     from app.services.elite_rollover_engine import EliteRolloverEngine
-                    live_events = loop.run_until_complete(EliteRolloverEngine.fetch_sportybet_today_events(max_pages=10))
+                    live_events = loop.run_until_complete(EliteRolloverEngine.fetch_sportybet_today_events(max_pages=15, today_only=True, force_refresh=True))
                     live_cands = EliteRolloverEngine.evaluate_elite_rollover_candidates(live_events, max_leg_odds=1.45)
                     existing_eids = {str(s.get("event_id")).lower() for s in final_selections}
 
@@ -2109,7 +2109,7 @@ class StatIQTelegramBot:
 
                 if confirmed_action == "TOPUP":
                     from app.services.elite_rollover_engine import EliteRolloverEngine
-                    live_events = loop.run_until_complete(EliteRolloverEngine.fetch_sportybet_today_events(max_pages=10))
+                    live_events = loop.run_until_complete(EliteRolloverEngine.fetch_sportybet_today_events(max_pages=15, today_only=True, force_refresh=True))
                     live_cands = EliteRolloverEngine.evaluate_elite_rollover_candidates(live_events, max_leg_odds=1.45)
                     existing_eids = {str(s.get("event_id")).lower() for s in final_selections}
 
@@ -3190,12 +3190,14 @@ class StatIQTelegramBot:
             self.handle_odds_command(chat_id, target_odds=val, num_tickets=1, time_horizon="WEEKEND")
             return
 
-        # Midweek European Horizon: /ucl [odds], /championsleague [odds], /midweek [odds]
+        # Midweek European Horizon: /ucl [odds] [horizon], /championsleague [odds] [horizon], /midweek [odds] [horizon]
         ucl_match = re.match(r"^/(?:ucl|championsleague|midweek|european)\s*(\d+\.?\d*)?(.*)", text, re.IGNORECASE)
         if ucl_match:
             val_str = ucl_match.group(1)
             val = float(val_str) if val_str else 25.0
-            self.handle_odds_command(chat_id, target_odds=val, num_tickets=1, time_horizon="MIDWEEK_UCL")
+            rest = (ucl_match.group(2) or "").lower().strip()
+            horizon = TimeHorizonService.normalize_horizon(rest) if rest else "MIDWEEK_UCL"
+            self.handle_odds_command(chat_id, target_odds=val, num_tickets=1, time_horizon=horizon)
             return
 
         # Dedicated Goal Kicks Accumulator: /goalkicks [odds] [horizon], /gk [odds] [horizon]

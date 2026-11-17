@@ -273,22 +273,41 @@ class DynamicMarketEngine:
         Validates market ID / description, specifier, outcome, and odds corridor.
         """
         min_kickoff_ms, end_of_day_ms, today_only, horizon_desc = TimeHorizonService.get_horizon_bounds(time_horizon)
-        pages_to_fetch = (1, 2) if today_only else (1, 2, 3, 4)
 
         client = SportyBetIngestionService._get_client()
         url = f"{cls.BASE_URL}/ng/factsCenter/wapConfigurableEventsByOrder"
         tournaments = []
-        for page in pages_to_fetch:
+        for page in range(1, 8):
             payload = {
                 "sportId": "sr:sport:1",
                 "pageNum": page,
                 "pageSize": 50,
-                "todayGames": today_only
+                "withTwoUpMarket": True,
+                "withOneUpMarket": True
             }
+            if today_only:
+                payload["todayGames"] = True
+            else:
+                canonical = TimeHorizonService.normalize_horizon(time_horizon)
+                if canonical in ("TOMORROW",):
+                    payload["timeline"] = 1
+                elif canonical in ("TODAY_AND_TOMORROW", "2DAYS"):
+                    payload["timeline"] = 2
+                elif canonical in ("MIDWEEK_UCL",):
+                    payload["timeline"] = 3
+                elif canonical in ("WEEKEND",):
+                    payload["timeline"] = 7
+                else:
+                    payload["timeline"] = 3
+
             try:
                 r = client.post(url, json=payload, timeout=10.0)
                 if r.status_code == 200 and r.json().get("bizCode") == 10000:
-                    tournaments.extend(r.json().get("data", {}).get("tournaments", []))
+                    data = r.json().get("data", {})
+                    t_list = data.get("tournaments", [])
+                    tournaments.extend(t_list)
+                    if not data.get("moreEvents") or not t_list:
+                        break
             except Exception as e:
                 logger.warning(f"[DynamicMarket] Error fetching tournament page {page}: {e}")
 

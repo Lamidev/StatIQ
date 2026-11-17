@@ -90,81 +90,141 @@ class EliteRolloverEngine:
     }
 
     @classmethod
-    async def fetch_sportybet_today_events(cls, max_pages: int = 6, today_only: bool = True) -> List[Dict[str, Any]]:
+    async def fetch_sportybet_today_events(
+        cls,
+        max_pages: int = 15,
+        today_only: bool = True,
+        force_refresh: bool = False,
+        time_horizon: str = "TODAY"
+    ) -> List[Dict[str, Any]]:
         """
-        Directly queries SportyBet's wapConfigurableEventsByOrder endpoint.
-        - When today_only=True: collects all unstarted fixtures playing today (standard daily VIP & rollover).
-        - When today_only=False: collects upcoming multi-day fixtures (weekend Fri-Sun or midweek UCL Tue-Wed).
-        Cached in-memory for 60 seconds with parallel page fetching (<2 seconds).
+        Directly queries SportyBet's live wapConfigurableEventsByOrder endpoint.
+        - When today_only=True: collects all unstarted fixtures playing today dynamically.
+        - When today_only=False: queries the appropriate timeline for multi-day slates.
+        - Dynamic Pagination: follows SportyBet's moreEvents flag in concurrent batches.
+        - Zero-Stale Safety: when force_refresh=True, completely bypasses in-memory cache.
+        - Dynamic Time Pruning: strictly purges any match that has already started or kicks off < 10m.
         """
         now = time.time()
-        if today_only:
-            if cls._today_cache and (now - cls._today_cache_time) < 60:
-                return cls._today_cache
-        else:
-            if cls._upcoming_cache and (now - cls._upcoming_cache_time) < 120:
-                return cls._upcoming_cache
+        now_ms = now * 1000.0
+
+        if not force_refresh:
+            cached = cls._today_cache if today_only else cls._upcoming_cache
+            cache_time = cls._today_cache_time if today_only else cls._upcoming_cache_time
+            cache_ttl = 45 if today_only else 90
+            if cached and (now - cache_time) < cache_ttl:
+                # Dynamic pre-match filter on cached events: strictly remove matches that kicked off or are within 10 mins!
+                live_upcoming = [
+                    ev for ev in cached
+                    if (ev.get("estimateStartTime") or ev.get("startTime") or 0) > (now_ms + 600000)
+                    and str(ev.get("status") or ev.get("matchStatus") or "").upper().strip() not in [
+                        "LIVE", "STARTED", "1H", "2H", "HT", "FINISHED", "FT", "ENDED", "CANCELLED", "POSTPONED"
+                    ]
+                ]
+                if live_upcoming:
+                    return live_upcoming
 
         import concurrent.futures
         from app.services.sportybet_ingestion import SportyBetIngestionService
+        from app.services.time_horizon_service import TimeHorizonService
 
-        all_events = []
-        seen_event_ids = set()
-
-        def _fetch_page_sync(page: int) -> List[Dict[str, Any]]:
+        def _fetch_page_sync(page: int) -> Tuple[int, List[Dict[str, Any]], bool]:
             client = SportyBetIngestionService._get_client()
             url = f"{cls.BASE_URL}/ng/factsCenter/wapConfigurableEventsByOrder"
             payload = {
                 "sportId": "sr:sport:1",
                 "pageNum": page,
                 "pageSize": 50,
-                "todayGames": today_only,
                 "withTwoUpMarket": True,
                 "withOneUpMarket": True
             }
+            if today_only or time_horizon == "TODAY":
+                payload["todayGames"] = True
+            else:
+                canonical = TimeHorizonService.normalize_horizon(time_horizon)
+                if canonical in ("TOMORROW",):
+                    payload["timeline"] = 1
+                elif canonical in ("TODAY_AND_TOMORROW", "2DAYS"):
+                    payload["timeline"] = 2
+                elif canonical in ("MIDWEEK_UCL",):
+                    payload["timeline"] = 3
+                elif canonical in ("WEEKEND",):
+                    payload["timeline"] = 7
+                else:
+                    payload["timeline"] = 3
+
             try:
                 r = client.post(url, json=payload, timeout=10.0)
                 if r.status_code == 200:
                     data = r.json()
                     if data.get("bizCode") == 10000:
-                        return data.get("data", {}).get("tournaments", [])
+                        tours = data.get("data", {}).get("tournaments", [])
+                        has_more = bool(data.get("data", {}).get("moreEvents", False))
+                        return page, tours, has_more
             except Exception as e:
                 logger.warning(f"[EliteRollover] Page {page} fetch error: {e}")
-            return []
+            return page, [], False
 
+        all_tournaments = []
         try:
             loop = asyncio.get_event_loop()
-            with concurrent.futures.ThreadPoolExecutor(max_workers=min(max_pages, 8)) as executor:
-                results = await loop.run_in_executor(None, lambda: list(executor.map(_fetch_page_sync, range(1, max_pages + 1))))
 
-            for tournaments in results:
-                for t in tournaments:
-                    c_name = t.get("categoryName") or "International"
-                    t_name = t.get("name") or "League"
-                    for ev in t.get("events", []):
-                        eid = ev.get("eventId")
-                        if eid and eid not in seen_event_ids:
-                            seen_event_ids.add(eid)
-                            ev["_categoryName"] = c_name
-                            ev["_tournamentName"] = t_name
-                            all_events.append(ev)
+            def _fetch_all_chunks_sync():
+                tours_accum = []
+                chunk_size = 4
+                current_p = 1
+                more_pages = True
+                while current_p <= max_pages and more_pages:
+                    pages_chunk = list(range(current_p, min(current_p + chunk_size, max_pages + 1)))
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=len(pages_chunk)) as ex:
+                        results = list(ex.map(_fetch_page_sync, pages_chunk))
+                    results.sort(key=lambda x: x[0])
+                    for p_num, tours, p_has_more in results:
+                        if tours:
+                            tours_accum.extend(tours)
+                        if not p_has_more or not tours:
+                            more_pages = False
+                            break
+                    current_p += chunk_size
+                return tours_accum
 
-            if all_events:
-                if today_only:
-                    cls._today_cache = all_events
-                    cls._today_cache_time = now
-                    logger.info(f"[EliteRollover] Ingested {len(all_events)} raw events directly from SportyBet today endpoint.")
-                else:
-                    cls._upcoming_cache = all_events
-                    cls._upcoming_cache_time = now
-                    logger.info(f"[EliteRollover] Ingested {len(all_events)} upcoming multi-day events directly from SportyBet.")
+            all_tournaments = await loop.run_in_executor(None, _fetch_all_chunks_sync)
         except Exception as e:
-            logger.warning(f"[EliteRollover] Parallel fetch error: {e}")
+            logger.warning(f"[EliteRollover] Dynamic chunked fetch error: {e}")
 
-        if today_only:
-            return all_events or (cls._today_cache or [])
-        else:
-            return all_events or (cls._upcoming_cache or [])
+        all_events = []
+        seen_event_ids = set()
+        for t in all_tournaments:
+            c_name = t.get("categoryName") or "International"
+            t_name = t.get("name") or "League"
+            for ev in t.get("events", []):
+                eid = ev.get("eventId")
+                if eid and eid not in seen_event_ids:
+                    seen_event_ids.add(eid)
+                    ev["_categoryName"] = c_name
+                    ev["_tournamentName"] = t_name
+                    all_events.append(ev)
+
+        if all_events:
+            if today_only:
+                cls._today_cache = all_events
+                cls._today_cache_time = now
+                logger.info(f"[EliteRollover] Dynamically ingested {len(all_events)} live events directly from SportyBet today endpoint.")
+            else:
+                cls._upcoming_cache = all_events
+                cls._upcoming_cache_time = now
+                logger.info(f"[EliteRollover] Dynamically ingested {len(all_events)} upcoming multi-day events directly from SportyBet.")
+
+        res_events = all_events or (cls._today_cache if today_only else cls._upcoming_cache) or []
+        # Return only unstarted upcoming matches (kickoff >= now + 10 mins)
+        filtered_events = [
+            ev for ev in res_events
+            if (ev.get("estimateStartTime") or ev.get("startTime") or 0) > (now_ms + 600000)
+            and str(ev.get("status") or ev.get("matchStatus") or "").upper().strip() not in [
+                "LIVE", "STARTED", "1H", "2H", "HT", "FINISHED", "FT", "ENDED", "CANCELLED", "POSTPONED"
+            ]
+        ]
+        return filtered_events
 
     @classmethod
     def _calculate_poisson_over15_prob(cls, h_odds: float, d_odds: float, a_odds: float, market_odds: Optional[float] = None) -> float:
@@ -1214,7 +1274,7 @@ class EliteRolloverEngine:
         6. Persist to StatIQ database.
         """
         logger.info(f"[EliteRollover] Executing autonomous rollover run for target odds {target_odds}x (leg odds cap {max_leg_odds}x)...")
-        raw_events = await cls.fetch_sportybet_today_events(max_pages=15)
+        raw_events = await cls.fetch_sportybet_today_events(max_pages=15, today_only=True, force_refresh=True)
         if not raw_events:
             return {
                 "status": "NO_FIXTURES",
@@ -1655,7 +1715,7 @@ class EliteRolloverEngine:
            - Slip 4: Monster Acca (dynamic target odds e.g. 20.0x)
         """
         logger.info(f"[EliteRollover] Executing Daily VIP Automation (Rollover: {enable_rollover} @ {rollover_target_odds}x, 5x: {enable_5odds} @ {acca_5x_target_odds}x, 10x: {enable_10odds} @ {acca_10x_target_odds}x, 20x: {enable_20odds} @ {acca_20x_target_odds}x)...")
-        raw_events = await cls.fetch_sportybet_today_events(max_pages=35)
+        raw_events = await cls.fetch_sportybet_today_events(max_pages=15, today_only=True, force_refresh=True)
         if not raw_events:
             return {
                 "status": "NO_FIXTURES",
@@ -1971,7 +2031,7 @@ class EliteRolloverEngine:
         Strict Tier-1/Tier-2 dominance, Poisson scoring, and Min Odds >= 1.15.
         """
         today_only = (time_horizon == "TODAY")
-        raw_events = await cls.fetch_sportybet_today_events(max_pages=25 if not today_only else 20, today_only=today_only)
+        raw_events = await cls.fetch_sportybet_today_events(max_pages=15, today_only=today_only, force_refresh=True, time_horizon=time_horizon)
         if not raw_events:
             return []
 
@@ -2129,7 +2189,7 @@ class EliteRolloverEngine:
         Guarantees STRICT ZERO-OVERLAP between all generated slips.
         Uses the exact same Elite Vetted Selection Engine as the 10:00 AM daily automation.
         """
-        raw_events = await cls.fetch_sportybet_today_events(max_pages=20)
+        raw_events = await cls.fetch_sportybet_today_events(max_pages=15, today_only=True, force_refresh=True)
         if not raw_events:
             return []
 

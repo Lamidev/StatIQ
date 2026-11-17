@@ -904,7 +904,7 @@ async def build_ai_ticket(req: BuildTicketRequest):
         if is_today_live_requested:
             from app.services.elite_rollover_engine import EliteRolloverEngine
             try:
-                live_events = await EliteRolloverEngine.fetch_sportybet_today_events(max_pages=4)
+                live_events = await EliteRolloverEngine.fetch_sportybet_today_events(max_pages=15, today_only=True, force_refresh=True)
                 if live_events:
                     raw_sporty_fixtures = SportyBetIngestionService._normalize_events(live_events)
                     logger.info(f"[TicketBuilder] Live feed loaded {len(raw_sporty_fixtures)} bettable fixtures directly from SportyBet Today API.")
@@ -1805,7 +1805,7 @@ async def build_from_custom_shortlist(req: ShortlistBuildRequest):
 
     raw_sporty_fixtures = []
     try:
-        live_events = await EliteRolloverEngine.fetch_sportybet_today_events(max_pages=4)
+        live_events = await EliteRolloverEngine.fetch_sportybet_today_events(max_pages=15, today_only=True, force_refresh=True)
         if live_events:
             raw_sporty_fixtures = SportyBetIngestionService._normalize_events(live_events)
             logger.info(f"[Shortlist] Live feed loaded {len(raw_sporty_fixtures)} bettable fixtures directly from SportyBet Today API.")
