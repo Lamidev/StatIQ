@@ -137,6 +137,25 @@ class SportyBetIngestionService:
                     j = resp.json()
                     if j.get("bizCode") == 10000:
                         return j.get("data", {}).get("tournaments", [])
+                elif resp.status_code == 403:
+                    import shutil, subprocess, json
+                    curl_bin = shutil.which("curl")
+                    if curl_bin:
+                        cmd = [
+                            curl_bin, "-s", "-k",
+                            "-H", "User-Agent: Mozilla/5.0 (Linux; Android 13; SM-S908B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
+                            "-H", "Accept: application/json, text/plain, */*",
+                            "-H", "platform: wap",
+                            "-H", "client-country: ng",
+                            "-H", "Content-Type: application/json",
+                            "--data-raw", json.dumps(payload),
+                            endpoint
+                        ]
+                        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=8)
+                        if proc.returncode == 0 and proc.stdout:
+                            c_j = json.loads(proc.stdout)
+                            if c_j.get("bizCode") == 10000:
+                                return c_j.get("data", {}).get("tournaments", [])
             except Exception as e:
                 logger.debug(f"[SportyBetIngestion] Page fetch error (p={page_num}, today={is_today}): {e}")
             return []

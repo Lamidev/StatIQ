@@ -58,6 +58,35 @@ class SportyBetClient:
         if self._sync_client and not self._sync_client.is_closed:
             self._sync_client.close()
 
+    def _curl_exec(self, method: str, url: str, payload: Optional[dict] = None) -> Optional[Any]:
+        import shutil, subprocess, json
+        curl_bin = shutil.which("curl")
+        if not curl_bin:
+            return None
+        try:
+            cmd = [
+                curl_bin, "-s", "-k",
+                "-H", "User-Agent: Mozilla/5.0 (Linux; Android 13; SM-S908B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
+                "-H", "Accept: application/json, text/plain, */*",
+                "-H", "platform: wap",
+                "-H", f"client-country: {self.region}",
+            ]
+            if method.upper() == "POST" and payload is not None:
+                cmd.extend([
+                    "-X", "POST",
+                    "-H", "Content-Type: application/json",
+                    "--data-raw", json.dumps(payload)
+                ])
+            cmd.append(url)
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            if proc.returncode == 0 and proc.stdout:
+                j = json.loads(proc.stdout)
+                if j.get("bizCode") == 10000:
+                    return j.get("data")
+        except Exception as e:
+            logger.debug(f"[SportyBetClient] curl fallback note: {e}")
+        return None
+
     async def fetch_configurable_events(
         self,
         sport_id: str = "sr:sport:1",
@@ -93,9 +122,15 @@ class SportyBetClient:
                 if data.get("bizCode") == 10000:
                     return data.get("data", {})
             else:
-                logger.warning(f"[SportyBetClient] HTTP {resp.status_code} on {url}")
+                logger.warning(f"[SportyBetClient] HTTP {resp.status_code} on {url}, executing curl fallback...")
+                curl_data = self._curl_exec("POST", url, payload)
+                if isinstance(curl_data, dict):
+                    return curl_data
         except Exception as e:
             logger.error(f"[SportyBetClient] fetch_configurable_events error: {e}")
+            curl_data = self._curl_exec("POST", url, payload)
+            if isinstance(curl_data, dict):
+                return curl_data
         return {}
 
     async def fetch_upcoming_events_flat(
@@ -118,8 +153,21 @@ class SportyBetClient:
                         return raw_data
                     elif isinstance(raw_data, dict):
                         return raw_data.get("events", [])
+            else:
+                curl_data = self._curl_exec("GET", url)
+                if curl_data is not None:
+                    if isinstance(curl_data, list):
+                        return curl_data
+                    elif isinstance(curl_data, dict):
+                        return curl_data.get("events", [])
         except Exception as e:
             logger.error(f"[SportyBetClient] fetch_upcoming_events_flat error: {e}")
+            curl_data = self._curl_exec("GET", url)
+            if curl_data is not None:
+                if isinstance(curl_data, list):
+                    return curl_data
+                elif isinstance(curl_data, dict):
+                    return curl_data.get("events", [])
         return []
 
     async def fetch_event_details(self, event_id: str) -> Dict[str, Any]:

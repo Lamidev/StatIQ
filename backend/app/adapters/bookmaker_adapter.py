@@ -283,7 +283,7 @@ class SportyBetAdapter(BookmakerAdapter):
                 for dom in ["mobile.sportybet.com", "sports.sportybet.com"]:
                     curl_url = f"https://{dom}/api/{primary_reg}/orders/share/{code_clean}"
                     cmd = [
-                        curl_bin, "-s", "-k", "--compressed",
+                        curl_bin, "-s", "-k",
                         "-H", "User-Agent: Mozilla/5.0 (Linux; Android 13; SM-S908B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
                         "-H", "Accept: application/json, text/plain, */*",
                         "-H", "platform: wap",

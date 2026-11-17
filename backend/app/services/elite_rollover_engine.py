@@ -154,13 +154,35 @@ class EliteRolloverEngine:
                     payload["timeline"] = 3
 
             try:
-                r = client.post(url, json=payload, timeout=10.0)
+                r = client.post(url, json=payload, timeout=8.0)
                 if r.status_code == 200:
                     data = r.json()
                     if data.get("bizCode") == 10000:
                         tours = data.get("data", {}).get("tournaments", [])
                         has_more = bool(data.get("data", {}).get("moreEvents", False))
                         return page, tours, has_more
+                elif r.status_code == 403:
+                    # CloudFront WAF on cloud datacenter IPs: seamless curl fallback
+                    import shutil, subprocess, json
+                    curl_bin = shutil.which("curl")
+                    if curl_bin:
+                        cmd = [
+                            curl_bin, "-s", "-k",
+                            "-H", "User-Agent: Mozilla/5.0 (Linux; Android 13; SM-S908B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
+                            "-H", "Accept: application/json, text/plain, */*",
+                            "-H", "platform: wap",
+                            "-H", "client-country: ng",
+                            "-H", "Content-Type: application/json",
+                            "--data-raw", json.dumps(payload),
+                            url
+                        ]
+                        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=8)
+                        if proc.returncode == 0 and proc.stdout:
+                            c_j = json.loads(proc.stdout)
+                            if c_j.get("bizCode") == 10000:
+                                tours = c_j.get("data", {}).get("tournaments", [])
+                                has_more = bool(c_j.get("data", {}).get("moreEvents", False))
+                                return page, tours, has_more
             except Exception as e:
                 logger.warning(f"[EliteRollover] Page {page} fetch error: {e}")
             return page, [], False

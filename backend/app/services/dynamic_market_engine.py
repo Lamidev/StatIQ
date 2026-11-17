@@ -301,13 +301,35 @@ class DynamicMarketEngine:
                     payload["timeline"] = 3
 
             try:
-                r = client.post(url, json=payload, timeout=10.0)
+                r = client.post(url, json=payload, timeout=8.0)
                 if r.status_code == 200 and r.json().get("bizCode") == 10000:
                     data = r.json().get("data", {})
                     t_list = data.get("tournaments", [])
                     tournaments.extend(t_list)
                     if not data.get("moreEvents") or not t_list:
                         break
+                elif r.status_code == 403:
+                    import shutil, subprocess, json
+                    curl_bin = shutil.which("curl")
+                    if curl_bin:
+                        cmd = [
+                            curl_bin, "-s", "-k",
+                            "-H", "User-Agent: Mozilla/5.0 (Linux; Android 13; SM-S908B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
+                            "-H", "Accept: application/json, text/plain, */*",
+                            "-H", "platform: wap",
+                            "-H", "client-country: ng",
+                            "-H", "Content-Type: application/json",
+                            "--data-raw", json.dumps(payload),
+                            url
+                        ]
+                        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=8)
+                        if proc.returncode == 0 and proc.stdout:
+                            c_j = json.loads(proc.stdout)
+                            if c_j.get("bizCode") == 10000:
+                                t_list = c_j.get("data", {}).get("tournaments", [])
+                                tournaments.extend(t_list)
+                                if not c_j.get("data", {}).get("moreEvents") or not t_list:
+                                    break
             except Exception as e:
                 logger.warning(f"[DynamicMarket] Error fetching tournament page {page}: {e}")
 
