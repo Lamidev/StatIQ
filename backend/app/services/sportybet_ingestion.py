@@ -48,6 +48,17 @@ class SportyBetIngestionService:
         "sr:tournament:38",   # Belgian Pro League
         "sr:tournament:44",   # Austrian Bundesliga
         "sr:tournament:238",  # Portugal Primeira Liga
+        # Major International Tournaments (World Cup, Nations League, Qualifiers, AFCON, Euro)
+        "sr:tournament:23755", # UEFA Nations League
+        "sr:tournament:10",    # World Cup Qualification UEFA
+        "sr:tournament:319",   # World Cup Qualification CONMEBOL
+        "sr:tournament:321",   # World Cup Qualification AFC
+        "sr:tournament:322",   # World Cup Qualification CAF
+        "sr:tournament:1",     # FIFA World Cup
+        "sr:tournament:3",     # UEFA European Championship
+        "sr:tournament:270",   # Africa Cup of Nations
+        "sr:tournament:349",   # CONCACAF Nations League
+        "sr:tournament:49",    # Int. Friendly Games
     ]
 
     _cache_ttl: int = 300  # 5 minutes cache

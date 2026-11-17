@@ -75,6 +75,20 @@ class EliteRolloverEngine:
         "inter miami", "columbus crew", "lafc", "la galaxy", "seattle sounders", "cincinnati", "real salt lake"
     }
 
+    INTERNATIONAL_JUGGERNAUTS = {
+        "spain", "france", "germany", "england", "portugal",
+        "argentina", "brazil", "netherlands", "italy", "belgium",
+        "croatia", "uruguay", "colombia", "morocco", "japan"
+    }
+
+    INTERNATIONAL_STRONG_NATIONS = {
+        "denmark", "switzerland", "austria", "turkey", "sweden",
+        "norway", "serbia", "poland", "czech republic", "scotland",
+        "hungary", "ukraine", "greece", "wales", "slovakia",
+        "senegal", "egypt", "nigeria", "ivory coast", "algeria", "cameroon",
+        "united states", "usa", "mexico", "canada", "ecuador", "chile", "south korea", "australia"
+    }
+
     @classmethod
     async def fetch_sportybet_today_events(cls, max_pages: int = 6, today_only: bool = True) -> List[Dict[str, Any]]:
         """
@@ -242,6 +256,17 @@ class EliteRolloverEngine:
                 "uefa champions league", "uefa europa league", "uefa conference league",
                 "libertadores", "sudamericana", "afc champions league elite", "afc champions league", "concacaf champions"
             ])
+            is_international_major = (
+                any(k in comp_full for k in [
+                    "uefa nations league", "nations league",
+                    "world cup qualification", "world cup qualifying", "fifa world cup",
+                    "euro qualification", "european championship", "euro qualifying",
+                    "copa america", "africa cup of nations", "afcon", "afcon qualification",
+                    "afc asian cup", "concacaf nations league", "international friendlies"
+                ]) or ("international" in c_lower and any(k in t_lower for k in [
+                    "nations league", "world cup", "euro", "qualification", "qualifying", "copa", "afcon"
+                ]))
+            )
 
             if allow_lower_leagues:
                 # Gated Opt-In: Permitted only when user explicitly opts in for vetted mid-tier leagues to fill a thin board
@@ -311,8 +336,16 @@ class EliteRolloverEngine:
                     "venezuela", "bolivia"
                 ])
 
-            if any(t in comb_name_str for t in bad_tokens):
-                continue
+            if is_international_major:
+                intl_noise_tokens = [
+                    "srl", "simulated", "u23", "u21", "u20", "u19", "u18", "u17", 
+                    "youth", "primavera", "reserve", "reserves", "amateur", "women", "wfc", "damen", "femenino"
+                ]
+                if any(t in comb_name_str for t in intl_noise_tokens):
+                    continue
+            else:
+                if any(t in comb_name_str for t in bad_tokens):
+                    continue
 
             # Strict Scandinavian lower tier check: ban Swedish Ettan and Division 1/2
             if "ettan" in comb_name_str and "superettan" not in comb_name_str:
@@ -358,6 +391,10 @@ class EliteRolloverEngine:
                 "uefa champions league", "uefa europa league",
                 "uefa conference league", "uefa europa conference league"
             ]) or (comp_full.strip() in ["champions league", "europa league", "conference league"] and "caf" not in comp_full and "afc" not in comp_full):
+                is_tier_1 = True
+            elif is_international_major and any(k in comp_full for k in [
+                "uefa nations league", "nations league", "world cup", "fifa world cup", "euro qualification", "european championship", "copa america"
+            ]):
                 is_tier_1 = True
 
             if is_tier_1:
@@ -421,7 +458,7 @@ class EliteRolloverEngine:
                     is_tier_2 = True
                 elif "australia" in c_lower and "a-league" in t_lower:
                     is_tier_2 = True
-                elif any(k in comp_full for k in ["world cup qualification", "nations league", "euro qualification", "copa america", "afcon qualification"]):
+                elif any(k in comp_full for k in ["world cup qualification", "nations league", "euro qualification", "copa america", "afcon qualification", "concacaf nations league", "africa cup of nations", "afcon", "friendly", "friendlies"]) or is_international_major:
                     is_tier_2 = True
 
                 if is_tier_2:
@@ -499,9 +536,11 @@ class EliteRolloverEngine:
             # Juggernaut Priority Detection: Top European Giants & Strong Top Flight Clubs
             fav_team_name = h_team if is_home_fav else a_team
             dog_team_name = a_team if is_home_fav else h_team
-            fav_is_juggernaut = any(jg in fav_team_name.lower() for jg in cls.JUGGERNAUTS)
-            fav_is_strong_club = any(sc in fav_team_name.lower() for sc in cls.STRONG_TOP_FLIGHT_CLUBS)
-            dog_is_juggernaut = any(jg in dog_team_name.lower() for jg in cls.JUGGERNAUTS)
+            all_juggernauts = cls.JUGGERNAUTS | getattr(cls, "INTERNATIONAL_JUGGERNAUTS", set())
+            all_strong_clubs = cls.STRONG_TOP_FLIGHT_CLUBS | getattr(cls, "INTERNATIONAL_STRONG_NATIONS", set())
+            fav_is_juggernaut = any(jg in fav_team_name.lower() for jg in all_juggernauts)
+            fav_is_strong_club = any(sc in fav_team_name.lower() for sc in all_strong_clubs)
+            dog_is_juggernaut = any(jg in dog_team_name.lower() for jg in all_juggernauts)
             is_heavyweight_derby = fav_is_juggernaut and dog_is_juggernaut
             juggernaut_bonus = 45.0 if (fav_is_juggernaut and dominance_ratio >= 1.45 and not is_heavyweight_derby) else (25.0 if fav_is_strong_club and dominance_ratio >= 1.28 else 0.0)
 
@@ -670,7 +709,7 @@ class EliteRolloverEngine:
                     opp_team = a_team if is_home_fav else h_team
 
                     # Rule: Never back an underdog to score against an elite juggernaut defense!
-                    opp_is_juggernaut = any(jg in opp_team.lower() for jg in cls.JUGGERNAUTS)
+                    opp_is_juggernaut = any(jg in opp_team.lower() for jg in all_juggernauts)
                     if opp_is_juggernaut and not fav_is_juggernaut:
                         continue
 
@@ -1011,8 +1050,9 @@ class EliteRolloverEngine:
                                 })
 
         # Tag heavyweight derbies across candidates
+        all_jg = cls.JUGGERNAUTS | getattr(cls, "INTERNATIONAL_JUGGERNAUTS", set())
         for c in candidates:
-            c["is_heavyweight_derby"] = any(jg in str(c.get("home_team", "")).lower() for jg in cls.JUGGERNAUTS) and any(jg in str(c.get("away_team", "")).lower() for jg in cls.JUGGERNAUTS)
+            c["is_heavyweight_derby"] = any(jg in str(c.get("home_team", "")).lower() for jg in all_jg) and any(jg in str(c.get("away_team", "")).lower() for jg in all_jg)
 
         # Sort candidates deterministically by quality_score descending (ELITE FIRST)
         candidates.sort(key=lambda x: (x["quality_score"], x["model_probability"]), reverse=True)

@@ -145,7 +145,7 @@ class SportyBetAdapter(BookmakerAdapter):
     - Code Generator: POST https://www.sportybet.com/api/{country}/orders/share
     """
     BASE_URL = "https://mobile.sportybet.com/api"
-    DOMAINS = ["mobile.sportybet.com", "sports.sportybet.com", "www.sportybet.com"]
+    DOMAINS = ["mobile.sportybet.com", "sports.sportybet.com"]
     HEADERS = {
         "User-Agent": "Mozilla/5.0 (Linux; Android 13; SM-S908B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
         "Accept": "application/json, text/plain, */*",
@@ -240,9 +240,9 @@ class SportyBetAdapter(BookmakerAdapter):
                 }
             ]
 
-        domains = getattr(self, "DOMAINS", ["mobile.sportybet.com", "sports.sportybet.com", "www.sportybet.com"])
+        domains = getattr(self, "DOMAINS", ["mobile.sportybet.com", "sports.sportybet.com"])
 
-        # Step 1: Query Primary Region across resilient mobile & desktop domains
+        # Step 1: Query Primary Region across resilient mobile & sports endpoints
         for dom in domains:
             profiles = _get_profiles(primary_reg, dom)
             for prof in profiles:
@@ -273,7 +273,38 @@ class SportyBetAdapter(BookmakerAdapter):
             if data:
                 break
 
-        # Step 2: Fallback across other regions if primary region returned nothing
+        # Step 2: Native curl subprocess fallback (bypasses CloudFront TLS Bot Control on Linux/Cloud ASNs)
+        if not data:
+            import shutil
+            import subprocess
+            import json as _json_parser
+            curl_bin = shutil.which("curl")
+            if curl_bin:
+                for dom in ["mobile.sportybet.com", "sports.sportybet.com"]:
+                    curl_url = f"https://{dom}/api/{primary_reg}/orders/share/{code_clean}"
+                    cmd = [
+                        curl_bin, "-s", "-k", "--compressed",
+                        "-H", "User-Agent: Mozilla/5.0 (Linux; Android 13; SM-S908B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
+                        "-H", "Accept: application/json, text/plain, */*",
+                        "-H", "platform: wap",
+                        "-H", f"client-country: {primary_reg}",
+                        curl_url
+                    ]
+                    try:
+                        proc = subprocess.run(cmd, capture_output=True, timeout=8.0)
+                        if proc.returncode == 0 and proc.stdout:
+                            res_json = _json_parser.loads(proc.stdout.decode('utf-8', errors='ignore'))
+                            if res_json and res_json.get("bizCode") == 10000:
+                                data = res_json
+                                matched_region = primary_reg
+                                logger.info(f"[SportyBetAdapter] Native curl successfully fetched {code_clean} from {dom}.")
+                                break
+                    except Exception as c_err:
+                        logger.debug(f"[SportyBetAdapter] Native curl fallback note on {dom}: {c_err}")
+                    if data:
+                        break
+
+        # Step 3: Fallback across other regions if primary region returned nothing
         if not data:
             for reg in other_regions:
                 for dom in ["mobile.sportybet.com", "sports.sportybet.com"]:
@@ -297,12 +328,12 @@ class SportyBetAdapter(BookmakerAdapter):
                 if data:
                     break
 
-        # Step 3: Emergency urllib fallback if httpx encountered environmental TLS blocks
+        # Step 4: Emergency urllib fallback if httpx encountered environmental TLS blocks
         if not data:
             import urllib.request
             import ssl
             import json
-            for dom in ["mobile.sportybet.com", "sports.sportybet.com", "www.sportybet.com"]:
+            for dom in ["mobile.sportybet.com", "sports.sportybet.com"]:
                 em_headers = _get_profiles(primary_reg, dom)[0]
                 em_url = f"https://{dom}/api/{primary_reg}/orders/share/{code_clean}"
                 try:

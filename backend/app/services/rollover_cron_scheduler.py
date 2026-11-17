@@ -270,6 +270,21 @@ class RolloverCronScheduler:
                         else:
                             # True booking failure with ZERO Telegram dispatches: wait before retrying to prevent rapid loops
                             logger.warning(f"[RolloverScheduler] Scheduled run did not succeed ({trio_res.get('status')}: {trio_res.get('message')}). Retrying in 5 minutes.")
+                            if cfg.get("last_run_date") != today_str:
+                                cfg["last_run_date"] = today_str
+                                self.save_config(cfg)
+                                try:
+                                    from app.services.rollover_telegram_notifier import RolloverTelegramNotifier
+                                    reason_msg = trio_res.get("message") or "Limited high-probability fixtures matching strict safety criteria"
+                                    bulletin = (
+                                        f"📅 <b>StatIQ Daily Intelligence — {today_str}</b>\n\n"
+                                        f"⏸️ <b>Daily Automation Rested</b>\n"
+                                        f"Reason: <i>{reason_msg}</i>\n\n"
+                                        f"💡 Capital preservation rule applied. Next automated scan tomorrow at 10:00 AM WAT."
+                                    )
+                                    RolloverTelegramNotifier.send_message(bulletin)
+                                except Exception as n_err:
+                                    logger.warning(f"[RolloverScheduler] Could not send rest bulletin: {n_err}")
                             time.sleep(300)
 
             except Exception as e:
