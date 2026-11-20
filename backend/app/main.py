@@ -110,6 +110,14 @@ def start_background_ticket_sync_worker():
     basketball_scheduler.start()
     print(f"[BasketballScheduler] Daily 09:00 AM daemon initialized (running={basketball_scheduler._running})")
 
+    # Start StatIQ 10:15 AM WAT Goal Kicks 2.0x Automation Cron Daemon
+    try:
+        from app.services.goal_kicks_cron_scheduler import goal_kicks_scheduler
+        goal_kicks_scheduler.start()
+        print(f"[GoalKicksScheduler] Daily 10:15 AM daemon initialized (running={goal_kicks_scheduler._running})")
+    except Exception as e:
+        print(f"[GoalKicksScheduler] Failed to initialize Goal Kicks scheduler: {e}")
+
     # Start StatIQ Autonomous Telegram Bot Remote Controller
     try:
         from app.services.telegram_bot_service import statiq_telegram_bot

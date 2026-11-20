@@ -279,10 +279,11 @@ class StatIQTelegramBot:
             "• <code>/ucl 25</code> — Midweek Champions League / European Cups Slip\n\n"
             "🚀 <b>On-Demand Rollover:</b>\n"
             "• <code>/rollover</code> — Instant 1.50x Banker Rollover Slip (2–3 Legs, Zero 1-0 traps)\n\n"
-            "🥅 <b>Dedicated Goal Kicks Engine (Under Cushions):</b>\n"
-            "• <code>/goalkicks 10</code> or <code>/gk 10</code> — <b>10.0x Dedicated 1st Half Under 8.5/7.5 Goal Kicks Slip</b>\n"
-            "• <code>/goalkicks 5</code> — 5.0x Tactical Goal Kicks Slip\n"
-            "• <i>Natural Language:</i> Text <i>'Book me a 10 odds goal kick ticket with 1st half under 8.5'</i>\n\n"
+            "🥅 <b>Dedicated Goal Kicks 2.0x Rollover Engine:</b>\n"
+            "• <code>/goalkicks under</code> or <code>/gk under</code> — <b>2.0x FT Goal Kicks UNDER (Fortress)</b>\n"
+            "• <code>/goalkicks over</code> or <code>/gk over</code> — <b>2.0x FT Goal Kicks OVER (Floor)</b>\n"
+            "• <code>/goalkicks</code> or <code>/gk</code> — <b>Daily 2.0x Goal Kicks Suite (Both Slips)</b>\n"
+            "• <code>/goalkicks 5</code> or <code>/gk 10</code> — Custom Multiplier Goal Kicks Slip\n\n"
             "⚽ <b>Generate by Match Count (1 or 2 Zero-Overlap Slips):</b>\n"
             "• <code>/games 10</code> — Top 10 High-Confidence Matches (1 Slip)\n"
             "• <code>/games 10 2 tickets</code> — <b>2 Variant Slips of 10 Matches Each</b>\n"
@@ -1302,15 +1303,28 @@ class StatIQTelegramBot:
     def handle_goalkicks_command(
         self,
         chat_id: int | str,
-        target_odds: float = 10.0,
-        prefer_line: str = "1H",
+        target_odds: float = 2.0,
+        prefer_line: str = "UNDER",
         time_horizon: str = "TODAY",
-        allow_partial: bool = False
+        allow_partial: bool = True
     ):
         """Generates a dedicated Goal Kicks ticket targeting specified odds and directed time horizon."""
-        target_odds = max(2.0, min(100.0, float(target_odds or 10.0)))
+        prefer_line_norm = (prefer_line or "UNDER").upper()
+        if "OVER" in prefer_line_norm:
+            mode = "OVER"
+            line_desc = "2.0x FT Goal Kicks OVER (Floor)"
+        elif "1H" in prefer_line_norm:
+            mode = "1H"
+            line_desc = "1st Half Under 8.5/7.5 Goal Kicks"
+        elif "DUO" in prefer_line_norm or "BOTH" in prefer_line_norm:
+            mode = "DUO"
+            line_desc = "Daily 2.0x Goal Kicks Suite (UNDER & OVER)"
+        else:
+            mode = "UNDER"
+            line_desc = "2.0x FT Goal Kicks UNDER (Fortress)"
+
+        target_odds = max(1.5, min(100.0, float(target_odds or 2.0)))
         _, _, _, horizon_desc = TimeHorizonService.get_horizon_bounds(time_horizon)
-        line_desc = "1st Half Under 8.5/7.5 Goal Kicks" if prefer_line == "1H" else ("Full Time Under Goal Kicks" if prefer_line == "FT" else "Goal Kicks Unders")
         self.send_chat_action(chat_id, "typing")
         self.send_message(
             chat_id,
@@ -1319,14 +1333,35 @@ class StatIQTelegramBot:
 
         try:
             from app.services.goal_kicks_service import goal_kicks_service
+            from app.services.rollover_telegram_notifier import RolloverTelegramNotifier
 
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             try:
+                if mode == "DUO":
+                    duo_res = loop.run_until_complete(
+                        goal_kicks_service.build_daily_goal_kicks_duo(
+                            time_horizon=time_horizon,
+                            target_odds=target_odds
+                        )
+                    )
+                    u = duo_res.get("under_ticket", {})
+                    o = duo_res.get("over_ticket", {})
+                    dispatched = False
+                    if u.get("status") == "SUCCESS":
+                        RolloverTelegramNotifier.dispatch_goal_kicks_slip(u, mode_label="FT UNDER", target_chat_id=str(chat_id))
+                        dispatched = True
+                    if o.get("status") == "SUCCESS":
+                        RolloverTelegramNotifier.dispatch_goal_kicks_slip(o, mode_label="FT OVER", target_chat_id=str(chat_id))
+                        dispatched = True
+                    if not dispatched:
+                        self.send_message(chat_id, f"⚠️ <b>Notice:</b> No active matches currently offering verified Goal Kick markets today.")
+                    return
+
                 ticket_res = loop.run_until_complete(
                     goal_kicks_service.build_goal_kicks_ticket(
                         target_odds=target_odds,
-                        prefer_line=prefer_line,
+                        mode=mode,
                         time_horizon=time_horizon,
                         allow_partial=allow_partial
                     )
@@ -1334,50 +1369,16 @@ class StatIQTelegramBot:
             finally:
                 loop.close()
 
-            if not ticket_res:
-                self.send_message(chat_id, "⚠️ <b>Notice:</b> No active matches offering Goal Kick markets.")
+            if not ticket_res or ticket_res.get("status") != "SUCCESS":
+                msg = ticket_res.get("message") if ticket_res else "No active matches offering Goal Kick markets."
+                self.send_message(chat_id, f"⚠️ <b>Notice:</b> {msg}")
                 return
 
-            # User Decision Gate: Under-Capacity Confirmation Card
-            if ticket_res.get("status") == "INSUFFICIENT_MULTIPLIER":
-                self.render_under_capacity_decision_card(chat_id, ticket_res)
-                return
+            RolloverTelegramNotifier.dispatch_goal_kicks_slip(ticket_res, mode_label=mode, target_chat_id=str(chat_id))
 
-            if ticket_res.get("status") != "SUCCESS":
-                msg = ticket_res.get("message") or "No active matches offering Goal Kick markets."
-                kb = None
-                if time_horizon == "TODAY":
-                    kb = {
-                        "inline_keyboard": [
-                            [
-                                {"text": "⚡ Check Today + Tomorrow", "callback_data": f"wiz:run:gk:{target_odds}:TODAY_AND_TOMORROW"},
-                                {"text": "🔮 Check Tomorrow Only", "callback_data": f"wiz:run:gk:{target_odds}:TOMORROW"}
-                            ]
-                        ]
-                    }
-                self.send_message(chat_id, f"⚠️ <b>Notice:</b> {msg}", reply_markup=kb)
-                return
-
-            picks = ticket_res.get("picks", [])
-            code = ticket_res.get("booking_code")
-            share_url = ticket_res.get("share_url")
-            actual_odds = ticket_res.get("actual_odds", target_odds)
-            conf = ticket_res.get("confidence_score", 75.0)
-            scout_analysis = ticket_res.get("scout_analysis")
-
-            self._dispatch_ticket_message(
-                chat_id=chat_id,
-                title=f"🎯 StatIQ {actual_odds:.2f}x Goal Kicks Slip ({horizon_desc})",
-                booking_code=code,
-                share_url=share_url,
-                total_odds=actual_odds,
-                confidence=conf,
-                picks=picks,
-                extra_note="Mono-Market Discipline: 100% Goal Kicks Under Cushions (Odds: 1.30–1.55)"
-            )
-
-            if scout_analysis:
-                self.send_message(chat_id, scout_analysis)
+        except Exception as e:
+            logger.error(f"[TelegramBot] Error generating Goal Kicks ticket: {e}")
+            self.send_message(chat_id, f"❌ <b>Error:</b> Failed to generate Goal Kicks ticket ({_esc(str(e))}).")
         except Exception as e:
             logger.error(f"[TelegramBot] Goal Kicks build error: {e}", exc_info=True)
             self.send_message(chat_id, f"❌ <b>Error:</b> Failed to generate Goal Kicks slip ({_esc(str(e))}).")
@@ -3093,12 +3094,26 @@ class StatIQTelegramBot:
             self.handle_hybrid_command(chat_id, target_odds=val, time_horizon=horizon)
             return
 
-        m_gk = re.match(r"^(?:/)?(?:gk|goalkick|goalkicks)\s*(\d+(?:\.\d+)?)(.*)$", low_text)
+        m_gk = re.match(r"^(?:/)?(?:gk|goalkick|goalkicks)(?:\s+(.*))?$", low_text)
         if m_gk:
-            val = float(m_gk.group(1))
-            rest = m_gk.group(2).strip()
-            prefer = "FT" if ("ft" in rest or "full" in rest) else ("MIXED" if "mixed" in rest else "1H")
-            horizon = TimeHorizonService.normalize_horizon(rest)
+            args_str = (m_gk.group(1) or "").strip()
+            val = 2.0
+            val_match = re.search(r"(\d+(?:\.\d+)?)", args_str)
+            if val_match:
+                val = float(val_match.group(1))
+
+            if "over" in args_str:
+                prefer = "OVER"
+            elif "under" in args_str:
+                prefer = "UNDER"
+            elif "1h" in args_str:
+                prefer = "1H"
+            elif not args_str or "both" in args_str or "duo" in args_str:
+                prefer = "DUO"
+            else:
+                prefer = "UNDER"
+
+            horizon = TimeHorizonService.normalize_horizon(args_str)
             self.handle_goalkicks_command(chat_id, target_odds=val, prefer_line=prefer, time_horizon=horizon)
             return
 
@@ -3200,14 +3215,27 @@ class StatIQTelegramBot:
             self.handle_odds_command(chat_id, target_odds=val, num_tickets=1, time_horizon=horizon)
             return
 
-        # Dedicated Goal Kicks Accumulator: /goalkicks [odds] [horizon], /gk [odds] [horizon]
-        gk_match = re.match(r"^/(?:goalkicks|goalkick|gk|kicks)\s*(\d+\.?\d*)?(.*)", text, re.IGNORECASE)
+        # Dedicated Goal Kicks Accumulator: /goalkicks [under|over|odds] [horizon], /gk [under|over|odds]
+        gk_match = re.match(r"^/(?:goalkicks|goalkick|gk|kicks)(?:\s+(.*))?$", text, re.IGNORECASE)
         if gk_match:
-            val_str = gk_match.group(1)
-            val = float(val_str) if val_str else 10.0
-            rest = (gk_match.group(2) or "").lower()
-            prefer = "FT" if ("ft" in rest or "full" in rest) else ("MIXED" if "mixed" in rest else "1H")
-            horizon = TimeHorizonService.normalize_horizon(rest)
+            args_str = (gk_match.group(1) or "").strip().lower()
+            val = 2.0
+            val_match = re.search(r"(\d+(?:\.\d+)?)", args_str)
+            if val_match:
+                val = float(val_match.group(1))
+
+            if "over" in args_str:
+                prefer = "OVER"
+            elif "under" in args_str:
+                prefer = "UNDER"
+            elif "1h" in args_str:
+                prefer = "1H"
+            elif not args_str or "both" in args_str or "duo" in args_str:
+                prefer = "DUO"
+            else:
+                prefer = "UNDER"
+
+            horizon = TimeHorizonService.normalize_horizon(args_str)
             self.handle_goalkicks_command(chat_id, target_odds=val, prefer_line=prefer, time_horizon=horizon)
             return
 

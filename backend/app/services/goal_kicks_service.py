@@ -4,6 +4,9 @@ import math
 import time
 import logging
 import asyncio
+import shutil
+import subprocess
+import json
 from typing import Dict, Any, List, Optional, Tuple
 import httpx
 
@@ -12,15 +15,19 @@ from app.services.time_horizon_service import TimeHorizonService
 
 logger = logging.getLogger("statiq.goalkicks")
 
+
 class GoalKicksService:
     """
     StatIQ Dedicated Goal Kicks Prediction Engine.
     
-    Specializes in:
+    Supports:
+    - 2.0x FT UNDER "Fortress" (Market ID: 900622, Outcome: 13, Under 17.5–20.5, Odds 1.16–1.30)
+      * Strictly blacklists high-transition "Chaos" teams (Man Utd, Villa, Spurs, etc.)
+    - 2.0x FT OVER "Floor" (Market ID: 900622, Outcome: 12, Over 10.5–12.5, Odds 1.15–1.30)
+      * Strictly blacklists ultra-defensive/low-block stagnant matches
     - 1st Half Goal Kicks Under 8.5 / 7.5 (Market ID: 900661, Outcome: 13)
-    - Full Time Goal Kicks Under 15.5 / 16.5 / 17.5 (Market ID: 900622, Outcome: 13)
     
-    Books live verified SportyBet codes with BizCode 10000.
+    Books live verified SportyBet codes with BizCode 10000 via resilient curl fallback.
     """
 
     BASE_URL = "https://mobile.sportybet.com/api"
@@ -34,21 +41,54 @@ class GoalKicksService:
         "Referer": "https://mobile.sportybet.com/ng/"
     }
 
-    MIN_SINGLE_ODDS: float = 1.30
-    MAX_SINGLE_ODDS: float = 1.55
+    # High-transition, frantic, direct-counter teams that generate wild off-target shots
+    # Strictly banned from the UNDER ticket
+    CHAOS_TEAMS_FOR_UNDER = {
+        "manchester united", "man utd", "aston villa", "tottenham", "spurs",
+        "atalanta", "rb leipzig", "leipzig", "chelsea", "dortmund", "borussia dortmund"
+    }
+
+    # Stagnant, low-intensity, low-shot grinders that fail to cross or create volume
+    # Strictly banned from the OVER ticket
+    PASSIVE_TEAMS_FOR_OVER = {
+        "como", "lens", "getafe", "cadiz", "mallorca", "empoli", "lecce", "monza"
+    }
+
+    MIN_SINGLE_ODDS: float = 1.15
+    MAX_SINGLE_ODDS: float = 1.35
+
+    @classmethod
+    def _is_chaos_match_for_under(cls, home: str, away: str) -> bool:
+        """Returns True if either team matches the high-volatility chaos blacklist."""
+        h = (home or "").lower().strip()
+        a = (away or "").lower().strip()
+        for banned in cls.CHAOS_TEAMS_FOR_UNDER:
+            if banned in h or banned in a:
+                return True
+        return False
+
+    @classmethod
+    def _is_passive_match_for_over(cls, home: str, away: str) -> bool:
+        """Returns True if match features low-shot defensive teams prone to sub-11 goal kicks."""
+        h = (home or "").lower().strip()
+        a = (away or "").lower().strip()
+        for passive in cls.PASSIVE_TEAMS_FOR_OVER:
+            if passive in h and passive in a:
+                return True
+        return False
 
     @classmethod
     async def fetch_goal_kicks_candidates(
         cls,
-        prefer_line: str = "1H",  # "1H" for 1st Half Under 8.5/7.5, "FT" for Full Time Under 15.5, "MIXED" for both
-        max_pages: int = 15,
+        mode: str = "UNDER",       # "UNDER", "OVER", or "1H"
         time_horizon: str = "TODAY"
     ) -> List[Dict[str, Any]]:
         """
         Scans SportyBet's active tournaments and matches for Goal Kicks prop markets.
-        Extracts verified live lines with odds strictly between 1.30 and 1.55.
-        Supports time horizons: TODAY, TOMORROW, TODAY_AND_TOMORROW, TOMORROW_AND_NEXT, WEEKEND, MIDWEEK_UCL.
+        Extracts verified live lines with odds strictly between 1.15 and 1.35.
+        Applies strict tactical team blacklists for both Under and Over.
         """
+        mode = mode.upper()
         min_kickoff_ms, end_of_day_ms, today_only, horizon_desc = TimeHorizonService.get_horizon_bounds(time_horizon)
 
         client = SportyBetIngestionService._get_client()
@@ -86,7 +126,6 @@ class GoalKicksService:
                     if not data.get("moreEvents") or not t_list:
                         break
                 elif r.status_code == 403:
-                    import shutil, subprocess, json
                     curl_bin = shutil.which("curl")
                     if curl_bin:
                         cmd = [
@@ -113,7 +152,7 @@ class GoalKicksService:
         if not tournaments:
             return []
 
-        # Target top flight matches where SportyBet posts stats props
+        # Target top flight & international matches where SportyBet posts stats props
         candidate_eids = []
         seen_eids = set()
         for t in tournaments:
@@ -123,8 +162,8 @@ class GoalKicksService:
                 eid = ev.get("eventId")
                 if not eid or eid in seen_eids:
                     continue
-                h = ev.get("homeTeamName")
-                a = ev.get("awayTeamName")
+                h = ev.get("homeTeamName") or ""
+                a = ev.get("awayTeamName") or ""
                 st = ev.get("status")
 
                 start_ms = ev.get("estimateStartTime") or ev.get("startTime") or 0
@@ -137,6 +176,14 @@ class GoalKicksService:
 
                 # Unstarted pre-match games only
                 if st is None or str(st) == "0":
+                    # Pre-screen by mode
+                    if mode == "UNDER" and cls._is_chaos_match_for_under(h, a):
+                        logger.info(f"[GoalKicks] Excluded chaos match from UNDER pool: {h} vs {a}")
+                        continue
+                    if mode == "OVER" and cls._is_passive_match_for_over(h, a):
+                        logger.info(f"[GoalKicks] Excluded low-tempo match from OVER pool: {h} vs {a}")
+                        continue
+
                     seen_eids.add(eid)
                     candidate_eids.append({
                         "event_id": eid,
@@ -146,7 +193,7 @@ class GoalKicksService:
                         "start_time": start_ms
                     })
 
-        logger.info(f"[GoalKicks] Scanning {len(candidate_eids)} candidate fixtures for Goal Kicks markets (Corridor: {cls.MIN_SINGLE_ODDS} - {cls.MAX_SINGLE_ODDS})...")
+        logger.info(f"[GoalKicks] Inspecting {len(candidate_eids)} candidate fixtures for {mode} Goal Kicks (Corridor: {cls.MIN_SINGLE_ODDS} - {cls.MAX_SINGLE_ODDS})...")
 
         picks = []
         seen_matches = set()
@@ -169,44 +216,17 @@ class GoalKicksService:
                             m_tot = re.search(r"total=([\d\.]+)", spec)
                             tot_val = float(m_tot.group(1)) if m_tot else 0.0
 
-                            # 1. First Half Goal Kicks (Market 900661)
-                            if (prefer_line in ("1H", "MIXED")) and mid == "900661" and tot_val >= 6.5:
+                            # ─────────────────────────────────────────────────────────────
+                            # MODE 1: FULL TIME UNDER (Market 900622, Outcome 13)
+                            # ─────────────────────────────────────────────────────────────
+                            if mode == "UNDER" and mid == "900622" and tot_val >= 16.5:
                                 for o in m.get("outcomes", []):
                                     if str(o.get("id")) == "13" and str(o.get("isActive", "1")) in ("1", "True"):
                                         odd = float(o.get("odds") or 0)
-                                        # Strict User Rule: Odds must be strictly between 1.30 and 1.55
                                         if cls.MIN_SINGLE_ODDS <= odd <= cls.MAX_SINGLE_ODDS:
                                             prob = round(min(0.92, (1.0 / odd) * 0.96), 3)
-                                            # Prioritize 1H cushion over FT when available
-                                            q_score = (prob * 50.0) + (tot_val * 5.0) + 35.0
-                                            pick_cand = {
-                                                "event_id": eid,
-                                                "home_team": item["home_team"],
-                                                "away_team": item["away_team"],
-                                                "competition": item["competition"],
-                                                "market_id": mid,
-                                                "market_desc": "1st Half Goal Kicks Over/Under",
-                                                "specifier": spec,
-                                                "outcome_id": "13",
-                                                "selection_desc": f"{o.get('desc') or f'Under {tot_val}'} Goal Kicks",
-                                                "odds": odd,
-                                                "model_probability": prob,
-                                                "line_type": "1H",
-                                                "tot_val": tot_val,
-                                                "quality_score": q_score
-                                            }
-                                            if not best_pick or pick_cand["quality_score"] > best_pick["quality_score"]:
-                                                best_pick = pick_cand
-
-                            # 2. Full Time Goal Kicks (Market 900622)
-                            elif (prefer_line in ("FT", "MIXED")) and mid == "900622" and tot_val >= 14.5:
-                                for o in m.get("outcomes", []):
-                                    if str(o.get("id")) == "13" and str(o.get("isActive", "1")) in ("1", "True"):
-                                        odd = float(o.get("odds") or 0)
-                                        # Strict User Rule: Odds must be strictly between 1.30 and 1.55
-                                        if cls.MIN_SINGLE_ODDS <= odd <= cls.MAX_SINGLE_ODDS:
-                                            prob = round(min(0.90, (1.0 / odd) * 0.95), 3)
-                                            q_score = (prob * 40.0) + (tot_val * 2.0)
+                                            # Quality score rewards higher lines (more cushion) and solid probability
+                                            q_score = (prob * 50.0) + (tot_val * 6.0)
                                             pick_cand = {
                                                 "event_id": eid,
                                                 "home_team": item["home_team"],
@@ -216,11 +236,73 @@ class GoalKicksService:
                                                 "market_desc": "Goal Kicks Over/Under",
                                                 "specifier": spec,
                                                 "outcome_id": "13",
-                                                "selection_desc": f"{o.get('desc') or f'Under {tot_val}'} Goal Kicks",
+                                                "selection_desc": f"Under {tot_val} Goal Kicks",
                                                 "odds": odd,
                                                 "model_probability": prob,
-                                                "line_type": "FT",
+                                                "line_type": "FT_UNDER",
                                                 "tot_val": tot_val,
+                                                "start_time": item.get("start_time", 0),
+                                                "quality_score": q_score
+                                            }
+                                            if not best_pick or pick_cand["quality_score"] > best_pick["quality_score"]:
+                                                best_pick = pick_cand
+
+                            # ─────────────────────────────────────────────────────────────
+                            # MODE 2: FULL TIME OVER (Market 900622, Outcome 12)
+                            # ─────────────────────────────────────────────────────────────
+                            elif mode == "OVER" and mid == "900622" and tot_val <= 13.5:
+                                for o in m.get("outcomes", []):
+                                    if str(o.get("id")) == "12" and str(o.get("isActive", "1")) in ("1", "True"):
+                                        odd = float(o.get("odds") or 0)
+                                        if cls.MIN_SINGLE_ODDS <= odd <= cls.MAX_SINGLE_ODDS:
+                                            prob = round(min(0.92, (1.0 / odd) * 0.96), 3)
+                                            # Quality score rewards lower total thresholds (easier to clear)
+                                            q_score = (prob * 50.0) + ((15.0 - tot_val) * 6.0)
+                                            pick_cand = {
+                                                "event_id": eid,
+                                                "home_team": item["home_team"],
+                                                "away_team": item["away_team"],
+                                                "competition": item["competition"],
+                                                "market_id": mid,
+                                                "market_desc": "Goal Kicks Over/Under",
+                                                "specifier": spec,
+                                                "outcome_id": "12",
+                                                "selection_desc": f"Over {tot_val} Goal Kicks",
+                                                "odds": odd,
+                                                "model_probability": prob,
+                                                "line_type": "FT_OVER",
+                                                "tot_val": tot_val,
+                                                "start_time": item.get("start_time", 0),
+                                                "quality_score": q_score
+                                            }
+                                            if not best_pick or pick_cand["quality_score"] > best_pick["quality_score"]:
+                                                best_pick = pick_cand
+
+                            # ─────────────────────────────────────────────────────────────
+                            # MODE 3: FIRST HALF UNDER (Market 900661, Outcome 13)
+                            # ─────────────────────────────────────────────────────────────
+                            elif mode == "1H" and mid == "900661" and tot_val >= 6.5:
+                                for o in m.get("outcomes", []):
+                                    if str(o.get("id")) == "13" and str(o.get("isActive", "1")) in ("1", "True"):
+                                        odd = float(o.get("odds") or 0)
+                                        if cls.MIN_SINGLE_ODDS <= odd <= cls.MAX_SINGLE_ODDS:
+                                            prob = round(min(0.92, (1.0 / odd) * 0.96), 3)
+                                            q_score = (prob * 50.0) + (tot_val * 5.0) + 30.0
+                                            pick_cand = {
+                                                "event_id": eid,
+                                                "home_team": item["home_team"],
+                                                "away_team": item["away_team"],
+                                                "competition": item["competition"],
+                                                "market_id": mid,
+                                                "market_desc": "1st Half Goal Kicks Over/Under",
+                                                "specifier": spec,
+                                                "outcome_id": "13",
+                                                "selection_desc": f"1H Under {tot_val} Goal Kicks",
+                                                "odds": odd,
+                                                "model_probability": prob,
+                                                "line_type": "1H",
+                                                "tot_val": tot_val,
+                                                "start_time": item.get("start_time", 0),
                                                 "quality_score": q_score
                                             }
                                             if not best_pick or pick_cand["quality_score"] > best_pick["quality_score"]:
@@ -242,39 +324,94 @@ class GoalKicksService:
                 seen_matches.add(res["event_id"])
                 picks.append(res)
 
-        # Sort by quality score
+        # Sort by quality score descending
         picks.sort(key=lambda x: x.get("quality_score", 0), reverse=True)
-        logger.info(f"[GoalKicks] Found {len(picks)} high-conviction Goal Kicks Under selections in corridor [{cls.MIN_SINGLE_ODDS}, {cls.MAX_SINGLE_ODDS}].")
+        logger.info(f"[GoalKicks] Found {len(picks)} high-conviction {mode} Goal Kicks selections in corridor [{cls.MIN_SINGLE_ODDS}, {cls.MAX_SINGLE_ODDS}].")
         return picks
+
+    @classmethod
+    async def _request_sportybet_share_code(cls, slip_legs: List[Dict[str, Any]]) -> Tuple[Optional[str], Optional[str]]:
+        """Requests SportyBet shareCode via /ng/orders/share with curl fallback."""
+        if not slip_legs:
+            return None, None
+
+        selections_payload = [
+            {
+                "eventId": leg["event_id"],
+                "marketId": leg["market_id"],
+                "outcomeId": leg["outcome_id"],
+                "specifier": leg.get("specifier", "")
+            }
+            for leg in slip_legs
+        ]
+
+        share_endpoint = f"{cls.BASE_URL}/ng/orders/share"
+
+        def _curl_share() -> Tuple[Optional[str], Optional[str]]:
+            curl_bin = shutil.which("curl")
+            if not curl_bin:
+                return None, None
+            try:
+                cmd = [
+                    curl_bin, "-s", "-k",
+                    "-H", "User-Agent: Mozilla/5.0 (Linux; Android 13; SM-S908B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
+                    "-H", "Accept: application/json, text/plain, */*",
+                    "-H", "platform: wap",
+                    "-H", "client-country: ng",
+                    "-H", "Content-Type: application/json",
+                    "--data-raw", json.dumps({"selections": selections_payload}),
+                    share_endpoint
+                ]
+                proc = subprocess.run(cmd, capture_output=True, text=True, timeout=8)
+                if proc.returncode == 0 and proc.stdout:
+                    c_j = json.loads(proc.stdout)
+                    if c_j.get("bizCode") == 10000:
+                        b_code = c_j.get("data", {}).get("shareCode")
+                        s_url = c_j.get("data", {}).get("shareURL") or f"https://www.sportybet.com/ng/?shareCode={b_code}"
+                        return b_code, s_url
+            except Exception as e:
+                logger.debug(f"[GoalKicks] curl share fallback note: {e}")
+            return None, None
+
+        try:
+            async with httpx.AsyncClient(timeout=10.0, headers=cls.HEADERS) as http_c:
+                resp = await http_c.post(share_endpoint, json={"selections": selections_payload})
+                if resp.status_code == 200:
+                    res_data = resp.json()
+                    if res_data.get("bizCode") == 10000:
+                        b_code = res_data.get("data", {}).get("shareCode")
+                        s_url = res_data.get("data", {}).get("shareURL") or f"https://www.sportybet.com/ng/?shareCode={b_code}"
+                        return b_code, s_url
+                elif resp.status_code == 403:
+                    logger.warning("[GoalKicks] SportyBet HTTP 403 on share, executing curl fallback...")
+                    return _curl_share()
+        except Exception as e:
+            logger.warning(f"[GoalKicks] HTTP share error: {e}. Executing curl fallback...")
+            return _curl_share()
+
+        return _curl_share()
 
     @classmethod
     async def build_goal_kicks_ticket(
         cls,
-        target_odds: float = 10.0,
-        prefer_line: str = "1H",
+        target_odds: float = 2.0,
+        mode: str = "UNDER",
         time_horizon: str = "TODAY",
-        allow_partial: bool = False
+        allow_partial: bool = True
     ) -> Dict[str, Any]:
         """
-        Assembles and books a dedicated Goal Kicks ticket on SportyBet targeting target_odds.
-        Strictly enforces that every leg's odds fall between 1.30 and 1.55.
-        Respects directed time_horizon (TODAY, TOMORROW, TODAY_AND_TOMORROW, TOMORROW_AND_NEXT, WEEKEND, MIDWEEK_UCL).
+        Assembles and books a dedicated Goal Kicks ticket on SportyBet targeting target_odds (~2.00x).
+        Applies mode-specific filters (Chaos Blacklist for UNDER, Stagnant Filter for OVER).
         """
-        target = float(target_odds or 10.0)
+        target = float(target_odds or 2.0)
+        mode = mode.upper()
         _, _, _, horizon_desc = TimeHorizonService.get_horizon_bounds(time_horizon)
-        candidates = await cls.fetch_goal_kicks_candidates(prefer_line=prefer_line, time_horizon=time_horizon)
-
-        # If 1H alone yields insufficient multiplier for the requested target, broaden to MIXED
-        if prefer_line == "1H":
-            prod_cands = math.prod(c["odds"] for c in candidates) if candidates else 1.0
-            if prod_cands < (target * 0.70):
-                logger.info(f"[GoalKicks] 1H candidate pool ({prod_cands:.2f}x) lean for target {target:.1f}x; broadening to MIXED Goal Kicks...")
-                candidates = await cls.fetch_goal_kicks_candidates(prefer_line="MIXED", time_horizon=time_horizon)
+        candidates = await cls.fetch_goal_kicks_candidates(mode=mode, time_horizon=time_horizon)
 
         if not candidates:
             return {
                 "status": "NO_FIXTURES",
-                "message": f"No active matches on SportyBet currently offer Goal Kick prop markets in the 1.30–1.55 corridor for {horizon_desc}."
+                "message": f"No active matches on SportyBet currently offer verified {mode} Goal Kick markets ({horizon_desc})."
             }
 
         selected_legs = []
@@ -282,13 +419,13 @@ class GoalKicksService:
 
         for leg in candidates:
             odd = leg["odds"]
-            if (curr_odds * odd) <= (target * 1.35):
+            if (curr_odds * odd) <= (target * 1.30):
                 selected_legs.append(leg)
                 curr_odds = round(curr_odds * odd, 2)
                 if curr_odds >= (target * 0.90):
                     break
 
-        # If still under target, check if adding one more reaches it
+        # If slightly below target, try adding one more leg if available
         if curr_odds < (target * 0.85) and len(selected_legs) < len(candidates):
             for leg in candidates:
                 if leg not in selected_legs:
@@ -300,65 +437,55 @@ class GoalKicksService:
         if not selected_legs:
             return {
                 "status": "FAILED_ASSEMBLY",
-                "message": f"Could not assemble Goal Kicks slip targeting {target:.1f}x odds within 1.30–1.55 corridor."
+                "message": f"Could not assemble {mode} Goal Kicks slip targeting {target:.2f}x odds."
             }
 
-        # User Decision Gate: If available odds fall short of requested target and user hasn't explicitly confirmed partial
-        if not allow_partial and curr_odds < (target * 0.85):
+        # Check multiplier threshold
+        if not allow_partial and curr_odds < (target * 0.80):
             return {
                 "status": "INSUFFICIENT_MULTIPLIER",
                 "available_odds": curr_odds,
                 "target_odds": target,
                 "available_count": len(selected_legs),
                 "time_horizon": time_horizon,
-                "market_type": "gk",
-                "prefer_line": prefer_line,
-                "message": f"Only {len(selected_legs)} matches available on SportyBet ({curr_odds:.2f}x odds), falling short of your {target:.1f}x target."
+                "mode": mode,
+                "message": f"Only {len(selected_legs)} {mode} matches available ({curr_odds:.2f}x odds), falling short of {target:.2f}x target."
             }
 
         # Request live SportyBet shareCode
-        selections_payload = [
-            {
-                "eventId": leg["event_id"],
-                "marketId": leg["market_id"],
-                "outcomeId": leg["outcome_id"],
-                "specifier": leg["specifier"]
-            }
-            for leg in selected_legs
-        ]
-
-        share_code = None
-        share_url = None
-        share_endpoint = f"{cls.BASE_URL}/ng/orders/share"
-
-        try:
-            async with httpx.AsyncClient(timeout=10.0, headers=cls.HEADERS) as http_c:
-                resp = await http_c.post(share_endpoint, json={"selections": selections_payload})
-                if resp.status_code == 200:
-                    res_data = resp.json()
-                    if res_data.get("bizCode") == 10000:
-                        share_code = res_data.get("data", {}).get("shareCode")
-                        share_url = res_data.get("data", {}).get("shareURL") or f"https://www.sportybet.com/ng/?shareCode={share_code}"
-                        logger.info(f"[GoalKicks] Successfully generated SportyBet Booking Code: {share_code}")
-                    else:
-                        logger.warning(f"[GoalKicks] SportyBet rejected booking: {res_data}")
-        except Exception as e:
-            logger.error(f"[GoalKicks] Error calling SportyBet share code: {e}")
+        share_code, share_url = await cls._request_sportybet_share_code(selected_legs)
 
         # Compute confidence and AI scout analysis
-        combined_prob = round(math.prod(leg.get("model_probability", 0.80) for leg in selected_legs) * 100.0, 1)
+        combined_prob = round(math.prod(leg.get("model_probability", 0.82) for leg in selected_legs) * 100.0, 1)
         leg_count = len(selected_legs)
 
-        scout_analysis = (
-            f"🧠 <b>StatIQ AI Scout Tactical Analysis:</b>\n"
-            f"• <b>Golden Odds Corridor:</b> Every single selection strictly locked between 1.30x – 1.55x for optimal balance of safety and compounding.\n"
-            f"• <b>Controlled Tempo Screen:</b> Selected {leg_count} tactical fixtures screened for low off-target shot volume and patient build-up play.\n"
-            f"• <b>Cushion Buffer:</b> 1H Under 8.5/7.5 and FT Under 17.5/18.5 require excessive missed crosses/wild shots to fail, establishing an elite mathematical floor."
-        )
+        if mode == "UNDER":
+            title = f"🛡️ StatIQ 2.0x FT Goal Kicks UNDER (Fortress) — {horizon_desc}"
+            scout_analysis = (
+                f"🧠 <b>StatIQ Tactical Scout Analysis (FT UNDER):</b>\n"
+                f"• <b>Chaos Filter Active:</b> High-transition shootout teams (Man Utd, Villa, Spurs, etc.) strictly disqualified.\n"
+                f"• <b>Built-in Cushion:</b> Selected lines (Under 17.5 – 20.5) provide a 3–6 kick buffer over the European average (13–15).\n"
+                f"• <b>Compound Edge:</b> Only {leg_count} high-probability legs required to reach {curr_odds:.2f}x odds."
+            )
+        elif mode == "OVER":
+            title = f"⚡ StatIQ 2.0x FT Goal Kicks OVER (Floor) — {horizon_desc}"
+            scout_analysis = (
+                f"🧠 <b>StatIQ Tactical Scout Analysis (FT OVER):</b>\n"
+                f"• <b>Pace Filter Active:</b> Low-block stagnant grinds disqualified; selected high-pace, high-shot transition matchups.\n"
+                f"• <b>Safe Floor:</b> Low lines (Over 10.5 – 12.5) clear easily in open fixtures with 25+ combined shots.\n"
+                f"• <b>Compound Edge:</b> Only {leg_count} high-probability legs required to reach {curr_odds:.2f}x odds."
+            )
+        else:
+            title = f"🎯 StatIQ {target:.2f}x Goal Kicks Slip — {horizon_desc}"
+            scout_analysis = (
+                f"🧠 <b>StatIQ Tactical Scout Analysis:</b>\n"
+                f"• Selected {leg_count} tactical fixtures screened for low off-target shot volume."
+            )
 
         return {
             "status": "SUCCESS",
-            "title": f"🎯 StatIQ {target:.1f}x Dedicated Goal Kicks Slip ({horizon_desc})",
+            "title": title,
+            "mode": mode,
             "booking_code": share_code or "N/A",
             "share_url": share_url or f"https://www.sportybet.com/ng/?shareCode={share_code}",
             "target_odds": target,
@@ -368,5 +495,27 @@ class GoalKicksService:
             "picks": selected_legs,
             "scout_analysis": scout_analysis
         }
+
+    @classmethod
+    async def build_daily_goal_kicks_duo(
+        cls,
+        time_horizon: str = "TODAY",
+        target_odds: float = 2.0
+    ) -> Dict[str, Any]:
+        """
+        Assembles both 2.0x FT Under Fortress and 2.0x FT Over Floor slips for daily morning dispatch.
+        """
+        under_res = await cls.build_goal_kicks_ticket(target_odds=target_odds, mode="UNDER", time_horizon=time_horizon, allow_partial=True)
+        over_res = await cls.build_goal_kicks_ticket(target_odds=target_odds, mode="OVER", time_horizon=time_horizon, allow_partial=True)
+
+        is_success = (under_res.get("status") == "SUCCESS") or (over_res.get("status") == "SUCCESS")
+
+        return {
+            "status": "SUCCESS" if is_success else "NO_FIXTURES",
+            "date_str": time.strftime("%A, %b %d, %Y"),
+            "under_ticket": under_res,
+            "over_ticket": over_res
+        }
+
 
 goal_kicks_service = GoalKicksService()

@@ -68,10 +68,10 @@ class RolloverTelegramNotifier:
         return {"bot_token": token, "chat_id": chat_id}
 
     @classmethod
-    def send_message(cls, text: str, parse_mode: str = "HTML") -> bool:
+    def send_message(cls, text: str, parse_mode: str = "HTML", target_chat_id: Optional[str] = None) -> bool:
         creds = cls.get_credentials()
         bot_token = creds["bot_token"]
-        chat_id = creds["chat_id"]
+        chat_id = str(target_chat_id) if target_chat_id else creds["chat_id"]
 
         if not bot_token or not chat_id:
             logger.warning("[RolloverTelegram] Bot token or chat ID missing.")
@@ -214,6 +214,70 @@ class RolloverTelegramNotifier:
 
         msg = "\n".join(lines)
         sent = cls.send_message(msg)
+        if sent and code and code not in ("N/A", "RESTED"):
+            cls.record_dispatched(code=code)
+        return sent
+
+    @classmethod
+    def dispatch_goal_kicks_slip(cls, ticket_data: Dict[str, Any], mode_label: str = "FT UNDER", target_chat_id: Optional[str] = None) -> bool:
+        """
+        Formats and sends a dedicated 2.0x Goal Kicks slip alert (UNDER or OVER) to Telegram.
+        """
+        code = ticket_data.get("booking_code") or "N/A"
+        if code and code not in ("N/A", "RESTED"):
+            if cls.is_duplicate_dispatch(code=code):
+                logger.info(f"[RolloverTelegram] Goal Kicks slip {code} already dispatched today. Suppressing duplicate delivery.")
+                return True
+
+        target_odds = float(ticket_data.get("target_odds", 2.00))
+        actual_odds = float(ticket_data.get("actual_odds", target_odds))
+        confidence = float(ticket_data.get("confidence_score", 85.0))
+        picks = ticket_data.get("picks", [])
+        date_str = ticket_data.get("date_str", "Today")
+        share_url = ticket_data.get("share_url") or f"https://www.sportybet.com/ng/?shareCode={code}"
+        
+        mode = str(ticket_data.get("mode", mode_label)).upper()
+        if "UNDER" in mode:
+            title = f"🛡️ <b>StatIQ 2.0x FT Goal Kicks UNDER (Fortress)</b>"
+            badge = "🔒 <b>Discipline Screen:</b> Chaos/End-to-End Shootout Teams Filtered Out"
+        elif "OVER" in mode:
+            title = f"⚡ <b>StatIQ 2.0x FT Goal Kicks OVER (Floor)</b>"
+            badge = "🎯 <b>Volume Screen:</b> High-Pace Transition Matches (Safe 10.5–12.5 Floor)"
+        else:
+            title = f"🎯 <b>StatIQ 2.0x Goal Kicks Multiplier</b>"
+            badge = "📊 <b>Prop Discipline:</b> Verified SportyBet Lines"
+
+        lines = [
+            title,
+            badge,
+            f"📅 <b>Date:</b> {date_str} (Daily Automation)",
+            f"⚡ <b>Total Multiplier:</b> {actual_odds:.2f}x | <b>Combined Model Confidence:</b> {confidence:.1f}%",
+            f"📊 <b>Leg Count:</b> {len(picks)} Tactical Matches\n"
+        ]
+
+        for i, p in enumerate(picks, 1):
+            h = p.get("home_team")
+            a = p.get("away_team")
+            comp = p.get("competition") or "Football"
+            sel = p.get("selection_desc") or "Goal Kicks"
+            odd = float(p.get("odds") or 1.25)
+            prob = float(p.get("model_probability") or 0.82) * 100.0
+
+            lines.append(f"<b>{i}. {h} vs {a}</b> ({comp})")
+            lines.append(f"   ➔ <b>Selection:</b> {sel} @ <b>{odd:.2f}</b> (Win Floor: {prob:.0f}%)")
+
+        lines.append(f"\n🔥 <b>Total Multiplier:</b> {actual_odds:.2f}x")
+        lines.append(f"🎟️ <b>SportyBet Code:</b> <code>{code}</code>")
+        lines.append(f"🔗 <a href=\"{share_url}\"><b>Click to Pre-Load on SportyBet</b></a>\n")
+
+        scout_analysis = ticket_data.get("scout_analysis")
+        if scout_analysis:
+            lines.append(f"{scout_analysis}\n")
+
+        lines.append("🤖 <i>StatIQ Quant Engine · Dedicated Goal Kicks 2.0x Rollover</i>")
+
+        msg = "\n".join(lines)
+        sent = cls.send_message(msg, target_chat_id=target_chat_id)
         if sent and code and code not in ("N/A", "RESTED"):
             cls.record_dispatched(code=code)
         return sent

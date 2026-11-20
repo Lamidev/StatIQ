@@ -1,0 +1,19 @@
+{
+  "is_enabled": true,
+  "active_days": [
+    "MON",
+    "TUE",
+    "WED",
+    "THU",
+    "FRI",
+    "SAT",
+    "SUN"
+  ],
+  "dispatch_time": "10:15",
+  "enable_under_2x": true,
+  "enable_over_2x": true,
+  "target_odds": 2.0,
+  "last_run_date": null,
+  "last_duo_result": null,
+  "run_history": []
+}
