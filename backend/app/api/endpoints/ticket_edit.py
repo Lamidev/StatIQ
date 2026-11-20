@@ -113,30 +113,30 @@ async def run_re_edit(req: ReEditRequest, db: Session = Depends(get_db)):
 
     if portfolio_slips:
         res["portfolio_tickets"] = portfolio_slips
-        primary = portfolio_slips[0]
-        # Fast non-blocking booking code attempt for primary slip (2.5s max)
-        try:
-            adapter = SportyBetAdapter(db)
-            primary_sels = primary.get("final_selections", [])
-            if primary_sels:
-                b_res = await asyncio.wait_for(
-                    asyncio.to_thread(adapter.generate_booking_code, primary_sels, "ng"),
-                    timeout=1.2
-                )
-                if b_res.get("status") == "SUCCESS" and b_res.get("booking_code"):
-                    if b_res.get("booked_selections"):
-                        primary["final_selections"] = b_res.get("booked_selections")
-                        res["final_selections"] = b_res.get("booked_selections")
-                        res["final_count"] = len(b_res.get("booked_selections"))
-                        primary["final_count"] = len(b_res.get("booked_selections"))
-                    primary["booking_code"] = b_res.get("booking_code")
-                    primary["share_url"] = b_res.get("load_url")
-                    primary["verification_status"] = b_res.get("verification_status", "BOOKING_VERIFIED")
-                    res["booking_code"] = primary.get("booking_code")
-                    res["share_url"] = primary.get("share_url")
-                    res["verification_status"] = primary.get("verification_status", "BOOKING_VERIFIED")
-        except Exception as e:
-            logger.info(f"Primary slip fast booking skipped ({e}), available on-demand in UI.")
+        adapter = SportyBetAdapter(db)
+        for idx, slip in enumerate(portfolio_slips):
+            slip_sels = slip.get("final_selections", [])
+            if slip_sels:
+                try:
+                    b_res = await asyncio.wait_for(
+                        asyncio.to_thread(adapter.generate_booking_code, slip_sels, "ng"),
+                        timeout=6.0
+                    )
+                    if b_res.get("status") == "SUCCESS" and b_res.get("booking_code"):
+                        if b_res.get("booked_selections"):
+                            slip["final_selections"] = b_res.get("booked_selections")
+                            slip["final_count"] = len(b_res.get("booked_selections"))
+                        slip["booking_code"] = b_res.get("booking_code")
+                        slip["share_url"] = b_res.get("load_url")
+                        slip["verification_status"] = b_res.get("verification_status", "BOOKING_VERIFIED")
+                        if idx == 0:
+                            res["final_selections"] = slip.get("final_selections")
+                            res["final_count"] = slip.get("final_count")
+                            res["booking_code"] = slip.get("booking_code")
+                            res["share_url"] = slip.get("share_url")
+                            res["verification_status"] = slip.get("verification_status")
+                except Exception as e:
+                    logger.info(f"Slip #{idx+1} booking generation note ({e}), available on-demand in UI.")
 
     return res
 
