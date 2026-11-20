@@ -137,6 +137,27 @@ class BookmakerAdapter(ABC):
             }
         return None
 
+def _rotate_tor_circuit():
+    """
+    Signals local Tor instance to rotate circuit via ControlPort 9051.
+    Allows instant recovery from transient CloudFront WAF blocks on datacenter hosts.
+    """
+    try:
+        import socket
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(2.0)
+        s.connect(('127.0.0.1', 9051))
+        s.sendall(b'AUTHENTICATE ""\r\n')
+        res = s.recv(1024)
+        if b'250 OK' in res:
+            s.sendall(b'SIGNAL NEWNYM\r\n')
+            s.recv(1024)
+        s.close()
+        logger.info("[SportyBetAdapter] Rotated Tor circuit via ControlPort 9051")
+    except Exception as e:
+        logger.debug(f"[SportyBetAdapter] Tor rotation notice: {e}")
+
+
 class SportyBetAdapter(BookmakerAdapter):
     """
     SportyBet Direct Web API Adapter (100% Free).
@@ -145,7 +166,7 @@ class SportyBetAdapter(BookmakerAdapter):
     - Code Generator: POST https://www.sportybet.com/api/{country}/orders/share
     """
     BASE_URL = "https://mobile.sportybet.com/api"
-    DOMAINS = ["mobile.sportybet.com", "sports.sportybet.com"]
+    DOMAINS = ["mobile.sportybet.com", "www.sportybet.com"]
     HEADERS = {
         "User-Agent": "Mozilla/5.0 (Linux; Android 13; SM-S908B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
         "Accept": "application/json, text/plain, */*",
@@ -248,40 +269,47 @@ class SportyBetAdapter(BookmakerAdapter):
         import json as _json_parser
         curl_bin = shutil.which("curl")
         if curl_bin:
-            for dom in domains:
-                curl_url = f"https://{dom}/api/{primary_reg}/orders/share/{code_clean}"
-                cmd = [
-                    curl_bin, "-s", "-k",
-                    "-H", "User-Agent: Mozilla/5.0 (Linux; Android 13; SM-S908B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
-                    "-H", "Accept: application/json, text/plain, */*",
-                    "-H", "Accept-Language: en-US,en;q=0.9",
-                    "-H", "platform: wap",
-                    "-H", f"client-country: {primary_reg}",
-                    "-H", "X-Forwarded-For: 102.89.34.18",
-                    "-H", f"Referer: https://{dom}/{primary_reg}/",
-                    "--max-time", "12",
-                ]
-                if proxy_url:
-                    cmd.extend(["--proxy", proxy_url])
-                cmd.append(curl_url)
-                try:
-                    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=12.0)
-                    if proc.returncode == 0 and proc.stdout:
-                        try:
-                            res_json = _json_parser.loads(proc.stdout)
-                            if res_json and res_json.get("bizCode") == 10000:
-                                data = res_json
-                                matched_region = primary_reg
-                                logger.info(f"[SportyBetAdapter] Native curl successfully fetched {code_clean} from {dom}.")
-                                break
-                            elif res_json and res_json.get("message"):
-                                last_error = f"SportyBet {primary_reg} error: {res_json.get('message')}"
-                        except Exception:
-                            pass
-                except Exception as c_err:
-                    logger.debug(f"[SportyBetAdapter] Native curl note on {dom}: {c_err}")
+            for attempt in range(1, 4):
+                for dom in domains:
+                    curl_url = f"https://{dom}/api/{primary_reg}/orders/share/{code_clean}"
+                    cmd = [
+                        curl_bin, "-s", "-k",
+                        "-H", "User-Agent: Mozilla/5.0 (Linux; Android 13; SM-S908B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
+                        "-H", "Accept: application/json, text/plain, */*",
+                        "-H", "Accept-Language: en-US,en;q=0.9",
+                        "-H", "platform: wap",
+                        "-H", f"client-country: {primary_reg}",
+                        "-H", "X-Forwarded-For: 102.89.34.18",
+                        "-H", f"Referer: https://{dom}/{primary_reg}/",
+                        "--max-time", "10",
+                    ]
+                    if proxy_url:
+                        cmd.extend(["--proxy", proxy_url])
+                    cmd.append(curl_url)
+                    try:
+                        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=10.0)
+                        if proc.returncode == 0 and proc.stdout:
+                            try:
+                                res_json = _json_parser.loads(proc.stdout)
+                                if res_json and res_json.get("bizCode") == 10000:
+                                    data = res_json
+                                    matched_region = primary_reg
+                                    logger.info(f"[SportyBetAdapter] Native curl successfully fetched {code_clean} from {dom} on attempt {attempt}.")
+                                    break
+                                elif res_json and res_json.get("message"):
+                                    last_error = f"SportyBet {primary_reg} error: {res_json.get('message')}"
+                            except Exception:
+                                pass
+                    except Exception as c_err:
+                        logger.debug(f"[SportyBetAdapter] Native curl note on {dom} (attempt {attempt}): {c_err}")
+                    if data:
+                        break
                 if data:
                     break
+                # If blocked or empty, rotate circuit before next attempt
+                if proxy_url and ("9055" in proxy_url or "tor" in proxy_url.lower()):
+                    _rotate_tor_circuit()
+                    time.sleep(0.5)
 
         # Step 2: HTTPX query fallback across resilient mobile & sports endpoints
         if not data:
@@ -1253,45 +1281,49 @@ class SportyBetAdapter(BookmakerAdapter):
             curl_bin = shutil.which("curl")
             if not curl_bin:
                 return None
-            try:
-                proxy_url = os.getenv("SPORTYBET_PROXY") or os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY")
-                cmd = [
-                    curl_bin, "-s", "-k",
-                    "-H", "User-Agent: Mozilla/5.0 (Linux; Android 13; SM-S908B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
-                    "-H", "Accept: application/json, text/plain, */*",
-                    "-H", "Accept-Language: en-US,en;q=0.9",
-                    "-H", "platform: wap",
-                    "-H", f"client-country: {country_code.lower()}",
-                    "-H", "X-Forwarded-For: 102.89.34.18",
-                    "-H", f"Referer: https://mobile.sportybet.com/{country_code.lower()}/",
-                    "-H", "Content-Type: application/json",
-                    "--max-time", "12",
-                    "--data-raw", json.dumps({"selections": selections_payload}),
-                ]
-                if proxy_url:
-                    cmd.extend(["--proxy", proxy_url])
-                cmd.append(url_share)
-                proc = subprocess.run(cmd, capture_output=True, text=True, timeout=12)
-                if proc.returncode == 0 and proc.stdout:
-                    c_j = json.loads(proc.stdout)
-                    if c_j.get("bizCode") == 10000:
-                        b_code = c_j.get("data", {}).get("shareCode")
-                        s_url = c_j.get("data", {}).get("shareURL")
-                        if b_code:
-                            logger.info(f"[SportyBetAdapter] Generated booking code via native curl: {b_code}")
-                            return {
-                                "status": "SUCCESS",
-                                "provider": "SPORTYBET",
-                                "booking_code": b_code,
-                                "verification_status": "BOOKING_VERIFIED",
-                                "country": country_code.upper(),
-                                "load_url": s_url or f"https://www.sportybet.com/{country_code.lower()}/?shareCode={b_code}",
-                                "matched_count": len(selections_payload),
-                                "booked_selections": processed_selections,
-                                "verified": True
-                            }
-            except Exception as e:
-                logger.debug(f"[SportyBetAdapter] curl share post note: {e}")
+            proxy_url = os.getenv("SPORTYBET_PROXY") or os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY")
+            for attempt in range(1, 4):
+                try:
+                    cmd = [
+                        curl_bin, "-s", "-k",
+                        "-H", "User-Agent: Mozilla/5.0 (Linux; Android 13; SM-S908B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
+                        "-H", "Accept: application/json, text/plain, */*",
+                        "-H", "Accept-Language: en-US,en;q=0.9",
+                        "-H", "platform: wap",
+                        "-H", f"client-country: {country_code.lower()}",
+                        "-H", "X-Forwarded-For: 102.89.34.18",
+                        "-H", f"Referer: https://mobile.sportybet.com/{country_code.lower()}/",
+                        "-H", "Content-Type: application/json",
+                        "--max-time", "12",
+                        "--data-raw", json.dumps({"selections": selections_payload}),
+                    ]
+                    if proxy_url:
+                        cmd.extend(["--proxy", proxy_url])
+                    cmd.append(url_share)
+                    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=12)
+                    if proc.returncode == 0 and proc.stdout:
+                        c_j = json.loads(proc.stdout)
+                        if c_j.get("bizCode") == 10000:
+                            b_code = c_j.get("data", {}).get("shareCode")
+                            s_url = c_j.get("data", {}).get("shareURL")
+                            if b_code:
+                                logger.info(f"[SportyBetAdapter] Generated booking code via native curl on attempt {attempt}: {b_code}")
+                                return {
+                                    "status": "SUCCESS",
+                                    "provider": "SPORTYBET",
+                                    "booking_code": b_code,
+                                    "verification_status": "BOOKING_VERIFIED",
+                                    "country": country_code.upper(),
+                                    "load_url": s_url or f"https://www.sportybet.com/{country_code.lower()}/?shareCode={b_code}",
+                                    "matched_count": len(selections_payload),
+                                    "booked_selections": processed_selections,
+                                    "verified": True
+                                }
+                except Exception as e:
+                    logger.debug(f"[SportyBetAdapter] curl share post note (attempt {attempt}): {e}")
+                if proxy_url and ("9055" in proxy_url or "tor" in proxy_url.lower()):
+                    _rotate_tor_circuit()
+                    time.sleep(0.5)
             return None
 
         # Request shareCode from SportyBet API (try curl first on Linux/cloud or fallback from httpx)

@@ -59,35 +59,51 @@ class SportyBetClient:
             self._sync_client.close()
 
     def _curl_exec(self, method: str, url: str, payload: Optional[dict] = None) -> Optional[Any]:
-        import shutil, subprocess, json
+        import shutil, subprocess, json, time
         curl_bin = shutil.which("curl")
         if not curl_bin:
             return None
-        try:
-            cmd = [
-                curl_bin, "-s", "-k",
-                "-H", "User-Agent: Mozilla/5.0 (Linux; Android 13; SM-S908B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
-                "-H", "Accept: application/json, text/plain, */*",
-                "-H", "platform: wap",
-                "-H", f"client-country: {self.region}",
-            ]
-            if method.upper() == "POST" and payload is not None:
-                cmd.extend([
-                    "-X", "POST",
-                    "-H", "Content-Type: application/json",
-                    "--data-raw", json.dumps(payload)
-                ])
-            proxy_url = os.getenv("SPORTYBET_PROXY") or os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY")
-            if proxy_url:
-                cmd.extend(["--proxy", proxy_url])
-            cmd.append(url)
-            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
-            if proc.returncode == 0 and proc.stdout:
-                j = json.loads(proc.stdout)
-                if j.get("bizCode") == 10000:
-                    return j.get("data")
-        except Exception as e:
-            logger.debug(f"[SportyBetClient] curl fallback note: {e}")
+        proxy_url = os.getenv("SPORTYBET_PROXY") or os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY")
+        for attempt in range(1, 4):
+            try:
+                cmd = [
+                    curl_bin, "-s", "-k",
+                    "-H", "User-Agent: Mozilla/5.0 (Linux; Android 13; SM-S908B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
+                    "-H", "Accept: application/json, text/plain, */*",
+                    "-H", "platform: wap",
+                    "-H", f"client-country: {self.region}",
+                ]
+                if method.upper() == "POST" and payload is not None:
+                    cmd.extend([
+                        "-X", "POST",
+                        "-H", "Content-Type: application/json",
+                        "--data-raw", json.dumps(payload)
+                    ])
+                if proxy_url:
+                    cmd.extend(["--proxy", proxy_url])
+                cmd.append(url)
+                proc = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+                if proc.returncode == 0 and proc.stdout:
+                    j = json.loads(proc.stdout)
+                    if j.get("bizCode") == 10000:
+                        return j.get("data")
+            except Exception as e:
+                logger.debug(f"[SportyBetClient] curl fallback note (attempt {attempt}): {e}")
+            if proxy_url and ("9055" in proxy_url or "tor" in proxy_url.lower()):
+                try:
+                    import socket
+                    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    s.settimeout(2.0)
+                    s.connect(('127.0.0.1', 9051))
+                    s.sendall(b'AUTHENTICATE ""\r\n')
+                    res = s.recv(1024)
+                    if b'250 OK' in res:
+                        s.sendall(b'SIGNAL NEWNYM\r\n')
+                        s.recv(1024)
+                    s.close()
+                except Exception:
+                    pass
+                time.sleep(0.5)
         return None
 
     async def fetch_configurable_events(
