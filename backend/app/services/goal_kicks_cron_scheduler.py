@@ -18,9 +18,10 @@ CONFIG_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."
 DEFAULT_CONFIG = {
     "is_enabled": True,
     "active_days": ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"],  # Daily automation (Mon-Sun)
-    "dispatch_time": "10:15",              # 10:15 AM WAT (right after main VIP suite)
-    "enable_under_2x": True,               # 2.0x FT Goal Kicks UNDER Fortress
-    "enable_over_2x": True,                # 2.0x FT Goal Kicks OVER Floor
+    "dispatch_time": "09:00",              # 09:00 AM WAT (Delivered before 10:00 AM main suite!)
+    "enable_first_half_2x": True,          # 2.0x 1H Goal Kicks Under 8.5 / 7.5
+    "enable_under_2x": True,               # 2.0x FT Goal Kicks UNDER Fortress (Under 17.5–20.5)
+    "enable_over_2x": False,               # 2.0x FT Goal Kicks OVER Floor (disabled by default)
     "target_odds": 2.00,                   # 2.00x sweet spot (3–4 tactical legs)
     "last_run_date": None,
     "last_duo_result": None,
@@ -96,7 +97,15 @@ class GoalKicksCronScheduler:
     def load_config(self) -> Dict[str, Any]:
         try:
             with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-                return json.load(f)
+                data = json.load(f)
+                merged = DEFAULT_CONFIG.copy()
+                merged.update(data)
+                # Migrate legacy 10:15 dispatch time to 09:00 AM WAT
+                if merged.get("dispatch_time") == "10:15":
+                    merged["dispatch_time"] = "09:00"
+                if "enable_first_half_2x" not in merged:
+                    merged["enable_first_half_2x"] = True
+                return merged
         except Exception as e:
             logger.error(f"[GoalKicksScheduler] Error loading config: {e}")
             return DEFAULT_CONFIG.copy()
@@ -168,8 +177,15 @@ class GoalKicksCronScheduler:
                             loop.close()
 
                         dispatched_any = False
+                        first_half_ticket = duo_res.get("first_half_ticket", {})
                         under_ticket = duo_res.get("under_ticket", {})
                         over_ticket = duo_res.get("over_ticket", {})
+
+                        if cfg.get("enable_first_half_2x", True) and first_half_ticket.get("status") == "SUCCESS":
+                            sent = RolloverTelegramNotifier.dispatch_goal_kicks_slip(first_half_ticket, mode_label="1H UNDER")
+                            if sent:
+                                dispatched_any = True
+                                logger.info(f"[GoalKicksScheduler] Dispatched 2.0x 1H Under slip ({first_half_ticket.get('booking_code')}).")
 
                         if cfg.get("enable_under_2x", True) and under_ticket.get("status") == "SUCCESS":
                             sent = RolloverTelegramNotifier.dispatch_goal_kicks_slip(under_ticket, mode_label="FT UNDER")
@@ -177,7 +193,7 @@ class GoalKicksCronScheduler:
                                 dispatched_any = True
                                 logger.info(f"[GoalKicksScheduler] Dispatched 2.0x FT Under slip ({under_ticket.get('booking_code')}).")
 
-                        if cfg.get("enable_over_2x", True) and over_ticket.get("status") == "SUCCESS":
+                        if cfg.get("enable_over_2x", False) and over_ticket.get("status") == "SUCCESS":
                             sent = RolloverTelegramNotifier.dispatch_goal_kicks_slip(over_ticket, mode_label="FT OVER")
                             if sent:
                                 dispatched_any = True
@@ -193,8 +209,10 @@ class GoalKicksCronScheduler:
                                 "date": today_str,
                                 "time": current_time_str,
                                 "status": "SUCCESS",
+                                "first_half_code": first_half_ticket.get("booking_code"),
                                 "under_code": under_ticket.get("booking_code"),
                                 "over_code": over_ticket.get("booking_code"),
+                                "first_half_odds": first_half_ticket.get("actual_odds"),
                                 "under_odds": under_ticket.get("actual_odds"),
                                 "over_odds": over_ticket.get("actual_odds")
                             })
@@ -236,13 +254,17 @@ class GoalKicksCronScheduler:
         finally:
             loop.close()
 
+        first_half_ticket = duo_res.get("first_half_ticket", {})
         under_ticket = duo_res.get("under_ticket", {})
         over_ticket = duo_res.get("over_ticket", {})
 
-        if under_ticket.get("status") == "SUCCESS":
+        if cfg.get("enable_first_half_2x", True) and first_half_ticket.get("status") == "SUCCESS":
+            RolloverTelegramNotifier.dispatch_goal_kicks_slip(first_half_ticket, mode_label="1H UNDER")
+
+        if cfg.get("enable_under_2x", True) and under_ticket.get("status") == "SUCCESS":
             RolloverTelegramNotifier.dispatch_goal_kicks_slip(under_ticket, mode_label="FT UNDER")
 
-        if over_ticket.get("status") == "SUCCESS":
+        if cfg.get("enable_over_2x", False) and over_ticket.get("status") == "SUCCESS":
             RolloverTelegramNotifier.dispatch_goal_kicks_slip(over_ticket, mode_label="FT OVER")
 
         return duo_res

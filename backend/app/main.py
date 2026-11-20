@@ -110,11 +110,11 @@ def start_background_ticket_sync_worker():
     basketball_scheduler.start()
     print(f"[BasketballScheduler] Daily 09:00 AM daemon initialized (running={basketball_scheduler._running})")
 
-    # Start StatIQ 10:15 AM WAT Goal Kicks 2.0x Automation Cron Daemon
+    # Start StatIQ 09:00 AM WAT Goal Kicks 2.0x Automation Cron Daemon
     try:
         from app.services.goal_kicks_cron_scheduler import goal_kicks_scheduler
         goal_kicks_scheduler.start()
-        print(f"[GoalKicksScheduler] Daily 10:15 AM daemon initialized (running={goal_kicks_scheduler._running})")
+        print(f"[GoalKicksScheduler] Daily 09:00 AM daemon initialized (running={goal_kicks_scheduler._running})")
     except Exception as e:
         print(f"[GoalKicksScheduler] Failed to initialize Goal Kicks scheduler: {e}")
 

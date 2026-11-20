@@ -322,7 +322,9 @@ class GoalKicksService:
                                         odd = float(o.get("odds") or 0)
                                         if cls.MIN_SINGLE_ODDS <= odd <= cls.MAX_SINGLE_ODDS:
                                             prob = round(min(0.92, (1.0 / odd) * 0.96), 3)
-                                            q_score = (prob * 50.0) + (tot_val * 5.0) + 30.0
+                                            # Heavily prioritize Under 8.5 and Under 7.5 lines per tactical directive
+                                            cushion_bonus = 25.0 if tot_val >= 8.5 else (15.0 if tot_val >= 7.5 else 0.0)
+                                            q_score = (prob * 50.0) + (tot_val * 6.0) + cushion_bonus + 30.0
                                             pick_cand = {
                                                 "event_id": eid,
                                                 "home_team": item["home_team"],
@@ -498,7 +500,15 @@ class GoalKicksService:
         combined_prob = round(math.prod(leg.get("model_probability", 0.82) for leg in selected_legs) * 100.0, 1)
         leg_count = len(selected_legs)
 
-        if mode == "UNDER":
+        if mode == "1H":
+            title = f"🛡️ StatIQ 2.0x 1st Half Goal Kicks UNDER (8.5 / 7.5) — {horizon_desc}"
+            scout_analysis = (
+                f"🧠 <b>StatIQ Tactical Scout Analysis (1H UNDER 8.5 / 7.5):</b>\n"
+                f"• <b>First-Half Cushion:</b> European 1H average is ~5.4 kicks; lines of Under 8.5 / 7.5 provide a +2 to +4 buffer.\n"
+                f"• <b>Pacing Advantage:</b> 1st halves produce only ~40% of match kicks vs 60% in frantic second halves.\n"
+                f"• <b>Compound Edge:</b> Only {leg_count} high-probability legs required to reach {curr_odds:.2f}x odds."
+            )
+        elif mode == "UNDER":
             title = f"🛡️ StatIQ 2.0x FT Goal Kicks UNDER (Fortress) — {horizon_desc}"
             scout_analysis = (
                 f"🧠 <b>StatIQ Tactical Scout Analysis (FT UNDER):</b>\n"
@@ -542,16 +552,18 @@ class GoalKicksService:
         target_odds: float = 2.0
     ) -> Dict[str, Any]:
         """
-        Assembles both 2.0x FT Under Fortress and 2.0x FT Over Floor slips for daily morning dispatch.
+        Assembles 2.0x 1H Under (8.5/7.5), 2.0x FT Under Fortress, and 2.0x FT Over Floor slips for daily morning dispatch.
         """
+        first_half_res = await cls.build_goal_kicks_ticket(target_odds=target_odds, mode="1H", time_horizon=time_horizon, allow_partial=True)
         under_res = await cls.build_goal_kicks_ticket(target_odds=target_odds, mode="UNDER", time_horizon=time_horizon, allow_partial=True)
         over_res = await cls.build_goal_kicks_ticket(target_odds=target_odds, mode="OVER", time_horizon=time_horizon, allow_partial=True)
 
-        is_success = (under_res.get("status") == "SUCCESS") or (over_res.get("status") == "SUCCESS")
+        is_success = (first_half_res.get("status") == "SUCCESS") or (under_res.get("status") == "SUCCESS") or (over_res.get("status") == "SUCCESS")
 
         return {
             "status": "SUCCESS" if is_success else "NO_FIXTURES",
             "date_str": time.strftime("%A, %b %d, %Y"),
+            "first_half_ticket": first_half_res,
             "under_ticket": under_res,
             "over_ticket": over_res
         }

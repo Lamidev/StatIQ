@@ -237,7 +237,10 @@ class RolloverTelegramNotifier:
         share_url = ticket_data.get("share_url") or f"https://www.sportybet.com/ng/?shareCode={code}"
         
         mode = str(ticket_data.get("mode", mode_label)).upper()
-        if "UNDER" in mode:
+        if "1H" in mode or "FIRST_HALF" in mode:
+            title = f"🛡️ <b>StatIQ 2.0x 1st Half Goal Kicks UNDER (8.5 / 7.5)</b>"
+            badge = "🔒 <b>Pacing Advantage:</b> 1H Kicks (~40% of total) · Massive +2 to +4 Buffer Over 5.4 European Avg"
+        elif "UNDER" in mode:
             title = f"🛡️ <b>StatIQ 2.0x FT Goal Kicks UNDER (Fortress)</b>"
             badge = "🔒 <b>Discipline Screen:</b> Chaos/End-to-End Shootout Teams Filtered Out"
         elif "OVER" in mode:
@@ -250,7 +253,7 @@ class RolloverTelegramNotifier:
         lines = [
             title,
             badge,
-            f"📅 <b>Date:</b> {date_str} (Daily Automation)",
+            f"📅 <b>Date:</b> {date_str} (09:00 AM WAT Automation)",
             f"⚡ <b>Total Multiplier:</b> {actual_odds:.2f}x | <b>Combined Model Confidence:</b> {confidence:.1f}%",
             f"📊 <b>Leg Count:</b> {len(picks)} Tactical Matches\n"
         ]
