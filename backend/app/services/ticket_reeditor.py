@@ -18,6 +18,7 @@ MatchIQ Ticket Re-Editor & Optimization Service (AUDITOR & REMOVE Modes)
    Result: Trims a volatile slip down to an airtight, high-probability core ticket.
 """
 
+import os
 import asyncio
 import collections
 from collections import defaultdict, deque
@@ -99,7 +100,11 @@ async def _fetch_live_event_intelligence(
                     except Exception:
                         continue
             else:
-                async with httpx.AsyncClient(timeout=6.0, headers=SPORTYBET_HEADERS) as c:
+                proxy_url = os.getenv("SPORTYBET_PROXY") or os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY")
+                c_kwargs = {"timeout": 6.0, "headers": SPORTYBET_HEADERS, "verify": False}
+                if proxy_url:
+                    c_kwargs["proxy"] = proxy_url
+                async with httpx.AsyncClient(**c_kwargs) as c:
                     for url in urls:
                         try:
                             r = await c.get(url)
@@ -1049,7 +1054,11 @@ async def re_edit_ticket(
     sem = asyncio.Semaphore(12)
     intel_map: Dict[str, Dict[str, Any]] = {}
 
-    async with httpx.AsyncClient(timeout=8.0, headers=SPORTYBET_HEADERS) as client:
+    proxy_url = os.getenv("SPORTYBET_PROXY") or os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY")
+    client_kwargs = {"timeout": 8.0, "headers": SPORTYBET_HEADERS, "verify": False}
+    if proxy_url:
+        client_kwargs["proxy"] = proxy_url
+    async with httpx.AsyncClient(**client_kwargs) as client:
         async def _fetch_intel_task(s):
             h = s.get("home_team", "Home")
             a = s.get("away_team", "Away")
