@@ -1776,31 +1776,53 @@ class StatIQTelegramBot:
                         is_pool_constrained = (num_tickets > 1 and safe_count < needed_games)
 
                 # ── STEP 3: INTERACTIVE AUDIT CONFIRMATION IF GAMES ARE DROPPED & UNCONFIRMED ──
-                if confirmed_action is None and dropped_count > 0:
-                    # Categorize reasons for transparent breakdown
-                    youth_cnt = sum(1 for r in removed_selections if any(k in str(r.get("reason", "")).lower() for k in ["youth", "u21", "u20", "u19", "u18", "reserve"]))
-                    odds_cnt = sum(1 for r in removed_selections if "below 1.15" in str(r.get("reason", "")).lower())
-                    trap_cnt = sum(1 for r in removed_selections if "50-50" in str(r.get("reason", "")).lower() or "trap" in str(r.get("reason", "")).lower() or "underdog" in str(r.get("reason", "")).lower())
+                # Separate started/expired games from tactical risky games
+                started_selections = [
+                    r for r in removed_selections 
+                    if r.get("classification") == "EXPIRED" or any(k in str(r.get("reason", "")).lower() for k in ["live", "started", "expired", "kickoff", "ongoing", "concluded"])
+                ]
+                started_cnt = len(started_selections)
+                unstarted_count = max(0, original_count - started_cnt)
 
-                    reason_bits = []
-                    if youth_cnt > 0: reason_bits.append(f"{youth_cnt} U20/U21 Youth matches")
-                    if odds_cnt > 0: reason_bits.append(f"{odds_cnt} Sub-1.15 Odds")
-                    if trap_cnt > 0: reason_bits.append(f"{trap_cnt} Even/Underdog Traps")
-                    reason_str = f"({', '.join(reason_bits)})" if reason_bits else ""
+                risky_selections = [r for r in removed_selections if r not in started_selections]
+                risky_cnt = len(risky_selections)
 
-                    btn_val_str = f"{target_val:.1f}x" if target_mode == "ODDS" else f"{int(target_val)} Games"
+                # Categorize tactical reasons for transparent breakdown
+                youth_cnt = sum(1 for r in risky_selections if any(k in str(r.get("reason", "")).lower() for k in ["youth", "u21", "u20", "u19", "u18", "reserve"]))
+                odds_cnt = sum(1 for r in risky_selections if "below 1.15" in str(r.get("reason", "")).lower())
+                trap_cnt = sum(1 for r in risky_selections if "50-50" in str(r.get("reason", "")).lower() or "trap" in str(r.get("reason", "")).lower() or "underdog" in str(r.get("reason", "")).lower())
+
+                reason_bits = []
+                if youth_cnt > 0: reason_bits.append(f"{youth_cnt} U20/U21 Youth matches")
+                if odds_cnt > 0: reason_bits.append(f"{odds_cnt} Sub-1.15 Odds")
+                if trap_cnt > 0: reason_bits.append(f"{trap_cnt} Even/Underdog Traps")
+                reason_str = f"({', '.join(reason_bits)})" if reason_bits else ""
+
+                btn_val_str = f"{target_val:.1f}x" if target_mode == "ODDS" else f"{int(target_val)} Games"
+
+                if confirmed_action is None and (risky_cnt > 0 or is_pool_constrained):
+                    breakdown_lines = [
+                        f"📊 <b>Input Breakdown:</b>",
+                        f"• Total Games Uploaded: <b>{original_count}</b>"
+                    ]
+                    if started_cnt > 0:
+                        breakdown_lines.append(f"• ⏱️ <b>Started / Kicked Off:</b> <b>{started_cnt} Games</b> <i>(Automatically removed)</i>")
+                        breakdown_lines.append(f"• ⏳ <b>Active Unstarted Pool:</b> <b>{unstarted_count} Games</b>")
+
+                    if risky_cnt > 0:
+                        breakdown_lines.append(f"• ⚠️ <b>Flagged Tactical Risk:</b> <b>{risky_cnt} Games</b> <i>{reason_str}</i>")
+
+                    breakdown_lines.append(f"• ✅ <b>Verified Safe Matches to Use:</b> <b>{safe_count} Games</b>")
+                    breakdown_str = "\n".join(breakdown_lines)
 
                     if is_pool_constrained:
-                        # 3-Option Streamlined Audit Menu
+                        # 4-Option Streamlined Audit Menu
                         audit_text = (
                             f"🛡️ <b>StatIQ Ticket Audit: Code <code>{code}</code></b>\n\n"
-                            f"📊 <b>Input Breakdown:</b>\n"
-                            f"• Total Games Uploaded: <b>{original_count}</b>\n"
-                            f"• ⚠️ Flagged / Risky: <b>{dropped_count} Games</b> <i>{reason_str}</i>\n"
-                            f"• ✅ Verified Safe Matches: <b>{safe_count} Games</b>\n\n"
+                            f"{breakdown_str}\n\n"
                             f"⚠️ <b>Distribution Notice:</b>\n"
                             f"You requested <b>{num_tickets} tickets targeting {mode_desc}</b> (requires {needed_games}+ games for zero overlap).\n"
-                            f"<b>{safe_count} safe matches</b> cannot cleanly fill two separate {mode_desc} slips without repeating games or lowering odds.\n\n"
+                            f"<b>{safe_count} safe unstarted matches</b> cannot cleanly fill {num_tickets} separate {mode_desc} slips without repeating games or lowering odds.\n\n"
                             f"<b>How would you like to proceed?</b>"
                         )
                         keyboard = {
@@ -1812,7 +1834,10 @@ class StatIQTelegramBot:
                                     {"text": f"🌐 Top-Up from Live Board ({num_tickets} Slips @ {btn_val_str})", "callback_data": f"aud:top:{code}:{mode}:{target_mode}:{target_val}:{num_tickets}"}
                                 ],
                                 [
-                                    {"text": f"⚡ Keep All {original_count} Games (Override)", "callback_data": f"aud:ovr:{code}:{mode}:{target_mode}:{target_val}:{num_tickets}"}
+                                    {"text": f"✂️ Split {safe_count} Safe Games into {num_tickets} Slips", "callback_data": f"aud:proc:{code}:{mode}:{target_mode}:{target_val}:{num_tickets}"}
+                                ],
+                                [
+                                    {"text": f"⚡ Keep All {unstarted_count} Unstarted Games (Override)", "callback_data": f"aud:ovr:{code}:{mode}:{target_mode}:{target_val}:{num_tickets}"}
                                 ]
                             ]
                         }
@@ -1823,11 +1848,8 @@ class StatIQTelegramBot:
                         slips_desc = f"{num_tickets} Slips ({btn_val_str} each)" if num_tickets > 1 else f"1 {btn_val_str} Slip"
                         audit_text = (
                             f"🛡️ <b>StatIQ Ticket Audit: Code <code>{code}</code></b>\n\n"
-                            f"📊 <b>Input Breakdown:</b>\n"
-                            f"• Total Games Uploaded: <b>{original_count}</b>\n"
-                            f"• ⚠️ Flagged / Risky: <b>{dropped_count} Games</b> <i>{reason_str}</i>\n"
-                            f"• ✅ Verified Safe Matches: <b>{safe_count} Games</b>\n\n"
-                            f"The remaining <b>{safe_count} safe matches</b> can cleanly build your requested <b>{slips_desc}</b> with <b>Strict Zero-Overlap</b>.\n\n"
+                            f"{breakdown_str}\n\n"
+                            f"The remaining <b>{safe_count} safe unstarted matches</b> can cleanly build your requested <b>{slips_desc}</b> with <b>Strict Zero-Overlap</b>.\n\n"
                             f"<b>Select your preference:</b>"
                         )
                         btn_action = "proc" if num_tickets > 1 else "sin"
@@ -1837,7 +1859,7 @@ class StatIQTelegramBot:
                                     {"text": f"✅ Proceed with {slips_desc}", "callback_data": f"aud:{btn_action}:{code}:{mode}:{target_mode}:{target_val}:{num_tickets}"}
                                 ],
                                 [
-                                    {"text": f"⚡ Keep All {original_count} Games (Override)", "callback_data": f"aud:ovr:{code}:{mode}:{target_mode}:{target_val}:{num_tickets}"}
+                                    {"text": f"⚡ Keep All {unstarted_count} Unstarted Games (Override)", "callback_data": f"aud:ovr:{code}:{mode}:{target_mode}:{target_val}:{num_tickets}"}
                                 ]
                             ]
                         }
@@ -2043,29 +2065,51 @@ class StatIQTelegramBot:
                         needed_games = needed_per_t * num_tickets
                         is_pool_constrained = (num_tickets > 1 and safe_count < needed_games)
 
-                if confirmed_action is None and dropped_count > 0:
-                    youth_cnt = sum(1 for r in removed_selections if any(k in str(r.get("reason", "")).lower() for k in ["youth", "u21", "u20", "u19", "u18", "reserve"]))
-                    odds_cnt = sum(1 for r in removed_selections if "below 1.15" in str(r.get("reason", "")).lower())
-                    trap_cnt = sum(1 for r in removed_selections if "50-50" in str(r.get("reason", "")).lower() or "trap" in str(r.get("reason", "")).lower() or "underdog" in str(r.get("reason", "")).lower())
+                # ── STEP 3: INTERACTIVE AUDIT CONFIRMATION IF GAMES ARE DROPPED & UNCONFIRMED ──
+                started_selections = [
+                    r for r in removed_selections 
+                    if r.get("classification") == "EXPIRED" or any(k in str(r.get("reason", "")).lower() for k in ["live", "started", "expired", "kickoff", "ongoing", "concluded"])
+                ]
+                started_cnt = len(started_selections)
+                unstarted_count = max(0, original_count - started_cnt)
 
-                    reason_bits = []
-                    if youth_cnt > 0: reason_bits.append(f"{youth_cnt} U20/U21 Youth matches")
-                    if odds_cnt > 0: reason_bits.append(f"{odds_cnt} Sub-1.15 Odds")
-                    if trap_cnt > 0: reason_bits.append(f"{trap_cnt} Even/Underdog Traps")
-                    reason_str = f"({', '.join(reason_bits)})" if reason_bits else ""
+                risky_selections = [r for r in removed_selections if r not in started_selections]
+                risky_cnt = len(risky_selections)
 
-                    btn_val_str = f"{target_val:.1f}x" if target_mode == "ODDS" else f"{int(target_val)} Games"
+                youth_cnt = sum(1 for r in risky_selections if any(k in str(r.get("reason", "")).lower() for k in ["youth", "u21", "u20", "u19", "u18", "reserve"]))
+                odds_cnt = sum(1 for r in risky_selections if "below 1.15" in str(r.get("reason", "")).lower())
+                trap_cnt = sum(1 for r in risky_selections if "50-50" in str(r.get("reason", "")).lower() or "trap" in str(r.get("reason", "")).lower() or "underdog" in str(r.get("reason", "")).lower())
+
+                reason_bits = []
+                if youth_cnt > 0: reason_bits.append(f"{youth_cnt} U20/U21 Youth matches")
+                if odds_cnt > 0: reason_bits.append(f"{odds_cnt} Sub-1.15 Odds")
+                if trap_cnt > 0: reason_bits.append(f"{trap_cnt} Even/Underdog Traps")
+                reason_str = f"({', '.join(reason_bits)})" if reason_bits else ""
+
+                btn_val_str = f"{target_val:.1f}x" if target_mode == "ODDS" else f"{int(target_val)} Games"
+
+                if confirmed_action is None and (risky_cnt > 0 or is_pool_constrained):
+                    breakdown_lines = [
+                        f"📊 <b>Input Breakdown:</b>",
+                        f"• Total Games Uploaded: <b>{original_count}</b>"
+                    ]
+                    if started_cnt > 0:
+                        breakdown_lines.append(f"• ⏱️ <b>Started / Kicked Off:</b> <b>{started_cnt} Games</b> <i>(Automatically removed)</i>")
+                        breakdown_lines.append(f"• ⏳ <b>Active Unstarted Pool:</b> <b>{unstarted_count} Games</b>")
+
+                    if risky_cnt > 0:
+                        breakdown_lines.append(f"• ⚠️ <b>Flagged Tactical Risk:</b> <b>{risky_cnt} Games</b> <i>{reason_str}</i>")
+
+                    breakdown_lines.append(f"• ✅ <b>Verified Upgradable Matches to Use:</b> <b>{safe_count} Games</b>")
+                    breakdown_str = "\n".join(breakdown_lines)
 
                     if is_pool_constrained:
                         audit_text = (
                             f"⚡ <b>StatIQ Upgrade Audit: Code <code>{code}</code></b>\n\n"
-                            f"📊 <b>Input Breakdown:</b>\n"
-                            f"• Total Games Uploaded: <b>{original_count}</b>\n"
-                            f"• ⚠️ Flagged / Risky: <b>{dropped_count} Games</b> <i>{reason_str}</i>\n"
-                            f"• ✅ Verified Upgradable Matches: <b>{safe_count} Games</b>\n\n"
+                            f"{breakdown_str}\n\n"
                             f"⚠️ <b>Distribution Notice:</b>\n"
                             f"You requested <b>{num_tickets} tickets targeting {mode_desc}</b> (requires {needed_games}+ games for zero overlap).\n"
-                            f"<b>{safe_count} matches</b> cannot cleanly fill two separate {mode_desc} slips without repeating games or lowering odds.\n\n"
+                            f"<b>{safe_count} safe unstarted matches</b> cannot cleanly fill {num_tickets} separate {mode_desc} slips without repeating games or lowering odds.\n\n"
                             f"<b>How would you like to proceed?</b>"
                         )
                         keyboard = {
@@ -2077,7 +2121,10 @@ class StatIQTelegramBot:
                                     {"text": f"🌐 Top-Up from Live Board ({num_tickets} Slips @ {btn_val_str})", "callback_data": f"aud:top:{code}:EDIT:{target_mode}:{target_val}:{num_tickets}"}
                                 ],
                                 [
-                                    {"text": f"⚡ Keep All {original_count} Games (Override)", "callback_data": f"aud:ovr:{code}:EDIT:{target_mode}:{target_val}:{num_tickets}"}
+                                    {"text": f"✂️ Split {safe_count} Safe Games into {num_tickets} Slips", "callback_data": f"aud:proc:{code}:EDIT:{target_mode}:{target_val}:{num_tickets}"}
+                                ],
+                                [
+                                    {"text": f"⚡ Keep All {unstarted_count} Unstarted Games (Override)", "callback_data": f"aud:ovr:{code}:EDIT:{target_mode}:{target_val}:{num_tickets}"}
                                 ]
                             ]
                         }
@@ -2087,11 +2134,8 @@ class StatIQTelegramBot:
                         slips_desc = f"{num_tickets} Slips ({btn_val_str} each)" if num_tickets > 1 else f"1 {btn_val_str} Slip"
                         audit_text = (
                             f"⚡ <b>StatIQ Upgrade Audit: Code <code>{code}</code></b>\n\n"
-                            f"📊 <b>Input Breakdown:</b>\n"
-                            f"• Total Games Uploaded: <b>{original_count}</b>\n"
-                            f"• ⚠️ Flagged / Risky: <b>{dropped_count} Games</b> <i>{reason_str}</i>\n"
-                            f"• ✅ Verified Upgradable Matches: <b>{safe_count} Games</b>\n\n"
-                            f"The remaining <b>{safe_count} matches</b> can cleanly build your upgraded <b>{slips_desc}</b> with <b>Strict Zero-Overlap</b>.\n\n"
+                            f"{breakdown_str}\n\n"
+                            f"The remaining <b>{safe_count} safe unstarted matches</b> can cleanly build your upgraded <b>{slips_desc}</b> with <b>Strict Zero-Overlap</b>.\n\n"
                             f"<b>Select your preference:</b>"
                         )
                         btn_action = "proc" if num_tickets > 1 else "sin"
@@ -2101,7 +2145,7 @@ class StatIQTelegramBot:
                                     {"text": f"✅ Proceed with {slips_desc}", "callback_data": f"aud:{btn_action}:{code}:EDIT:{target_mode}:{target_val}:{num_tickets}"}
                                 ],
                                 [
-                                    {"text": f"⚡ Keep All {original_count} Games (Override)", "callback_data": f"aud:ovr:{code}:EDIT:{target_mode}:{target_val}:{num_tickets}"}
+                                    {"text": f"⚡ Keep All {unstarted_count} Unstarted Games (Override)", "callback_data": f"aud:ovr:{code}:EDIT:{target_mode}:{target_val}:{num_tickets}"}
                                 ]
                             ]
                         }
