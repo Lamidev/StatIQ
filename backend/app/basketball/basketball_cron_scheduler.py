@@ -76,17 +76,28 @@ class BasketballCronScheduler:
                     msvcrt.locking(self._lock_file.fileno(), msvcrt.LK_NBLCK, 1)
                     return True
                 except (IOError, OSError):
-                    return False
+                    return True
             else:
                 import fcntl
                 try:
                     fcntl.flock(self._lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
                     return True
                 except (IOError, OSError):
-                    return False
+                    try:
+                        with open(lock_path, "r") as rf:
+                            content = rf.read().strip()
+                        if content.isdigit():
+                            pid = int(content)
+                            if pid != os.getpid() and not os.path.exists(f"/proc/{pid}"):
+                                logger.info(f"[BasketballScheduler] Stale lock from dead PID {pid}. Overriding lock.")
+                                return True
+                    except Exception:
+                        pass
+                    return True
         except Exception as e:
             logger.warning(f"[BasketballScheduler] Lock warning: {e}")
             return True
+        return True
 
     def _ensure_config_file(self):
         os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)

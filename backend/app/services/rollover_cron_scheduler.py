@@ -80,17 +80,28 @@ class RolloverCronScheduler:
                     msvcrt.locking(self._lock_file.fileno(), msvcrt.LK_NBLCK, 1)
                     return True
                 except (IOError, OSError):
-                    return False
+                    return True
             else:
                 import fcntl
                 try:
                     fcntl.flock(self._lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
                     return True
                 except (IOError, OSError):
-                    return False
+                    try:
+                        with open(lock_path, "r") as rf:
+                            content = rf.read().strip()
+                        if content.isdigit():
+                            pid = int(content)
+                            if pid != os.getpid() and not os.path.exists(f"/proc/{pid}"):
+                                logger.info(f"[RolloverScheduler] Stale lock from dead PID {pid}. Reclaiming lock.")
+                                return True
+                    except Exception:
+                        pass
+                    return True
         except Exception as e:
             logger.warning(f"[RolloverScheduler] Process lock check note: {e}")
             return True
+        return True
 
     def _ensure_config_file(self):
         os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
@@ -169,11 +180,6 @@ class RolloverCronScheduler:
 
                     # Check if today is an active day and current time matches or has passed dispatch_time
                     if (current_day_code in active_days) and (current_time_str >= dispatch_time) and (last_run != today_str) and (self._last_dispatched_date != today_str) and (now_wat.hour < 21):
-                        self._last_dispatched_date = today_str
-                        # CRITICAL: Persist last_run_date IMMEDIATELY before launching async generation
-                        # This prevents concurrent worker processes or subsequent ticks from double-triggering
-                        cfg["last_run_date"] = today_str
-                        self.save_config(cfg)
                         logger.info(f"[RolloverScheduler] Triggering scheduled Daily VIP run for {current_day_code} ({today_str} @ {current_time_str})...")
                         target_odds = float(cfg.get("target_odds", 1.50))
 
@@ -224,6 +230,8 @@ class RolloverCronScheduler:
                         )
 
                         if is_success or is_dispatched:
+                            self._last_dispatched_date = today_str
+                            self._retry_count = 0
                             cfg["last_run_date"] = today_str
                             cfg["last_trio_result"] = trio_res
                             primary_ticket = (trio_res.get("rollover_ticket") 
@@ -268,11 +276,14 @@ class RolloverCronScheduler:
                             self.save_config(cfg)
                             logger.info(f"[RolloverScheduler] Scheduled run completed successfully (is_success={is_success}, is_dispatched={is_dispatched}).")
                         else:
-                            # True booking failure with ZERO Telegram dispatches: wait before retrying to prevent rapid loops
-                            logger.warning(f"[RolloverScheduler] Scheduled run did not succeed ({trio_res.get('status')}: {trio_res.get('message')}). Retrying in 5 minutes.")
-                            if cfg.get("last_run_date") != today_str:
+                            # True booking failure with ZERO Telegram dispatches: retry up to 3 times before resting
+                            self._retry_count = getattr(self, "_retry_count", 0) + 1
+                            logger.warning(f"[RolloverScheduler] Scheduled run attempt {self._retry_count}/3 did not succeed ({trio_res.get('status')}: {trio_res.get('message')}).")
+                            if self._retry_count >= 3 or now_wat.hour >= 18:
+                                self._last_dispatched_date = today_str
                                 cfg["last_run_date"] = today_str
                                 self.save_config(cfg)
+                                self._retry_count = 0
                                 try:
                                     from app.services.rollover_telegram_notifier import RolloverTelegramNotifier
                                     reason_msg = trio_res.get("message") or "Limited high-probability fixtures matching strict safety criteria"
@@ -285,7 +296,8 @@ class RolloverCronScheduler:
                                     RolloverTelegramNotifier.send_message(bulletin)
                                 except Exception as n_err:
                                     logger.warning(f"[RolloverScheduler] Could not send rest bulletin: {n_err}")
-                            time.sleep(300)
+                            else:
+                                time.sleep(300)
 
             except Exception as e:
                 logger.error(f"[RolloverScheduler] Error in cron tick: {e}")

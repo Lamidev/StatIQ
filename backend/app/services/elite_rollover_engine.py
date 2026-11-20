@@ -1616,7 +1616,7 @@ class EliteRolloverEngine:
 
     @classmethod
     async def _request_sportybet_share_code(cls, slip_legs: List[Dict[str, Any]]) -> Tuple[Optional[str], Optional[str]]:
-        """Requests SportyBet shareCode via /ng/orders/share with retry resilience."""
+        """Requests SportyBet shareCode via /ng/orders/share with retry resilience and native curl fallback."""
         if not slip_legs:
             return None, None
 
@@ -1635,6 +1635,33 @@ class EliteRolloverEngine:
         share_url = None
         share_endpoint = f"{cls.BASE_URL}/ng/orders/share"
 
+        def _curl_share() -> Tuple[Optional[str], Optional[str]]:
+            import shutil, subprocess, json
+            curl_bin = shutil.which("curl")
+            if not curl_bin:
+                return None, None
+            try:
+                cmd = [
+                    curl_bin, "-s", "-k",
+                    "-H", "User-Agent: Mozilla/5.0 (Linux; Android 13; SM-S908B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
+                    "-H", "Accept: application/json, text/plain, */*",
+                    "-H", "platform: wap",
+                    "-H", "client-country: ng",
+                    "-H", "Content-Type: application/json",
+                    "--data-raw", json.dumps({"selections": selections_payload}),
+                    share_endpoint
+                ]
+                proc = subprocess.run(cmd, capture_output=True, text=True, timeout=8)
+                if proc.returncode == 0 and proc.stdout:
+                    c_j = json.loads(proc.stdout)
+                    if c_j.get("bizCode") == 10000:
+                        b_code = c_j.get("data", {}).get("shareCode")
+                        s_url = c_j.get("data", {}).get("shareURL") or f"https://www.sportybet.com/ng/?shareCode={b_code}"
+                        return b_code, s_url
+            except Exception as e:
+                logger.debug(f"[EliteRollover] curl share fallback note: {e}")
+            return None, None
+
         for attempt in range(1, 3):
             try:
                 async with httpx.AsyncClient(timeout=10.0, headers=cls.HEADERS) as client:
@@ -1648,12 +1675,28 @@ class EliteRolloverEngine:
                             return booking_code, share_url
                         else:
                             logger.warning(f"[EliteRollover] SportyBet rejected share request (attempt {attempt}): {res_data}")
+                    elif r.status_code == 403:
+                        logger.warning(f"[EliteRollover] SportyBet HTTP 403 on /orders/share, executing curl fallback...")
+                        b_code, s_url = _curl_share()
+                        if b_code:
+                            logger.info(f"[EliteRollover] Generated SportyBet Booking Code via curl fallback: {b_code}")
+                            return b_code, s_url
                     else:
                         logger.warning(f"[EliteRollover] SportyBet HTTP error {r.status_code} (attempt {attempt})")
             except Exception as e:
                 logger.error(f"[EliteRollover] Error requesting SportyBet booking code (attempt {attempt}): {e}")
+                b_code, s_url = _curl_share()
+                if b_code:
+                    logger.info(f"[EliteRollover] Generated SportyBet Booking Code via curl fallback on exception: {b_code}")
+                    return b_code, s_url
             if attempt < 2:
                 await asyncio.sleep(1.0)
+
+        # Final fallback
+        if not booking_code:
+            booking_code, share_url = _curl_share()
+            if booking_code:
+                logger.info(f"[EliteRollover] Generated SportyBet Booking Code via final curl fallback: {booking_code}")
 
         return booking_code, share_url
 

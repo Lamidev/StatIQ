@@ -104,9 +104,11 @@ def start_background_ticket_sync_worker():
 
     # Start StatIQ 10:00 AM WAT Automated Rollover Cron Daemon
     rollover_scheduler.start()
+    print(f"[RolloverScheduler] Daily 10:00 AM daemon initialized (running={rollover_scheduler._running})")
 
     # Start StatIQ 09:00 AM WAT Basketball 2.0x Automation Cron Daemon
     basketball_scheduler.start()
+    print(f"[BasketballScheduler] Daily 09:00 AM daemon initialized (running={basketball_scheduler._running})")
 
     # Start StatIQ Autonomous Telegram Bot Remote Controller
     try:
