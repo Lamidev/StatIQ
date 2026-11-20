@@ -128,6 +128,7 @@ class GoalKicksService:
                 elif r.status_code == 403:
                     curl_bin = shutil.which("curl")
                     if curl_bin:
+                        proxy_url = os.getenv("SPORTYBET_PROXY") or os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY")
                         cmd = [
                             curl_bin, "-s", "-k",
                             "-H", "User-Agent: Mozilla/5.0 (Linux; Android 13; SM-S908B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
@@ -135,9 +136,12 @@ class GoalKicksService:
                             "-H", "platform: wap",
                             "-H", "client-country: ng",
                             "-H", "Content-Type: application/json",
+                            "--max-time", "8",
                             "--data-raw", json.dumps(payload),
-                            url
                         ]
+                        if proxy_url:
+                            cmd.extend(["--proxy", proxy_url])
+                        cmd.append(url)
                         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=8)
                         if proc.returncode == 0 and proc.stdout:
                             c_j = json.loads(proc.stdout)
@@ -148,6 +152,37 @@ class GoalKicksService:
                                     break
             except Exception as e:
                 logger.warning(f"[GoalKicks] Error fetching page {page}: {e}")
+
+        # Resilient fallback: Query wapUpcomingEvents if tournaments is empty
+        if not tournaments:
+            proxy_url = os.getenv("SPORTYBET_PROXY") or os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY")
+            curl_bin = shutil.which("curl")
+            if curl_bin:
+                for p_num in range(1, 4):
+                    up_url = f"{cls.BASE_URL}/ng/factsCenter/wapUpcomingEvents?sportId=sr:sport:1&pageSize=100&pageNum={p_num}"
+                    cmd = [
+                        curl_bin, "-s", "-k",
+                        "-H", "User-Agent: Mozilla/5.0 (Linux; Android 13; SM-S908B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
+                        "-H", "Accept: application/json, text/plain, */*",
+                        "-H", "platform: wap",
+                        "-H", "client-country: ng",
+                        "--max-time", "10",
+                    ]
+                    if proxy_url:
+                        cmd.extend(["--proxy", proxy_url])
+                    cmd.append(up_url)
+                    try:
+                        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+                        if proc.returncode == 0 and proc.stdout:
+                            c_j = json.loads(proc.stdout)
+                            if c_j.get("bizCode") == 10000:
+                                evs = c_j.get("data", [])
+                                if isinstance(evs, list) and evs:
+                                    tournaments.append({"name": "Upcoming Events", "events": evs})
+                                    if len(evs) < 30:
+                                        break
+                    except Exception as e:
+                        logger.debug(f"[GoalKicks] wapUpcomingEvents fallback error: {e}")
 
         if not tournaments:
             return []
@@ -352,6 +387,7 @@ class GoalKicksService:
             if not curl_bin:
                 return None, None
             try:
+                proxy_url = os.getenv("SPORTYBET_PROXY") or os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY")
                 cmd = [
                     curl_bin, "-s", "-k",
                     "-H", "User-Agent: Mozilla/5.0 (Linux; Android 13; SM-S908B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
@@ -359,10 +395,13 @@ class GoalKicksService:
                     "-H", "platform: wap",
                     "-H", "client-country: ng",
                     "-H", "Content-Type: application/json",
+                    "--max-time", "10",
                     "--data-raw", json.dumps({"selections": selections_payload}),
-                    share_endpoint
                 ]
-                proc = subprocess.run(cmd, capture_output=True, text=True, timeout=8)
+                if proxy_url:
+                    cmd.extend(["--proxy", proxy_url])
+                cmd.append(share_endpoint)
+                proc = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
                 if proc.returncode == 0 and proc.stdout:
                     c_j = json.loads(proc.stdout)
                     if c_j.get("bizCode") == 10000:

@@ -260,8 +260,10 @@ class SportyBetAdapter(BookmakerAdapter):
                     "-H", "X-Forwarded-For: 102.89.34.18",
                     "-H", f"Referer: https://{dom}/{primary_reg}/",
                     "--max-time", "12",
-                    curl_url
                 ]
+                if proxy_url:
+                    cmd.extend(["--proxy", proxy_url])
+                cmd.append(curl_url)
                 try:
                     proc = subprocess.run(cmd, capture_output=True, text=True, timeout=12.0)
                     if proc.returncode == 0 and proc.stdout:
@@ -1252,6 +1254,7 @@ class SportyBetAdapter(BookmakerAdapter):
             if not curl_bin:
                 return None
             try:
+                proxy_url = os.getenv("SPORTYBET_PROXY") or os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY")
                 cmd = [
                     curl_bin, "-s", "-k",
                     "-H", "User-Agent: Mozilla/5.0 (Linux; Android 13; SM-S908B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
@@ -1264,8 +1267,10 @@ class SportyBetAdapter(BookmakerAdapter):
                     "-H", "Content-Type: application/json",
                     "--max-time", "12",
                     "--data-raw", json.dumps({"selections": selections_payload}),
-                    url_share
                 ]
+                if proxy_url:
+                    cmd.extend(["--proxy", proxy_url])
+                cmd.append(url_share)
                 proc = subprocess.run(cmd, capture_output=True, text=True, timeout=12)
                 if proc.returncode == 0 and proc.stdout:
                     c_j = json.loads(proc.stdout)
