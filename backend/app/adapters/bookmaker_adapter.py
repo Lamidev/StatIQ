@@ -203,6 +203,7 @@ class SportyBetAdapter(BookmakerAdapter):
         Fetches and decodes SportyBet share code via public endpoint.
         Uses resilient HTTP client with keep-alive, 12s timeout, and multi-region fallback (ng, gh, ke, ug, tz, zm).
         """
+        import time as _t
         code_clean = code.strip().upper()
         
         # Try requested country first, then fallback across other SportyBet country domains
@@ -309,7 +310,7 @@ class SportyBetAdapter(BookmakerAdapter):
                 # If blocked or empty, rotate circuit before next attempt
                 if proxy_url and ("9055" in proxy_url or "tor" in proxy_url.lower()):
                     _rotate_tor_circuit()
-                    time.sleep(0.5)
+                    _t.sleep(0.5)
 
         # Step 2: HTTPX query fallback across resilient mobile & sports endpoints
         if not data:
@@ -954,6 +955,7 @@ class SportyBetAdapter(BookmakerAdapter):
         Generates a genuine, loadable SportyBet booking code via SportyBet's live API.
         Maps selections to SportyBet canonical marketId, outcomeId, and specifier.
         """
+        import time as _t
         url_share = f"{self.BASE_URL}/{country_code.lower()}/orders/share"
         
         target_ids = set()
@@ -1323,7 +1325,7 @@ class SportyBetAdapter(BookmakerAdapter):
                     logger.debug(f"[SportyBetAdapter] curl share post note (attempt {attempt}): {e}")
                 if proxy_url and ("9055" in proxy_url or "tor" in proxy_url.lower()):
                     _rotate_tor_circuit()
-                    time.sleep(0.5)
+                    _t.sleep(0.5)
             return None
 
         # Request shareCode from SportyBet API (try curl first on Linux/cloud or fallback from httpx)
