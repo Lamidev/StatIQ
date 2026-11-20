@@ -77,6 +77,9 @@ class SportyBetClient:
                     "-H", "Content-Type: application/json",
                     "--data-raw", json.dumps(payload)
                 ])
+            proxy_url = os.getenv("SPORTYBET_PROXY") or os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY")
+            if proxy_url:
+                cmd.extend(["--proxy", proxy_url])
             cmd.append(url)
             proc = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
             if proc.returncode == 0 and proc.stdout:
