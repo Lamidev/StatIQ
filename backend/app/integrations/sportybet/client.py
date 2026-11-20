@@ -96,7 +96,7 @@ class SportyBetClient:
                     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                     s.settimeout(2.0)
                     s.connect(('127.0.0.1', 9051))
-                    s.sendall(b'AUTHENTICATE ""\r\n')
+                    s.sendall(b'AUTHENTICATE\r\n')
                     res = s.recv(1024)
                     if b'250 OK' in res:
                         s.sendall(b'SIGNAL NEWNYM\r\n')
@@ -134,6 +134,12 @@ class SportyBetClient:
         if tournament_id:
             payload["tournamentId"] = tournament_id
 
+        proxy_url = os.getenv("SPORTYBET_PROXY") or os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY")
+        if proxy_url:
+            curl_data = self._curl_exec("POST", url, payload)
+            if isinstance(curl_data, dict):
+                return curl_data
+
         client = await self.get_async_client()
         try:
             resp = await client.post(url, json=payload)
@@ -142,7 +148,6 @@ class SportyBetClient:
                 if data.get("bizCode") == 10000:
                     return data.get("data", {})
             else:
-                logger.warning(f"[SportyBetClient] HTTP {resp.status_code} on {url}, executing curl fallback...")
                 curl_data = self._curl_exec("POST", url, payload)
                 if isinstance(curl_data, dict):
                     return curl_data
@@ -162,6 +167,15 @@ class SportyBetClient:
         Queries wapUpcomingEvents endpoint.
         """
         url = f"{self.BASE_URL}/{self.region}/factsCenter/wapUpcomingEvents?sportId={sport_id}&pageSize={page_size}"
+        proxy_url = os.getenv("SPORTYBET_PROXY") or os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY")
+        if proxy_url:
+            curl_data = self._curl_exec("GET", url)
+            if curl_data is not None:
+                if isinstance(curl_data, list):
+                    return curl_data
+                elif isinstance(curl_data, dict):
+                    return curl_data.get("events", [])
+
         client = await self.get_async_client()
         try:
             resp = await client.get(url)
@@ -178,6 +192,8 @@ class SportyBetClient:
                 if curl_data is not None:
                     if isinstance(curl_data, list):
                         return curl_data
+                    elif isinstance(curl_data, dict):
+                        return curl_data.get("events", [])
                     elif isinstance(curl_data, dict):
                         return curl_data.get("events", [])
         except Exception as e:

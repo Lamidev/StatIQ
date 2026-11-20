@@ -161,11 +161,12 @@ class EliteRolloverEngine:
                         tours = data.get("data", {}).get("tournaments", [])
                         has_more = bool(data.get("data", {}).get("moreEvents", False))
                         return page, tours, has_more
-                elif r.status_code == 403:
-                    # CloudFront WAF on cloud datacenter IPs: seamless curl fallback
-                    import shutil, subprocess, json
+                elif r.status_code in (403, 200):
+                    # CloudFront WAF on cloud datacenter IPs or WAF block: seamless curl fallback
+                    import shutil, subprocess, json, os
                     curl_bin = shutil.which("curl")
                     if curl_bin:
+                        proxy_url = os.getenv("SPORTYBET_PROXY") or os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY")
                         cmd = [
                             curl_bin, "-s", "-k",
                             "-H", "User-Agent: Mozilla/5.0 (Linux; Android 13; SM-S908B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
@@ -174,15 +175,20 @@ class EliteRolloverEngine:
                             "-H", "client-country: ng",
                             "-H", "Content-Type: application/json",
                             "--data-raw", json.dumps(payload),
-                            url
                         ]
+                        if proxy_url:
+                            cmd.extend(["--proxy", proxy_url])
+                        cmd.append(url)
                         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=8)
                         if proc.returncode == 0 and proc.stdout:
-                            c_j = json.loads(proc.stdout)
-                            if c_j.get("bizCode") == 10000:
-                                tours = c_j.get("data", {}).get("tournaments", [])
-                                has_more = bool(c_j.get("data", {}).get("moreEvents", False))
-                                return page, tours, has_more
+                            try:
+                                c_j = json.loads(proc.stdout)
+                                if c_j.get("bizCode") == 10000:
+                                    tours = c_j.get("data", {}).get("tournaments", [])
+                                    has_more = bool(c_j.get("data", {}).get("moreEvents", False))
+                                    return page, tours, has_more
+                            except Exception:
+                                pass
             except Exception as e:
                 logger.warning(f"[EliteRollover] Page {page} fetch error: {e}")
             return page, [], False
@@ -226,6 +232,44 @@ class EliteRolloverEngine:
                     ev["_categoryName"] = c_name
                     ev["_tournamentName"] = t_name
                     all_events.append(ev)
+
+        # Fallback feed: Query wapUpcomingEvents if all_events is empty or too constrained
+        if not all_events:
+            try:
+                import shutil, subprocess, json, os
+                curl_bin = shutil.which("curl")
+                if curl_bin:
+                    proxy_url = os.getenv("SPORTYBET_PROXY") or os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY")
+                    up_url = f"{cls.BASE_URL}/ng/factsCenter/wapUpcomingEvents?sportId=sr:sport:1&pageSize=100"
+                    cmd = [
+                        curl_bin, "-s", "-k",
+                        "-H", "User-Agent: Mozilla/5.0 (Linux; Android 13; SM-S908B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
+                        "-H", "Accept: application/json, text/plain, */*",
+                        "-H", "platform: wap",
+                        "-H", "client-country: ng",
+                    ]
+                    if proxy_url:
+                        cmd.extend(["--proxy", proxy_url])
+                    cmd.append(up_url)
+                    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+                    if proc.returncode == 0 and proc.stdout:
+                        try:
+                            up_j = json.loads(proc.stdout)
+                            if up_j.get("bizCode") == 10000:
+                                for ev in up_j.get("data", []):
+                                    eid = ev.get("eventId")
+                                    if eid and eid not in seen_event_ids:
+                                        seen_event_ids.add(eid)
+                                        c_name = ev.get("sport", {}).get("category", {}).get("name") or "International"
+                                        t_name = ev.get("sport", {}).get("category", {}).get("tournament", {}).get("name") or "League"
+                                        ev["_categoryName"] = c_name
+                                        ev["_tournamentName"] = t_name
+                                        all_events.append(ev)
+                                logger.info(f"[EliteRollover] Fallback ingested {len(all_events)} events from wapUpcomingEvents.")
+                        except Exception:
+                            pass
+            except Exception as e:
+                logger.warning(f"[EliteRollover] wapUpcomingEvents fallback error: {e}")
 
         if all_events:
             if today_only:
@@ -1636,10 +1680,11 @@ class EliteRolloverEngine:
         share_endpoint = f"{cls.BASE_URL}/ng/orders/share"
 
         def _curl_share() -> Tuple[Optional[str], Optional[str]]:
-            import shutil, subprocess, json
+            import shutil, subprocess, json, os
             curl_bin = shutil.which("curl")
             if not curl_bin:
                 return None, None
+            proxy_url = os.getenv("SPORTYBET_PROXY") or os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY")
             try:
                 cmd = [
                     curl_bin, "-s", "-k",
@@ -1649,8 +1694,10 @@ class EliteRolloverEngine:
                     "-H", "client-country: ng",
                     "-H", "Content-Type: application/json",
                     "--data-raw", json.dumps({"selections": selections_payload}),
-                    share_endpoint
                 ]
+                if proxy_url:
+                    cmd.extend(["--proxy", proxy_url])
+                cmd.append(share_endpoint)
                 proc = subprocess.run(cmd, capture_output=True, text=True, timeout=8)
                 if proc.returncode == 0 and proc.stdout:
                     c_j = json.loads(proc.stdout)

@@ -147,7 +147,7 @@ def _rotate_tor_circuit():
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         s.settimeout(2.0)
         s.connect(('127.0.0.1', 9051))
-        s.sendall(b'AUTHENTICATE ""\r\n')
+        s.sendall(b'AUTHENTICATE\r\n')
         res = s.recv(1024)
         if b'250 OK' in res:
             s.sendall(b'SIGNAL NEWNYM\r\n')

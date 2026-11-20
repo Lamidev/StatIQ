@@ -3009,8 +3009,13 @@ class StatIQTelegramBot:
         # Explicit commands with their own dedicated parsers must not be hijacked
         if any(low.startswith(p) for p in [
             "/games", "/matches", "/remove", "/trim", "/edit", "/upgrade",
+            "games ", "matches ", "remove ", "trim ", "edit ", "upgrade ",
             "/portfolio", "/split", "/permute", "/distribute", "/rollover", "/roll", "/challenge", "/ladder"
         ]):
+            return None
+
+        # Never hijack messages that are targeted at code auditing, trimming, or editing
+        if any(k in low for k in ["remove", "trim", "edit", "upgrade", "audit", "from code", "sharecode"]):
             return None
 
         # Pattern 0: Direct shortcut commands like /2x10, /2x10odds, /2x5, /2x5odds, /3x10
@@ -3391,7 +3396,7 @@ class StatIQTelegramBot:
 
         # 5a. /remove (or alias /trim): Risk purge preserving original picks as-is
         # Examples: /remove CODE 5 and 10 | /remove CODE duo | /remove D99K41 15 games 2 tickets | /remove D99K41
-        remove_match = re.match(r"^/(?:remove|trim)\s+([A-Za-z0-9]+)(.*)", text, re.IGNORECASE)
+        remove_match = re.match(r"^/?(?:remove|trim)\s+([A-Za-z0-9]+)(.*)", text, re.IGNORECASE)
         if remove_match:
             code = remove_match.group(1).upper()
             rest = remove_match.group(2).lower()
@@ -3447,7 +3452,7 @@ class StatIQTelegramBot:
 
         # 5b. /edit (or alias /reedit, /upgrade): Market upgrade to verified SportyBet safety markets
         # Examples: /edit CODE 5 and 10 | /edit CODE duo | /edit D99K41 15 games 2 tickets | /edit D99K41
-        edit_match = re.match(r"^/(?:edit|reedit|upgrade)\s+([A-Za-z0-9]+)(.*)", text, re.IGNORECASE)
+        edit_match = re.match(r"^/?(?:edit|reedit|upgrade)\s+([A-Za-z0-9]+)(.*)", text, re.IGNORECASE)
         if edit_match:
             code = edit_match.group(1).upper()
             rest = edit_match.group(2).lower()
