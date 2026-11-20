@@ -58,37 +58,45 @@ class SportyBetDiscoveryService:
         updated_count = 0
 
         for t_id, raw_t in tournaments_discovered.items():
-            norm = SportyBetNormalizer.normalize_competition(raw_t)
-            
-            existing = db.execute(
-                select(SportyBetCompetition).where(SportyBetCompetition.sporty_competition_id == t_id)
-            ).scalars().first()
+            try:
+                norm = SportyBetNormalizer.normalize_competition(raw_t)
+                
+                existing = db.execute(
+                    select(SportyBetCompetition).where(SportyBetCompetition.sporty_competition_id == t_id)
+                ).scalars().first()
 
-            if existing:
-                existing.name = norm["name"]
-                existing.country = norm["country"]
-                existing.category = norm["category"]
-                existing.status = "ACTIVE"
-                existing.raw_payload = norm["raw_payload"]
-                existing.last_seen_at = now
-                existing.updated_at = now
-                updated_count += 1
-            else:
-                new_comp = SportyBetCompetition(
-                    sporty_competition_id=norm["sporty_competition_id"],
-                    name=norm["name"],
-                    country=norm["country"],
-                    category=norm["category"],
-                    status="ACTIVE",
-                    raw_payload=norm["raw_payload"],
-                    first_seen_at=now,
-                    last_seen_at=now,
-                    updated_at=now
-                )
-                db.add(new_comp)
-                inserted_count += 1
+                if existing:
+                    existing.name = norm["name"]
+                    existing.country = norm["country"]
+                    existing.category = norm["category"]
+                    existing.status = "ACTIVE"
+                    existing.raw_payload = norm["raw_payload"]
+                    existing.last_seen_at = now
+                    existing.updated_at = now
+                    updated_count += 1
+                else:
+                    new_comp = SportyBetCompetition(
+                        sporty_competition_id=norm["sporty_competition_id"],
+                        name=norm["name"],
+                        country=norm["country"],
+                        category=norm["category"],
+                        status="ACTIVE",
+                        raw_payload=norm["raw_payload"],
+                        first_seen_at=now,
+                        last_seen_at=now,
+                        updated_at=now
+                    )
+                    db.add(new_comp)
+                    db.flush()
+                    inserted_count += 1
+            except Exception:
+                db.rollback()
+                continue
 
-        db.commit()
+        try:
+            db.commit()
+        except Exception:
+            db.rollback()
         logger.info(f"[Discovery] Synced competitions: {inserted_count} new, {updated_count} updated.")
 
         return {
