@@ -154,6 +154,20 @@ async def generate_new_booking_code(req: GenerateCodeRequest, db: Session = Depe
         selections=req.selections,
         region=req.country_code or "ng"
     )
+    if res.get("status") != "VERIFIED":
+        from app.adapters.bookmaker_adapter import SportyBetAdapter
+        adapter = SportyBetAdapter(db)
+        adapter_res = adapter.generate_booking_code(req.selections, country_code=req.country_code or "ng")
+        if adapter_res.get("status") == "SUCCESS" and adapter_res.get("booking_code"):
+            return {
+                "status": "VERIFIED",
+                "booking_code": adapter_res.get("booking_code"),
+                "share_url": adapter_res.get("load_url"),
+                "resolved_count": len(adapter_res.get("booked_selections", [])),
+                "total_requested": len(req.selections),
+                "verification_status": "BOOKING_VERIFIED",
+                "verified_selections": adapter_res.get("booked_selections", [])
+            }
     return res
 
 

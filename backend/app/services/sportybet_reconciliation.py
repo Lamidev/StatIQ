@@ -47,7 +47,11 @@ class SportyBetVerificationEngine(SportsbookProvider):
         url = f"{self.BASE_URL}/{region.lower()}/factsCenter/wapUpcomingEvents?sportId={sport_id}&pageSize=100"
 
         try:
-            async with httpx.AsyncClient(timeout=8.0, headers=self.HEADERS) as client:
+            proxy_url = os.getenv("SPORTYBET_PROXY") or os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY")
+            client_kwargs = {"timeout": 8.0, "headers": self.HEADERS, "verify": False}
+            if proxy_url:
+                client_kwargs["proxy"] = proxy_url
+            async with httpx.AsyncClient(**client_kwargs) as client:
                 r = await client.get(url)
                 if r.status_code == 200:
                     data = r.json()
@@ -78,7 +82,11 @@ class SportyBetVerificationEngine(SportsbookProvider):
             f"{self.BASE_URL}/{region.lower()}/factsCenter/eventDetail?eventId={event_id}",
         ]
         try:
-            async with httpx.AsyncClient(timeout=3.0, headers=self.HEADERS) as client:
+            proxy_url = os.getenv("SPORTYBET_PROXY") or os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY")
+            client_kwargs = {"timeout": 4.0, "headers": self.HEADERS, "verify": False}
+            if proxy_url:
+                client_kwargs["proxy"] = proxy_url
+            async with httpx.AsyncClient(**client_kwargs) as client:
                 for url in urls:
                     r = await client.get(url)
                     if r.status_code == 200:
@@ -406,7 +414,11 @@ class SportyBetVerificationEngine(SportsbookProvider):
         url = f"{self.BASE_URL}/{region.lower()}/orders/share"
         payload = {"selections": selections}
         try:
-            async with httpx.AsyncClient(timeout=8.0, headers=self.HEADERS) as client:
+            proxy_url = os.getenv("SPORTYBET_PROXY") or os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY")
+            client_kwargs = {"timeout": 8.0, "headers": self.HEADERS, "verify": False}
+            if proxy_url:
+                client_kwargs["proxy"] = proxy_url
+            async with httpx.AsyncClient(**client_kwargs) as client:
                 r = await client.post(url, json=payload)
                 if r.status_code == 200:
                     data = r.json()
@@ -428,7 +440,11 @@ class SportyBetVerificationEngine(SportsbookProvider):
         """
         url = f"{self.BASE_URL}/{region.lower()}/orders/share/{booking_code.strip()}"
         try:
-            async with httpx.AsyncClient(timeout=8.0, headers=self.HEADERS) as client:
+            proxy_url = os.getenv("SPORTYBET_PROXY") or os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY")
+            client_kwargs = {"timeout": 8.0, "headers": self.HEADERS, "verify": False}
+            if proxy_url:
+                client_kwargs["proxy"] = proxy_url
+            async with httpx.AsyncClient(**client_kwargs) as client:
                 r = await client.get(url)
                 if r.status_code == 200:
                     data = r.json()
