@@ -24,6 +24,15 @@ class BasketballTicketBuilder:
         "Referer": "https://mobile.sportybet.com/ng/"
     }
 
+    APP_HEADERS = {
+        "User-Agent": "SportyBet/4.25.0 (Android; 13; Scale/2.75)",
+        "Accept": "application/json, text/plain, */*",
+        "platform": "app",
+        "client-country": "ng",
+        "app-version": "4.25.0",
+        "os": "Android"
+    }
+
     @classmethod
     def book_on_sportybet(cls, picks: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
@@ -49,8 +58,53 @@ class BasketballTicketBuilder:
         if not selections_payload:
             return {"status": "FAILED", "booking_code": "N/A", "message": "No valid picks to book."}
 
+        import shutil, subprocess, json, os
+        curl_bin = shutil.which("curl")
+        proxy_url = os.getenv("SPORTYBET_PROXY") or os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY") or "socks5h://127.0.0.1:9055"
+
+        if curl_bin:
+            try:
+                cmd = [
+                    curl_bin, "-s", "-k",
+                    "-H", "User-Agent: SportyBet/4.25.0 (Android; 13; Scale/2.75)",
+                    "-H", "Accept: application/json, text/plain, */*",
+                    "-H", "platform: app",
+                    "-H", "client-country: ng",
+                    "-H", "app-version: 4.25.0",
+                    "-H", "os: Android",
+                    "-H", "Content-Type: application/json",
+                    "--max-time", "18",
+                    "--data-raw", json.dumps({"selections": selections_payload}),
+                ]
+                if proxy_url:
+                    cmd.extend(["--proxy", proxy_url])
+                cmd.append(cls.SHARE_URL)
+                proc = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
+                if proc.returncode == 0 and proc.stdout:
+                    res = json.loads(proc.stdout)
+                    if res.get("bizCode") == 10000:
+                        data = res.get("data", {})
+                        code = data.get("shareCode")
+                        load_url = data.get("shareURL") or f"https://www.sportybet.com/ng/?shareCode={code}"
+                        return {
+                            "status": "SUCCESS",
+                            "booking_code": code,
+                            "share_url": load_url,
+                            "raw_response": data
+                        }
+            except Exception as e:
+                logger.debug(f"[BasketballTicketBuilder] curl share note: {e}")
+
+        client_kwargs = {
+            "timeout": 12.0,
+            "headers": cls.APP_HEADERS,
+            "verify": False
+        }
+        if proxy_url:
+            client_kwargs["proxy"] = proxy_url
+
         try:
-            with httpx.Client(timeout=8.0, headers=cls.HEADERS, verify=False) as client:
+            with httpx.Client(**client_kwargs) as client:
                 r = client.post(cls.SHARE_URL, json={"selections": selections_payload})
                 if r.status_code == 200:
                     res = r.json()

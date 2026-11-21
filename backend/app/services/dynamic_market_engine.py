@@ -187,6 +187,15 @@ class DynamicMarketEngine:
         "Referer": "https://mobile.sportybet.com/ng/"
     }
 
+    APP_HEADERS = {
+        "User-Agent": "SportyBet/4.25.0 (Android; 13; Scale/2.75)",
+        "Accept": "application/json, text/plain, */*",
+        "platform": "app",
+        "client-country": "ng",
+        "app-version": "4.25.0",
+        "os": "Android"
+    }
+
     @classmethod
     def resolve_market_intent(cls, query: str) -> Dict[str, Any]:
         """
@@ -554,20 +563,58 @@ class DynamicMarketEngine:
         share_code = None
         share_url = None
         share_endpoint = f"{cls.BASE_URL}/ng/orders/share"
+        proxy_url = os.getenv("SPORTYBET_PROXY") or os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY") or "socks5h://127.0.0.1:9055"
 
-        try:
-            async with httpx.AsyncClient(timeout=10.0, headers=cls.HEADERS) as http_c:
-                resp = await http_c.post(share_endpoint, json={"selections": selections_payload})
-                if resp.status_code == 200:
-                    res_data = resp.json()
-                    if res_data.get("bizCode") == 10000:
-                        share_code = res_data.get("data", {}).get("shareCode")
-                        share_url = res_data.get("data", {}).get("shareURL") or f"https://www.sportybet.com/ng/?shareCode={share_code}"
-                        logger.info(f"[DynamicMarket] Successfully generated SportyBet Booking Code: {share_code}")
-                    else:
-                        logger.warning(f"[DynamicMarket] SportyBet rejected booking: {res_data}")
-        except Exception as e:
-            logger.error(f"[DynamicMarket] Error booking share code: {e}")
+        import shutil, subprocess, json
+        curl_bin = shutil.which("curl")
+        if curl_bin:
+            try:
+                cmd = [
+                    curl_bin, "-s", "-k",
+                    "-H", "User-Agent: SportyBet/4.25.0 (Android; 13; Scale/2.75)",
+                    "-H", "Accept: application/json, text/plain, */*",
+                    "-H", "platform: app",
+                    "-H", "client-country: ng",
+                    "-H", "app-version: 4.25.0",
+                    "-H", "os: Android",
+                    "-H", "Content-Type: application/json",
+                    "--max-time", "18",
+                    "--data-raw", json.dumps({"selections": selections_payload}),
+                ]
+                if proxy_url:
+                    cmd.extend(["--proxy", proxy_url])
+                cmd.append(share_endpoint)
+                proc = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
+                if proc.returncode == 0 and proc.stdout:
+                    c_j = json.loads(proc.stdout)
+                    if c_j.get("bizCode") == 10000:
+                        share_code = c_j.get("data", {}).get("shareCode")
+                        share_url = c_j.get("data", {}).get("shareURL") or f"https://www.sportybet.com/ng/?shareCode={share_code}"
+                        logger.info(f"[DynamicMarket] Successfully generated SportyBet Booking Code via curl: {share_code}")
+            except Exception as e:
+                logger.debug(f"[DynamicMarket] curl share fallback note: {e}")
+
+        if not share_code:
+            client_kwargs = {
+                "timeout": 12.0,
+                "headers": cls.APP_HEADERS,
+                "verify": False
+            }
+            if proxy_url:
+                client_kwargs["proxy"] = proxy_url
+            try:
+                async with httpx.AsyncClient(**client_kwargs) as http_c:
+                    resp = await http_c.post(share_endpoint, json={"selections": selections_payload})
+                    if resp.status_code == 200:
+                        res_data = resp.json()
+                        if res_data.get("bizCode") == 10000:
+                            share_code = res_data.get("data", {}).get("shareCode")
+                            share_url = res_data.get("data", {}).get("shareURL") or f"https://www.sportybet.com/ng/?shareCode={share_code}"
+                            logger.info(f"[DynamicMarket] Successfully generated SportyBet Booking Code: {share_code}")
+                        else:
+                            logger.warning(f"[DynamicMarket] SportyBet rejected booking: {res_data}")
+            except Exception as e:
+                logger.error(f"[DynamicMarket] Error booking share code: {e}")
 
         combined_prob = round(math.prod(leg.get("model_probability", 0.80) for leg in selected_legs) * 100.0, 1)
         leg_count = len(selected_legs)

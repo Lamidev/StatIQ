@@ -1283,26 +1283,25 @@ class SportyBetAdapter(BookmakerAdapter):
             curl_bin = shutil.which("curl")
             if not curl_bin:
                 return None
-            proxy_url = os.getenv("SPORTYBET_PROXY") or os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY")
+            proxy_url = os.getenv("SPORTYBET_PROXY") or os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY") or "socks5h://127.0.0.1:9055"
             for attempt in range(1, 4):
                 try:
                     cmd = [
                         curl_bin, "-s", "-k",
-                        "-H", "User-Agent: Mozilla/5.0 (Linux; Android 13; SM-S908B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
+                        "-H", "User-Agent: SportyBet/4.25.0 (Android; 13; Scale/2.75)",
                         "-H", "Accept: application/json, text/plain, */*",
-                        "-H", "Accept-Language: en-US,en;q=0.9",
-                        "-H", "platform: wap",
+                        "-H", "platform: app",
                         "-H", f"client-country: {country_code.lower()}",
-                        "-H", "X-Forwarded-For: 102.89.34.18",
-                        "-H", f"Referer: https://mobile.sportybet.com/{country_code.lower()}/",
+                        "-H", "app-version: 4.25.0",
+                        "-H", "os: Android",
                         "-H", "Content-Type: application/json",
-                        "--max-time", "12",
+                        "--max-time", "18",
                         "--data-raw", json.dumps({"selections": selections_payload}),
                     ]
                     if proxy_url:
                         cmd.extend(["--proxy", proxy_url])
                     cmd.append(url_share)
-                    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=12)
+                    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
                     if proc.returncode == 0 and proc.stdout:
                         c_j = json.loads(proc.stdout)
                         if c_j.get("bizCode") == 10000:

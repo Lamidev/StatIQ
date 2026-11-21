@@ -1,12 +1,21 @@
+import os
 import time
 import math
 import logging
 import asyncio
+import shutil
+import subprocess
+import json
 from typing import Dict, Any, List, Optional, Tuple
 import datetime
 import collections
 import httpx
+from dotenv import load_dotenv
 from sqlalchemy.orm import Session
+
+# Ensure environment variables are loaded across all worker threads/subprocesses
+load_dotenv(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".env")))
+load_dotenv(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".env")))
 
 from app.db.session import SessionLocal
 from app.db.models import TrackedTicket, BookingAuditRecord
@@ -34,8 +43,16 @@ class EliteRolloverEngine:
         "client-country": "ng",
         "X-Forwarded-For": "102.89.34.18",
         "Accept": "application/json, text/plain, */*",
-
         "Referer": "https://mobile.sportybet.com/ng/"
+    }
+
+    APP_HEADERS = {
+        "User-Agent": "SportyBet/4.25.0 (Android; 13; Scale/2.75)",
+        "Accept": "application/json, text/plain, */*",
+        "platform": "app",
+        "client-country": "ng",
+        "app-version": "4.25.0",
+        "os": "Android"
     }
 
     _today_cache = None
@@ -129,7 +146,6 @@ class EliteRolloverEngine:
         from app.services.time_horizon_service import TimeHorizonService
 
         def _fetch_page_sync(page: int) -> Tuple[int, List[Dict[str, Any]], bool]:
-            client = SportyBetIngestionService._get_client()
             url = f"{cls.BASE_URL}/ng/factsCenter/wapConfigurableEventsByOrder"
             payload = {
                 "sportId": "sr:sport:1",
@@ -153,7 +169,42 @@ class EliteRolloverEngine:
                 else:
                     payload["timeline"] = 3
 
+            import shutil, subprocess, json, os
+            curl_bin = shutil.which("curl")
+            proxy_url = os.getenv("SPORTYBET_PROXY") or os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY") or "socks5h://127.0.0.1:9055"
+
+            if curl_bin:
+                try:
+                    cmd = [
+                        curl_bin, "-s", "-k",
+                        "-H", "User-Agent: SportyBet/4.25.0 (Android; 13; Scale/2.75)",
+                        "-H", "Accept: application/json, text/plain, */*",
+                        "-H", "platform: app",
+                        "-H", "client-country: ng",
+                        "-H", "app-version: 4.25.0",
+                        "-H", "os: Android",
+                        "-H", "Content-Type: application/json",
+                        "--max-time", "25",
+                        "--data-raw", json.dumps(payload),
+                    ]
+                    if proxy_url:
+                        cmd.extend(["--proxy", proxy_url])
+                    cmd.append(url)
+                    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=25)
+                    if proc.returncode == 0 and proc.stdout:
+                        try:
+                            c_j = json.loads(proc.stdout)
+                            if c_j.get("bizCode") == 10000:
+                                tours = c_j.get("data", {}).get("tournaments", [])
+                                has_more = bool(c_j.get("data", {}).get("moreEvents", False))
+                                return page, tours, has_more
+                        except Exception:
+                            pass
+                except Exception as e:
+                    logger.debug(f"[EliteRollover] curl fetch page {page} note: {e}")
+
             try:
+                client = SportyBetIngestionService._get_client()
                 r = client.post(url, json=payload, timeout=8.0)
                 if r.status_code == 200:
                     data = r.json()
@@ -161,37 +212,6 @@ class EliteRolloverEngine:
                         tours = data.get("data", {}).get("tournaments", [])
                         has_more = bool(data.get("data", {}).get("moreEvents", False))
                         return page, tours, has_more
-                elif r.status_code in (403, 200):
-                    # CloudFront WAF on cloud datacenter IPs or WAF block: seamless curl fallback
-                    import shutil, subprocess, json, os
-                    curl_bin = shutil.which("curl")
-                    if curl_bin:
-                        proxy_url = os.getenv("SPORTYBET_PROXY") or os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY") or "socks5h://127.0.0.1:9055"
-                        cmd = [
-                            curl_bin, "-s", "-k",
-                            "-H", "User-Agent: SportyBet/4.25.0 (Android; 13; Scale/2.75)",
-                            "-H", "Accept: application/json, text/plain, */*",
-                            "-H", "platform: app",
-                            "-H", "client-country: ng",
-                            "-H", "app-version: 4.25.0",
-                            "-H", "os: Android",
-                            "-H", "Content-Type: application/json",
-                            "--max-time", "25",
-                            "--data-raw", json.dumps(payload),
-                        ]
-                        if proxy_url:
-                            cmd.extend(["--proxy", proxy_url])
-                        cmd.append(url)
-                        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=25)
-                        if proc.returncode == 0 and proc.stdout:
-                            try:
-                                c_j = json.loads(proc.stdout)
-                                if c_j.get("bizCode") == 10000:
-                                    tours = c_j.get("data", {}).get("tournaments", [])
-                                    has_more = bool(c_j.get("data", {}).get("moreEvents", False))
-                                    return page, tours, has_more
-                            except Exception:
-                                pass
             except Exception as e:
                 logger.warning(f"[EliteRollover] Page {page} fetch error: {e}")
             return page, [], False
@@ -1407,35 +1427,8 @@ class EliteRolloverEngine:
         actual_odds = round(actual_odds, 2)
         confidence_pct = round(cum_prob * 100.0, 1)
 
-        # Request live SportyBet booking code
-        selections_payload = []
-        for leg in slip_legs:
-            sel_item = {
-                "eventId": leg["event_id"],
-                "marketId": str(leg["market_id"]),
-                "outcomeId": str(leg["outcome_id"])
-            }
-            if leg.get("specifier"):
-                sel_item["specifier"] = leg["specifier"]
-            selections_payload.append(sel_item)
-
-        booking_code = None
-        share_url = None
-        share_endpoint = f"{cls.BASE_URL}/ng/orders/share"
-
-        try:
-            async with httpx.AsyncClient(timeout=10.0, headers=cls.HEADERS) as client:
-                r = await client.post(share_endpoint, json={"selections": selections_payload})
-                if r.status_code == 200:
-                    res_data = r.json()
-                    if res_data.get("bizCode") == 10000:
-                        booking_code = res_data.get("data", {}).get("shareCode")
-                        share_url = res_data.get("data", {}).get("shareURL") or f"https://www.sportybet.com/ng/?shareCode={booking_code}"
-                        logger.info(f"[EliteRollover] Generated SportyBet Booking Code: {booking_code}")
-                    else:
-                        logger.warning(f"[EliteRollover] SportyBet rejected share request: {res_data}")
-        except Exception as e:
-            logger.error(f"[EliteRollover] Error requesting SportyBet booking code: {e}")
+        # Request live SportyBet booking code via unified resilient method
+        booking_code, share_url = await cls._request_sportybet_share_code(slip_legs)
 
         today_str = datetime.datetime.now(datetime.timezone.utc).strftime("%A, %b %d, %Y")
         ticket_id = f"ROLLOVER-{int(time.time())}"
@@ -1709,33 +1702,35 @@ class EliteRolloverEngine:
                 "outcomeId": str(leg["outcome_id"])
             }
             if leg.get("specifier"):
-                sel_item["specifier"] = leg["specifier"]
+                sel_item["specifier"] = str(leg["specifier"])
             selections_payload.append(sel_item)
 
         booking_code = None
         share_url = None
         share_endpoint = f"{cls.BASE_URL}/ng/orders/share"
+        proxy_url = os.getenv("SPORTYBET_PROXY") or os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY") or "socks5h://127.0.0.1:9055"
 
         def _curl_share() -> Tuple[Optional[str], Optional[str]]:
-            import shutil, subprocess, json, os
             curl_bin = shutil.which("curl")
             if not curl_bin:
                 return None, None
-            proxy_url = os.getenv("SPORTYBET_PROXY") or os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY")
             try:
                 cmd = [
                     curl_bin, "-s", "-k",
-                    "-H", "User-Agent: Mozilla/5.0 (Linux; Android 13; SM-S908B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
+                    "-H", "User-Agent: SportyBet/4.25.0 (Android; 13; Scale/2.75)",
                     "-H", "Accept: application/json, text/plain, */*",
-                    "-H", "platform: wap",
+                    "-H", "platform: app",
                     "-H", "client-country: ng",
+                    "-H", "app-version: 4.25.0",
+                    "-H", "os: Android",
                     "-H", "Content-Type: application/json",
+                    "--max-time", "18",
                     "--data-raw", json.dumps({"selections": selections_payload}),
                 ]
                 if proxy_url:
                     cmd.extend(["--proxy", proxy_url])
                 cmd.append(share_endpoint)
-                proc = subprocess.run(cmd, capture_output=True, text=True, timeout=8)
+                proc = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
                 if proc.returncode == 0 and proc.stdout:
                     c_j = json.loads(proc.stdout)
                     if c_j.get("bizCode") == 10000:
@@ -1746,37 +1741,46 @@ class EliteRolloverEngine:
                 logger.debug(f"[EliteRollover] curl share fallback note: {e}")
             return None, None
 
+        # 1. First attempt: Native curl over Tor with App profile (bypasses CloudFront WAF)
+        booking_code, share_url = _curl_share()
+        if booking_code:
+            logger.info(f"[EliteRollover] Generated SportyBet Booking Code via native curl: {booking_code}")
+            return booking_code, share_url
+
+        # 2. Second attempt: httpx client with proxy
+        client_kwargs = {
+            "timeout": 15.0,
+            "headers": cls.APP_HEADERS,
+            "verify": False
+        }
+        if proxy_url:
+            client_kwargs["proxy"] = proxy_url
+
         for attempt in range(1, 3):
             try:
-                async with httpx.AsyncClient(timeout=10.0, headers=cls.HEADERS) as client:
+                async with httpx.AsyncClient(**client_kwargs) as client:
                     r = await client.post(share_endpoint, json={"selections": selections_payload})
                     if r.status_code == 200:
                         res_data = r.json()
                         if res_data.get("bizCode") == 10000:
                             booking_code = res_data.get("data", {}).get("shareCode")
                             share_url = res_data.get("data", {}).get("shareURL") or f"https://www.sportybet.com/ng/?shareCode={booking_code}"
-                            logger.info(f"[EliteRollover] Generated SportyBet Booking Code: {booking_code}")
+                            logger.info(f"[EliteRollover] Generated SportyBet Booking Code via httpx: {booking_code}")
                             return booking_code, share_url
                         else:
-                            logger.warning(f"[EliteRollover] SportyBet rejected share request (attempt {attempt}): {res_data}")
+                            logger.warning(f"[EliteRollover] SportyBet rejected share request: {res_data}")
                     elif r.status_code == 403:
-                        logger.warning(f"[EliteRollover] SportyBet HTTP 403 on /orders/share, executing curl fallback...")
+                        logger.warning(f"[EliteRollover] SportyBet HTTP 403 on /orders/share, re-trying curl fallback...")
                         b_code, s_url = _curl_share()
                         if b_code:
                             logger.info(f"[EliteRollover] Generated SportyBet Booking Code via curl fallback: {b_code}")
                             return b_code, s_url
-                    else:
-                        logger.warning(f"[EliteRollover] SportyBet HTTP error {r.status_code} (attempt {attempt})")
             except Exception as e:
-                logger.error(f"[EliteRollover] Error requesting SportyBet booking code (attempt {attempt}): {e}")
-                b_code, s_url = _curl_share()
-                if b_code:
-                    logger.info(f"[EliteRollover] Generated SportyBet Booking Code via curl fallback on exception: {b_code}")
-                    return b_code, s_url
+                logger.debug(f"[EliteRollover] httpx share error (attempt {attempt}): {e}")
             if attempt < 2:
                 await asyncio.sleep(1.0)
 
-        # Final fallback
+        # 3. Final fallback
         if not booking_code:
             booking_code, share_url = _curl_share()
             if booking_code:
