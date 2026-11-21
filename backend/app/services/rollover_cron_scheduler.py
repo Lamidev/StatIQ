@@ -80,28 +80,37 @@ class RolloverCronScheduler:
                     msvcrt.locking(self._lock_file.fileno(), msvcrt.LK_NBLCK, 1)
                     return True
                 except (IOError, OSError):
-                    return True
+                    return False
             else:
                 import fcntl
                 try:
                     fcntl.flock(self._lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    self._lock_file.seek(0)
+                    self._lock_file.truncate()
+                    self._lock_file.write(f"{os.getpid()}\n")
+                    self._lock_file.flush()
                     return True
                 except (IOError, OSError):
                     try:
-                        with open(lock_path, "r") as rf:
-                            content = rf.read().strip()
+                        self._lock_file.seek(0)
+                        content = self._lock_file.read().strip()
                         if content.isdigit():
                             pid = int(content)
-                            if pid != os.getpid() and not os.path.exists(f"/proc/{pid}"):
+                            if not os.path.exists(f"/proc/{pid}"):
                                 logger.info(f"[RolloverScheduler] Stale lock from dead PID {pid}. Reclaiming lock.")
+                                fcntl.flock(self._lock_file.fileno(), fcntl.LOCK_UN)
+                                fcntl.flock(self._lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                                self._lock_file.seek(0)
+                                self._lock_file.truncate()
+                                self._lock_file.write(f"{os.getpid()}\n")
+                                self._lock_file.flush()
                                 return True
                     except Exception:
                         pass
-                    return True
+                    return False
         except Exception as e:
             logger.warning(f"[RolloverScheduler] Process lock check note: {e}")
-            return True
-        return True
+            return False
 
     def _ensure_config_file(self):
         os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)

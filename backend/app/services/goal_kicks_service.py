@@ -9,6 +9,11 @@ import subprocess
 import json
 from typing import Dict, Any, List, Optional, Tuple
 import httpx
+from dotenv import load_dotenv
+
+# Ensure environment variables are loaded across all worker threads/subprocesses
+load_dotenv(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".env")))
+load_dotenv(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".env")))
 
 from app.services.sportybet_ingestion import SportyBetIngestionService
 from app.services.time_horizon_service import TimeHorizonService

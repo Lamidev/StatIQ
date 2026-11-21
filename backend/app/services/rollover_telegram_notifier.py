@@ -17,17 +17,40 @@ class RolloverTelegramNotifier:
 
     _dispatched_booking_codes: Dict[str, float] = {}
     _dispatched_message_hashes: Dict[str, float] = {}
+    _CACHE_FILE = os.path.join(tempfile.gettempdir(), "statiq_telegram_dispatched.json")
+
+    @classmethod
+    def _load_disk_cache(cls) -> Dict[str, Any]:
+        try:
+            if os.path.exists(cls._CACHE_FILE):
+                with open(cls._CACHE_FILE, "r", encoding="utf-8") as f:
+                    return json.load(f)
+        except Exception:
+            pass
+        return {"codes": {}, "hashes": {}}
+
+    @classmethod
+    def _save_disk_cache(cls, data: Dict[str, Any]):
+        try:
+            with open(cls._CACHE_FILE, "w", encoding="utf-8") as f:
+                json.dump(data, f)
+        except Exception:
+            pass
 
     @classmethod
     def is_duplicate_dispatch(cls, code: Optional[str] = None, text: Optional[str] = None, code_window: float = 43200.0, text_window: float = 120.0) -> bool:
         """
         Prevents multiple deliveries of the exact same booking code (12-hour window)
-        or identical message text (2-minute window).
+        or identical message text (2-minute window) across all processes and workers.
         """
         now = time.time()
-        # Clean stale memory entries
-        cls._dispatched_booking_codes = {k: v for k, v in cls._dispatched_booking_codes.items() if (now - v) < 86400}
-        cls._dispatched_message_hashes = {k: v for k, v in cls._dispatched_message_hashes.items() if (now - v) < 86400}
+        disk_data = cls._load_disk_cache()
+        codes_map = disk_data.get("codes", {})
+        hashes_map = disk_data.get("hashes", {})
+
+        # Merge in-memory and disk records
+        cls._dispatched_booking_codes.update(codes_map)
+        cls._dispatched_message_hashes.update(hashes_map)
 
         if code and code not in ("N/A", "RESTED", "", None):
             last_code_ts = cls._dispatched_booking_codes.get(code)
@@ -45,11 +68,19 @@ class RolloverTelegramNotifier:
     @classmethod
     def record_dispatched(cls, code: Optional[str] = None, text: Optional[str] = None):
         now = time.time()
+        disk_data = cls._load_disk_cache()
+        codes_map = {k: v for k, v in disk_data.get("codes", {}).items() if (now - v) < 86400}
+        hashes_map = {k: v for k, v in disk_data.get("hashes", {}).items() if (now - v) < 86400}
+
         if code and code not in ("N/A", "RESTED", "", None):
             cls._dispatched_booking_codes[code] = now
+            codes_map[code] = now
         if text:
             h = hashlib.sha256(text.strip().encode("utf-8")).hexdigest()
             cls._dispatched_message_hashes[h] = now
+            hashes_map[h] = now
+
+        cls._save_disk_cache({"codes": codes_map, "hashes": hashes_map})
 
     @classmethod
     def get_credentials(cls) -> Dict[str, str]:
