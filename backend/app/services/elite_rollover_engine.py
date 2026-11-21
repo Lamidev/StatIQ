@@ -134,7 +134,7 @@ class EliteRolloverEngine:
             payload = {
                 "sportId": "sr:sport:1",
                 "pageNum": page,
-                "pageSize": 50,
+                "pageSize": 20,
                 "withTwoUpMarket": True,
                 "withOneUpMarket": True
             }
@@ -166,20 +166,23 @@ class EliteRolloverEngine:
                     import shutil, subprocess, json, os
                     curl_bin = shutil.which("curl")
                     if curl_bin:
-                        proxy_url = os.getenv("SPORTYBET_PROXY") or os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY")
+                        proxy_url = os.getenv("SPORTYBET_PROXY") or os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY") or "socks5h://127.0.0.1:9055"
                         cmd = [
                             curl_bin, "-s", "-k",
-                            "-H", "User-Agent: Mozilla/5.0 (Linux; Android 13; SM-S908B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
+                            "-H", "User-Agent: SportyBet/4.25.0 (Android; 13; Scale/2.75)",
                             "-H", "Accept: application/json, text/plain, */*",
-                            "-H", "platform: wap",
+                            "-H", "platform: app",
                             "-H", "client-country: ng",
+                            "-H", "app-version: 4.25.0",
+                            "-H", "os: Android",
                             "-H", "Content-Type: application/json",
+                            "--max-time", "25",
                             "--data-raw", json.dumps(payload),
                         ]
                         if proxy_url:
                             cmd.extend(["--proxy", proxy_url])
                         cmd.append(url)
-                        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=8)
+                        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=25)
                         if proc.returncode == 0 and proc.stdout:
                             try:
                                 c_j = json.loads(proc.stdout)
@@ -199,11 +202,11 @@ class EliteRolloverEngine:
 
             def _fetch_all_chunks_sync():
                 tours_accum = []
-                chunk_size = 4
+                chunk_size = 2
                 current_p = 1
                 more_pages = True
-                while current_p <= max_pages and more_pages:
-                    pages_chunk = list(range(current_p, min(current_p + chunk_size, max_pages + 1)))
+                while current_p <= min(max_pages, 6) and more_pages:
+                    pages_chunk = list(range(current_p, min(current_p + chunk_size, min(max_pages, 6) + 1)))
                     with concurrent.futures.ThreadPoolExecutor(max_workers=len(pages_chunk)) as ex:
                         results = list(ex.map(_fetch_page_sync, pages_chunk))
                     results.sort(key=lambda x: x[0])
@@ -219,6 +222,40 @@ class EliteRolloverEngine:
             all_tournaments = await loop.run_in_executor(None, _fetch_all_chunks_sync)
         except Exception as e:
             logger.warning(f"[EliteRollover] Dynamic chunked fetch error: {e}")
+
+        # Resilient fallback: Query wapUpcomingEvents if all_tournaments is empty
+        if not all_tournaments:
+            import shutil, subprocess, json, os
+            curl_bin = shutil.which("curl")
+            proxy_url = os.getenv("SPORTYBET_PROXY") or os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY") or "socks5h://127.0.0.1:9055"
+            if curl_bin:
+                for p_num in range(1, 3):
+                    up_url = f"{cls.BASE_URL}/ng/factsCenter/wapUpcomingEvents?sportId=sr:sport:1&pageSize=50&pageNum={p_num}"
+                    cmd = [
+                        curl_bin, "-s", "-k",
+                        "-H", "User-Agent: SportyBet/4.25.0 (Android; 13; Scale/2.75)",
+                        "-H", "Accept: application/json, text/plain, */*",
+                        "-H", "platform: app",
+                        "-H", "client-country: ng",
+                        "-H", "app-version: 4.25.0",
+                        "-H", "os: Android",
+                        "--max-time", "20",
+                    ]
+                    if proxy_url:
+                        cmd.extend(["--proxy", proxy_url])
+                    cmd.append(up_url)
+                    try:
+                        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
+                        if proc.returncode == 0 and proc.stdout:
+                            c_j = json.loads(proc.stdout)
+                            if c_j.get("bizCode") == 10000:
+                                evs = c_j.get("data", [])
+                                if isinstance(evs, list) and evs:
+                                    all_tournaments.append({"name": "Upcoming Events", "events": evs})
+                                    if len(evs) < 25:
+                                        break
+                    except Exception:
+                        pass
 
         all_events = []
         seen_event_ids = set()

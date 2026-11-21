@@ -122,7 +122,7 @@ class SportyBetIngestionService:
             payload = {
                 "sportId": "sr:sport:1",
                 "pageNum": page_num,
-                "pageSize": 50,
+                "pageSize": 20,
                 "withTwoUpMarket": True,
                 "withOneUpMarket": True
             }
@@ -131,35 +131,40 @@ class SportyBetIngestionService:
             else:
                 payload["timeline"] = 1
 
+            import shutil, subprocess, json, os
+            curl_bin = shutil.which("curl")
+            proxy_url = os.getenv("SPORTYBET_PROXY") or os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY") or "socks5h://127.0.0.1:9055"
+            if curl_bin:
+                cmd = [
+                    curl_bin, "-s", "-k",
+                    "-H", "User-Agent: SportyBet/4.25.0 (Android; 13; Scale/2.75)",
+                    "-H", "Accept: application/json, text/plain, */*",
+                    "-H", "platform: app",
+                    "-H", "client-country: ng",
+                    "-H", "app-version: 4.25.0",
+                    "-H", "os: Android",
+                    "-H", "Content-Type: application/json",
+                    "--max-time", "25",
+                    "--data-raw", json.dumps(payload),
+                ]
+                if proxy_url:
+                    cmd.extend(["--proxy", proxy_url])
+                cmd.append(endpoint)
+                try:
+                    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=25)
+                    if proc.returncode == 0 and proc.stdout:
+                        c_j = json.loads(proc.stdout)
+                        if c_j.get("bizCode") == 10000:
+                            return c_j.get("data", {}).get("tournaments", [])
+                except Exception:
+                    pass
+
             try:
                 resp = client.post(endpoint, json=payload, timeout=8.0)
                 if resp.status_code == 200:
                     j = resp.json()
                     if j.get("bizCode") == 10000:
                         return j.get("data", {}).get("tournaments", [])
-                elif resp.status_code == 403:
-                    import shutil, subprocess, json, os
-                    curl_bin = shutil.which("curl")
-                    if curl_bin:
-                        proxy_url = os.getenv("SPORTYBET_PROXY") or os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY")
-                        cmd = [
-                            curl_bin, "-s", "-k",
-                            "-H", "User-Agent: Mozilla/5.0 (Linux; Android 13; SM-S908B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
-                            "-H", "Accept: application/json, text/plain, */*",
-                            "-H", "platform: wap",
-                            "-H", "client-country: ng",
-                            "-H", "Content-Type: application/json",
-                            "--max-time", "10",
-                            "--data-raw", json.dumps(payload),
-                        ]
-                        if proxy_url:
-                            cmd.extend(["--proxy", proxy_url])
-                        cmd.append(endpoint)
-                        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
-                        if proc.returncode == 0 and proc.stdout:
-                            c_j = json.loads(proc.stdout)
-                            if c_j.get("bizCode") == 10000:
-                                return c_j.get("data", {}).get("tournaments", [])
             except Exception as e:
                 logger.debug(f"[SportyBetIngestion] Page fetch error (p={page_num}, today={is_today}): {e}")
             return []
