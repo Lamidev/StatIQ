@@ -3,6 +3,7 @@ import json
 import logging
 import time
 import hashlib
+import tempfile
 from typing import Dict, Any, List, Optional
 import httpx
 
