@@ -155,7 +155,7 @@ class GoalKicksCronScheduler:
                     today_str = now_wat.strftime("%Y-%m-%d")
 
                     active_days = cfg.get("active_days", ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"])
-                    dispatch_time = cfg.get("dispatch_time", "10:15")
+                    dispatch_time = cfg.get("dispatch_time", "09:00")
                     last_run = cfg.get("last_run_date")
 
                     # Check if today is active, time matches or has passed, and hasn't dispatched today

@@ -41,6 +41,15 @@ class GoalKicksService:
         "Referer": "https://mobile.sportybet.com/ng/"
     }
 
+    APP_HEADERS = {
+        "User-Agent": "SportyBet/4.25.0 (Android; 13; Scale/2.75)",
+        "Accept": "application/json, text/plain, */*",
+        "platform": "app",
+        "client-country": "ng",
+        "app-version": "4.25.0",
+        "os": "Android"
+    }
+
     # High-transition, frantic, direct-counter teams that generate wild off-target shots
     # Strictly banned from the UNDER ticket
     CHAOS_TEAMS_FOR_UNDER = {
@@ -55,7 +64,7 @@ class GoalKicksService:
     }
 
     MIN_SINGLE_ODDS: float = 1.15
-    MAX_SINGLE_ODDS: float = 1.35
+    MAX_SINGLE_ODDS: float = 1.45
 
     @classmethod
     def _is_chaos_match_for_under(cls, home: str, away: str) -> bool:
@@ -91,14 +100,17 @@ class GoalKicksService:
         mode = mode.upper()
         min_kickoff_ms, end_of_day_ms, today_only, horizon_desc = TimeHorizonService.get_horizon_bounds(time_horizon)
 
-        client = SportyBetIngestionService._get_client()
+        proxy_url = os.getenv("SPORTYBET_PROXY") or os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY")
+        curl_bin = shutil.which("curl")
         url = f"{cls.BASE_URL}/ng/factsCenter/wapConfigurableEventsByOrder"
         tournaments = []
-        for page in range(1, 8):
+
+        # Query top pages with compact page size for swift download over Tor proxy
+        for page in range(1, 4):
             payload = {
                 "sportId": "sr:sport:1",
                 "pageNum": page,
-                "pageSize": 50,
+                "pageSize": 20,
                 "withTwoUpMarket": True,
                 "withOneUpMarket": True
             }
@@ -110,79 +122,66 @@ class GoalKicksService:
                     payload["timeline"] = 1
                 elif canonical in ("TODAY_AND_TOMORROW", "2DAYS"):
                     payload["timeline"] = 2
-                elif canonical in ("MIDWEEK_UCL",):
-                    payload["timeline"] = 3
-                elif canonical in ("WEEKEND",):
-                    payload["timeline"] = 7
                 else:
-                    payload["timeline"] = 3
+                    payload["timeline"] = 1
 
-            try:
-                r = client.post(url, json=payload, timeout=8.0)
-                if r.status_code == 200 and r.json().get("bizCode") == 10000:
-                    data = r.json().get("data", {})
-                    t_list = data.get("tournaments", [])
-                    tournaments.extend(t_list)
-                    if not data.get("moreEvents") or not t_list:
-                        break
-                elif r.status_code == 403:
-                    curl_bin = shutil.which("curl")
-                    if curl_bin:
-                        proxy_url = os.getenv("SPORTYBET_PROXY") or os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY")
-                        cmd = [
-                            curl_bin, "-s", "-k",
-                            "-H", "User-Agent: Mozilla/5.0 (Linux; Android 13; SM-S908B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
-                            "-H", "Accept: application/json, text/plain, */*",
-                            "-H", "platform: wap",
-                            "-H", "client-country: ng",
-                            "-H", "Content-Type: application/json",
-                            "--max-time", "8",
-                            "--data-raw", json.dumps(payload),
-                        ]
-                        if proxy_url:
-                            cmd.extend(["--proxy", proxy_url])
-                        cmd.append(url)
-                        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=8)
-                        if proc.returncode == 0 and proc.stdout:
-                            c_j = json.loads(proc.stdout)
-                            if c_j.get("bizCode") == 10000:
-                                t_list = c_j.get("data", {}).get("tournaments", [])
-                                tournaments.extend(t_list)
-                                if not c_j.get("data", {}).get("moreEvents") or not t_list:
-                                    break
-            except Exception as e:
-                logger.warning(f"[GoalKicks] Error fetching page {page}: {e}")
+            if curl_bin:
+                cmd = [
+                    curl_bin, "-s", "-k",
+                    "-H", "User-Agent: SportyBet/4.25.0 (Android; 13; Scale/2.75)",
+                    "-H", "Accept: application/json, text/plain, */*",
+                    "-H", "platform: app",
+                    "-H", "client-country: ng",
+                    "-H", "app-version: 4.25.0",
+                    "-H", "os: Android",
+                    "-H", "Content-Type: application/json",
+                    "--max-time", "25",
+                    "--data-raw", json.dumps(payload),
+                ]
+                if proxy_url:
+                    cmd.extend(["--proxy", proxy_url])
+                cmd.append(url)
+                try:
+                    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=25)
+                    if proc.returncode == 0 and proc.stdout:
+                        c_j = json.loads(proc.stdout)
+                        if c_j.get("bizCode") == 10000:
+                            t_list = c_j.get("data", {}).get("tournaments", [])
+                            tournaments.extend(t_list)
+                            if not c_j.get("data", {}).get("moreEvents") or not t_list:
+                                break
+                except Exception as e:
+                    logger.warning(f"[GoalKicks] Error fetching page {page}: {e}")
 
         # Resilient fallback: Query wapUpcomingEvents if tournaments is empty
-        if not tournaments:
-            proxy_url = os.getenv("SPORTYBET_PROXY") or os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY")
-            curl_bin = shutil.which("curl")
-            if curl_bin:
-                for p_num in range(1, 4):
-                    up_url = f"{cls.BASE_URL}/ng/factsCenter/wapUpcomingEvents?sportId=sr:sport:1&pageSize=100&pageNum={p_num}"
-                    cmd = [
-                        curl_bin, "-s", "-k",
-                        "-H", "User-Agent: Mozilla/5.0 (Linux; Android 13; SM-S908B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
-                        "-H", "Accept: application/json, text/plain, */*",
-                        "-H", "platform: wap",
-                        "-H", "client-country: ng",
-                        "--max-time", "10",
-                    ]
-                    if proxy_url:
-                        cmd.extend(["--proxy", proxy_url])
-                    cmd.append(up_url)
-                    try:
-                        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
-                        if proc.returncode == 0 and proc.stdout:
-                            c_j = json.loads(proc.stdout)
-                            if c_j.get("bizCode") == 10000:
-                                evs = c_j.get("data", [])
-                                if isinstance(evs, list) and evs:
-                                    tournaments.append({"name": "Upcoming Events", "events": evs})
-                                    if len(evs) < 30:
-                                        break
-                    except Exception as e:
-                        logger.debug(f"[GoalKicks] wapUpcomingEvents fallback error: {e}")
+        if not tournaments and curl_bin:
+            for p_num in range(1, 3):
+                up_url = f"{cls.BASE_URL}/ng/factsCenter/wapUpcomingEvents?sportId=sr:sport:1&pageSize=50&pageNum={p_num}"
+                cmd = [
+                    curl_bin, "-s", "-k",
+                    "-H", "User-Agent: SportyBet/4.25.0 (Android; 13; Scale/2.75)",
+                    "-H", "Accept: application/json, text/plain, */*",
+                    "-H", "platform: app",
+                    "-H", "client-country: ng",
+                    "-H", "app-version: 4.25.0",
+                    "-H", "os: Android",
+                    "--max-time", "20",
+                ]
+                if proxy_url:
+                    cmd.extend(["--proxy", proxy_url])
+                cmd.append(up_url)
+                try:
+                    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
+                    if proc.returncode == 0 and proc.stdout:
+                        c_j = json.loads(proc.stdout)
+                        if c_j.get("bizCode") == 10000:
+                            evs = c_j.get("data", [])
+                            if isinstance(evs, list) and evs:
+                                tournaments.append({"name": "Upcoming Events", "events": evs})
+                                if len(evs) < 25:
+                                    break
+                except Exception as e:
+                    logger.debug(f"[GoalKicks] wapUpcomingEvents fallback error: {e}")
 
         if not tournaments:
             return []
@@ -237,122 +236,159 @@ class GoalKicksService:
             async with sem:
                 eid = item["event_id"]
                 det_url = f"{cls.BASE_URL}/ng/factsCenter/event?eventId={eid}"
+                det_data = None
                 try:
                     det_r = await http_c.get(det_url)
                     if det_r.status_code == 200:
                         det_data = det_r.json().get("data", {})
-                        markets = det_data.get("markets", [])
-                        
-                        best_pick = None
-
-                        for m in markets:
-                            mid = str(m.get("id"))
-                            spec = str(m.get("specifier") or "")
-                            m_tot = re.search(r"total=([\d\.]+)", spec)
-                            tot_val = float(m_tot.group(1)) if m_tot else 0.0
-
-                            # ─────────────────────────────────────────────────────────────
-                            # MODE 1: FULL TIME UNDER (Market 900622, Outcome 13)
-                            # ─────────────────────────────────────────────────────────────
-                            if mode == "UNDER" and mid == "900622" and tot_val >= 16.5:
-                                for o in m.get("outcomes", []):
-                                    if str(o.get("id")) == "13" and str(o.get("isActive", "1")) in ("1", "True"):
-                                        odd = float(o.get("odds") or 0)
-                                        if cls.MIN_SINGLE_ODDS <= odd <= cls.MAX_SINGLE_ODDS:
-                                            prob = round(min(0.92, (1.0 / odd) * 0.96), 3)
-                                            # Quality score rewards higher lines (more cushion) and solid probability
-                                            q_score = (prob * 50.0) + (tot_val * 6.0)
-                                            pick_cand = {
-                                                "event_id": eid,
-                                                "home_team": item["home_team"],
-                                                "away_team": item["away_team"],
-                                                "competition": item["competition"],
-                                                "market_id": mid,
-                                                "market_desc": "Goal Kicks Over/Under",
-                                                "specifier": spec,
-                                                "outcome_id": "13",
-                                                "selection_desc": f"Under {tot_val} Goal Kicks",
-                                                "odds": odd,
-                                                "model_probability": prob,
-                                                "line_type": "FT_UNDER",
-                                                "tot_val": tot_val,
-                                                "start_time": item.get("start_time", 0),
-                                                "quality_score": q_score
-                                            }
-                                            if not best_pick or pick_cand["quality_score"] > best_pick["quality_score"]:
-                                                best_pick = pick_cand
-
-                            # ─────────────────────────────────────────────────────────────
-                            # MODE 2: FULL TIME OVER (Market 900622, Outcome 12)
-                            # ─────────────────────────────────────────────────────────────
-                            elif mode == "OVER" and mid == "900622" and tot_val <= 13.5:
-                                for o in m.get("outcomes", []):
-                                    if str(o.get("id")) == "12" and str(o.get("isActive", "1")) in ("1", "True"):
-                                        odd = float(o.get("odds") or 0)
-                                        if cls.MIN_SINGLE_ODDS <= odd <= cls.MAX_SINGLE_ODDS:
-                                            prob = round(min(0.92, (1.0 / odd) * 0.96), 3)
-                                            # Quality score rewards lower total thresholds (easier to clear)
-                                            q_score = (prob * 50.0) + ((15.0 - tot_val) * 6.0)
-                                            pick_cand = {
-                                                "event_id": eid,
-                                                "home_team": item["home_team"],
-                                                "away_team": item["away_team"],
-                                                "competition": item["competition"],
-                                                "market_id": mid,
-                                                "market_desc": "Goal Kicks Over/Under",
-                                                "specifier": spec,
-                                                "outcome_id": "12",
-                                                "selection_desc": f"Over {tot_val} Goal Kicks",
-                                                "odds": odd,
-                                                "model_probability": prob,
-                                                "line_type": "FT_OVER",
-                                                "tot_val": tot_val,
-                                                "start_time": item.get("start_time", 0),
-                                                "quality_score": q_score
-                                            }
-                                            if not best_pick or pick_cand["quality_score"] > best_pick["quality_score"]:
-                                                best_pick = pick_cand
-
-                            # ─────────────────────────────────────────────────────────────
-                            # MODE 3: FIRST HALF UNDER (Market 900661, Outcome 13)
-                            # ─────────────────────────────────────────────────────────────
-                            elif mode == "1H" and mid == "900661" and tot_val >= 6.5:
-                                for o in m.get("outcomes", []):
-                                    if str(o.get("id")) == "13" and str(o.get("isActive", "1")) in ("1", "True"):
-                                        odd = float(o.get("odds") or 0)
-                                        if cls.MIN_SINGLE_ODDS <= odd <= cls.MAX_SINGLE_ODDS:
-                                            prob = round(min(0.92, (1.0 / odd) * 0.96), 3)
-                                            # Heavily prioritize Under 8.5 and Under 7.5 lines per tactical directive
-                                            cushion_bonus = 25.0 if tot_val >= 8.5 else (15.0 if tot_val >= 7.5 else 0.0)
-                                            q_score = (prob * 50.0) + (tot_val * 6.0) + cushion_bonus + 30.0
-                                            pick_cand = {
-                                                "event_id": eid,
-                                                "home_team": item["home_team"],
-                                                "away_team": item["away_team"],
-                                                "competition": item["competition"],
-                                                "market_id": mid,
-                                                "market_desc": "1st Half Goal Kicks Over/Under",
-                                                "specifier": spec,
-                                                "outcome_id": "13",
-                                                "selection_desc": f"1H Under {tot_val} Goal Kicks",
-                                                "odds": odd,
-                                                "model_probability": prob,
-                                                "line_type": "1H",
-                                                "tot_val": tot_val,
-                                                "start_time": item.get("start_time", 0),
-                                                "quality_score": q_score
-                                            }
-                                            if not best_pick or pick_cand["quality_score"] > best_pick["quality_score"]:
-                                                best_pick = pick_cand
-
-                        return best_pick
                 except Exception:
                     pass
-                return None
 
-        # Execute concurrent inspection with limit
-        sem = asyncio.Semaphore(20)
-        async with httpx.AsyncClient(timeout=4.0, headers=cls.HEADERS, limits=httpx.Limits(max_keepalive_connections=25, max_connections=35), verify=False) as http_c:
+                # Resilient fallback with curl if httpx encountered an error
+                if not det_data and curl_bin:
+                    cmd_ev = [
+                        curl_bin, "-s", "-k",
+                        "-H", "User-Agent: SportyBet/4.25.0 (Android; 13; Scale/2.75)",
+                        "-H", "Accept: application/json, text/plain, */*",
+                        "-H", "platform: app",
+                        "-H", "client-country: ng",
+                        "-H", "app-version: 4.25.0",
+                        "-H", "os: Android",
+                        "--max-time", "12",
+                    ]
+                    if proxy_url:
+                        cmd_ev.extend(["--proxy", proxy_url])
+                    cmd_ev.append(det_url)
+                    try:
+                        p_ev = subprocess.run(cmd_ev, capture_output=True, text=True, timeout=12)
+                        if p_ev.returncode == 0 and p_ev.stdout:
+                            c_ev = json.loads(p_ev.stdout)
+                            if c_ev.get("bizCode") == 10000:
+                                det_data = c_ev.get("data", {})
+                    except Exception:
+                        pass
+
+                if not det_data:
+                    return None
+
+                markets = det_data.get("markets", [])
+                best_pick = None
+
+                for m in markets:
+                    mid = str(m.get("id"))
+                    spec = str(m.get("specifier") or "")
+                    m_tot = re.search(r"total=([\d\.]+)", spec)
+                    tot_val = float(m_tot.group(1)) if m_tot else 0.0
+
+                    # ─────────────────────────────────────────────────────────────
+                    # MODE 1: FULL TIME UNDER (Market 900622, Outcome 13)
+                    # ─────────────────────────────────────────────────────────────
+                    if mode == "UNDER" and mid == "900622" and tot_val >= 15.5:
+                        for o in m.get("outcomes", []):
+                            if str(o.get("id")) == "13" and str(o.get("isActive", "1")) in ("1", "True"):
+                                odd = float(o.get("odds") or 0)
+                                if cls.MIN_SINGLE_ODDS <= odd <= cls.MAX_SINGLE_ODDS:
+                                    prob = round(min(0.92, (1.0 / odd) * 0.96), 3)
+                                    # Quality score rewards higher lines (more cushion) and solid probability
+                                    cushion_bonus = 20.0 if tot_val >= 17.5 else (10.0 if tot_val >= 16.5 else 0.0)
+                                    q_score = (prob * 50.0) + (tot_val * 6.0) + cushion_bonus
+                                    pick_cand = {
+                                        "event_id": eid,
+                                        "home_team": item["home_team"],
+                                        "away_team": item["away_team"],
+                                        "competition": item["competition"],
+                                        "market_id": mid,
+                                        "market_desc": "Goal Kicks Over/Under",
+                                        "specifier": spec,
+                                        "outcome_id": "13",
+                                        "selection_desc": f"Under {tot_val} Goal Kicks",
+                                        "odds": odd,
+                                        "model_probability": prob,
+                                        "line_type": "FT_UNDER",
+                                        "tot_val": tot_val,
+                                        "start_time": item.get("start_time", 0),
+                                        "quality_score": q_score
+                                    }
+                                    if not best_pick or pick_cand["quality_score"] > best_pick["quality_score"]:
+                                        best_pick = pick_cand
+
+                    # ─────────────────────────────────────────────────────────────
+                    # MODE 2: FULL TIME OVER (Market 900622, Outcome 12)
+                    # ─────────────────────────────────────────────────────────────
+                    elif mode == "OVER" and mid == "900622" and tot_val <= 13.5:
+                        for o in m.get("outcomes", []):
+                            if str(o.get("id")) == "12" and str(o.get("isActive", "1")) in ("1", "True"):
+                                odd = float(o.get("odds") or 0)
+                                if cls.MIN_SINGLE_ODDS <= odd <= cls.MAX_SINGLE_ODDS:
+                                    prob = round(min(0.92, (1.0 / odd) * 0.96), 3)
+                                    # Quality score rewards lower total thresholds (easier to clear)
+                                    q_score = (prob * 50.0) + ((15.0 - tot_val) * 6.0)
+                                    pick_cand = {
+                                        "event_id": eid,
+                                        "home_team": item["home_team"],
+                                        "away_team": item["away_team"],
+                                        "competition": item["competition"],
+                                        "market_id": mid,
+                                        "market_desc": "Goal Kicks Over/Under",
+                                        "specifier": spec,
+                                        "outcome_id": "12",
+                                        "selection_desc": f"Over {tot_val} Goal Kicks",
+                                        "odds": odd,
+                                        "model_probability": prob,
+                                        "line_type": "FT_OVER",
+                                        "tot_val": tot_val,
+                                        "start_time": item.get("start_time", 0),
+                                        "quality_score": q_score
+                                    }
+                                    if not best_pick or pick_cand["quality_score"] > best_pick["quality_score"]:
+                                        best_pick = pick_cand
+
+                    # ─────────────────────────────────────────────────────────────
+                    # MODE 3: FIRST HALF UNDER (Market 900661, Outcome 13)
+                    # ─────────────────────────────────────────────────────────────
+                    elif mode == "1H" and mid == "900661" and tot_val >= 6.5:
+                        for o in m.get("outcomes", []):
+                            if str(o.get("id")) == "13" and str(o.get("isActive", "1")) in ("1", "True"):
+                                odd = float(o.get("odds") or 0)
+                                if cls.MIN_SINGLE_ODDS <= odd <= cls.MAX_SINGLE_ODDS:
+                                    prob = round(min(0.92, (1.0 / odd) * 0.96), 3)
+                                    # Heavily prioritize Under 8.5 and Under 7.5 lines per tactical directive
+                                    cushion_bonus = 35.0 if tot_val >= 8.5 else (20.0 if tot_val >= 7.5 else 0.0)
+                                    q_score = (prob * 50.0) + (tot_val * 6.0) + cushion_bonus + 30.0
+                                    pick_cand = {
+                                        "event_id": eid,
+                                        "home_team": item["home_team"],
+                                        "away_team": item["away_team"],
+                                        "competition": item["competition"],
+                                        "market_id": mid,
+                                        "market_desc": "1st Half Goal Kicks Over/Under",
+                                        "specifier": spec,
+                                        "outcome_id": "13",
+                                        "selection_desc": f"1H Under {tot_val} Goal Kicks",
+                                        "odds": odd,
+                                        "model_probability": prob,
+                                        "line_type": "1H",
+                                        "tot_val": tot_val,
+                                        "start_time": item.get("start_time", 0),
+                                        "quality_score": q_score
+                                    }
+                                    if not best_pick or pick_cand["quality_score"] > best_pick["quality_score"]:
+                                        best_pick = pick_cand
+
+                return best_pick
+
+        # Execute concurrent inspection with Tor proxy support
+        sem = asyncio.Semaphore(6)
+        client_kwargs = {
+            "timeout": 12.0,
+            "headers": cls.APP_HEADERS,
+            "limits": httpx.Limits(max_keepalive_connections=15, max_connections=20),
+            "verify": False
+        }
+        if proxy_url:
+            client_kwargs["proxy"] = proxy_url
+
+        async with httpx.AsyncClient(**client_kwargs) as http_c:
             tasks = [_check_event_props(item, http_c, sem) for item in candidate_eids]
             results = await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -383,27 +419,29 @@ class GoalKicksService:
         ]
 
         share_endpoint = f"{cls.BASE_URL}/ng/orders/share"
+        proxy_url = os.getenv("SPORTYBET_PROXY") or os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY")
 
         def _curl_share() -> Tuple[Optional[str], Optional[str]]:
             curl_bin = shutil.which("curl")
             if not curl_bin:
                 return None, None
             try:
-                proxy_url = os.getenv("SPORTYBET_PROXY") or os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY")
                 cmd = [
                     curl_bin, "-s", "-k",
-                    "-H", "User-Agent: Mozilla/5.0 (Linux; Android 13; SM-S908B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
+                    "-H", "User-Agent: SportyBet/4.25.0 (Android; 13; Scale/2.75)",
                     "-H", "Accept: application/json, text/plain, */*",
-                    "-H", "platform: wap",
+                    "-H", "platform: app",
                     "-H", "client-country: ng",
+                    "-H", "app-version: 4.25.0",
+                    "-H", "os: Android",
                     "-H", "Content-Type: application/json",
-                    "--max-time", "10",
+                    "--max-time", "15",
                     "--data-raw", json.dumps({"selections": selections_payload}),
                 ]
                 if proxy_url:
                     cmd.extend(["--proxy", proxy_url])
                 cmd.append(share_endpoint)
-                proc = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+                proc = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
                 if proc.returncode == 0 and proc.stdout:
                     c_j = json.loads(proc.stdout)
                     if c_j.get("bizCode") == 10000:
@@ -414,8 +452,16 @@ class GoalKicksService:
                 logger.debug(f"[GoalKicks] curl share fallback note: {e}")
             return None, None
 
+        client_kwargs = {
+            "timeout": 12.0,
+            "headers": cls.APP_HEADERS,
+            "verify": False
+        }
+        if proxy_url:
+            client_kwargs["proxy"] = proxy_url
+
         try:
-            async with httpx.AsyncClient(timeout=10.0, headers=cls.HEADERS) as http_c:
+            async with httpx.AsyncClient(**client_kwargs) as http_c:
                 resp = await http_c.post(share_endpoint, json={"selections": selections_payload})
                 if resp.status_code == 200:
                     res_data = resp.json()
